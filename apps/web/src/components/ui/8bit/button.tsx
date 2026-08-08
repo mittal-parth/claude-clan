@@ -1,8 +1,9 @@
 import { type VariantProps, cva } from "class-variance-authority";
 import { Slot } from "radix-ui";
-import type { ButtonHTMLAttributes, Ref } from "react";
+import type { ButtonHTMLAttributes, MouseEvent, Ref } from "react";
 
 import { Button as ShadcnButton } from "@/components/ui/button";
+import { useUiClick } from "@/hooks/use-ui-click";
 import { cn } from "@/lib/utils";
 
 import "@/components/ui/8bit/styles/retro.css";
@@ -39,6 +40,7 @@ export interface BitButtonProps
     VariantProps<typeof buttonVariants> {
   asChild?: boolean;
   ref?: Ref<HTMLButtonElement>;
+  sound?: boolean;
 }
 
 interface ButtonDecorationsProps {
@@ -98,12 +100,23 @@ function Button({
   asChild = false,
   children,
   className,
+  disabled,
   font,
+  onClick,
   size,
+  sound = true,
   variant,
   ...props
 }: BitButtonProps) {
+  const playClick = useUiClick();
   const decorations = <ButtonDecorations size={size} variant={variant} />;
+
+  function handleClick(event: MouseEvent<HTMLButtonElement>): void {
+    if (!disabled && sound) {
+      playClick();
+    }
+    onClick?.(event);
+  }
 
   return (
     <ShadcnButton
@@ -114,6 +127,8 @@ function Button({
         font !== "normal" && "retro",
         className
       )}
+      disabled={disabled}
+      onClick={handleClick}
       size={size}
       variant={variant}
       asChild={asChild}

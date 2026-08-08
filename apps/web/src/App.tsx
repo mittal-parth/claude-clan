@@ -6,6 +6,8 @@ import {
   type WorldSnapshot,
 } from "@sudo-city/protocol";
 import { FormEvent, useEffect, useRef, useState } from "react";
+import { Volume2, VolumeX } from "lucide-react";
+import { useAudio } from "@/components/audio-provider";
 import Dialogue from "@/components/ui/8bit/blocks/dialogue";
 import QuestLog, {
   type Quest,
@@ -386,6 +388,7 @@ function findPendingPermit(
 }
 
 export default function App() {
+  const { sfxEnabled, toggleSfx } = useAudio();
   const socketRef = useRef<WebSocket>(null);
   const [connection, setConnection] =
     useState<ConnectionState>("connecting");
@@ -507,12 +510,29 @@ export default function App() {
             </p>
           </div>
         </div>
-        <Badge
-          variant={connection === "online" ? "default" : "outline"}
-          className="retro text-[10px]"
-        >
-          {statusLabel(connection)}
-        </Badge>
+        <div className="flex items-center gap-2">
+          <Button
+            type="button"
+            size="icon"
+            variant="ghost"
+            sound={false}
+            aria-label={sfxEnabled ? "Mute UI sounds" : "Unmute UI sounds"}
+            aria-pressed={!sfxEnabled}
+            onClick={toggleSfx}
+          >
+            {sfxEnabled ? (
+              <Volume2 className="size-4" aria-hidden="true" />
+            ) : (
+              <VolumeX className="size-4" aria-hidden="true" />
+            )}
+          </Button>
+          <Badge
+            variant={connection === "online" ? "default" : "outline"}
+            className="retro text-[10px]"
+          >
+            {statusLabel(connection)}
+          </Badge>
+        </div>
       </header>
 
       <ResizablePanelGroup orientation="horizontal" className="min-h-0 flex-1">
