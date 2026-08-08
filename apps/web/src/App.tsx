@@ -520,7 +520,7 @@ export default function App() {
     <div className="flex h-dvh min-h-[36rem] flex-col bg-background">
       <header className="flex items-center justify-between border-b-4 border-foreground px-4 py-3 dark:border-ring">
         <div className="flex min-w-0 items-center gap-3">
-          <span className="retro flex size-9 shrink-0 items-center justify-center border-2 border-foreground bg-primary text-xs font-black text-primary-foreground dark:border-ring">
+          <span className="retro flex size-9 shrink-0 items-center justify-center border-2 border-foreground bg-primary text-xs text-primary-foreground dark:border-ring">
             SC
           </span>
           <div className="min-w-0">
@@ -568,9 +568,9 @@ export default function App() {
                 <span className="retro block text-[10px] text-primary">
                   District survey
                 </span>
-                <strong className="retro block text-xs">
+                <span className="retro block text-xs">
                   {world?.buildings.length ?? 0} structures mapped
-                </strong>
+                </span>
               </div>
 
               {selected ? (
