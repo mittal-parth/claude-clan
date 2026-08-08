@@ -471,20 +471,6 @@
   border-width: 1px;
 }
 
-.hud-tile {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 22px;
-  height: 22px;
-  flex: none;
-  font-size: 8px;
-  letter-spacing: 0.08em;
-  color: var(--primary-foreground);
-  background: var(--hud-accent);
-  box-shadow: 0 0 14px color-mix(in oklab, var(--hud-accent) 40%, transparent);
-}
-
 /* --- meter ---------------------------------------------------------------- */
 
 .hud-meter {
@@ -660,22 +646,6 @@
   padding-bottom: 0.55rem;
   border-bottom: 1px solid
     color-mix(in oklab, var(--foreground) 12%, transparent);
-}
-
-.hud-masthead__mark {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 34px;
-  height: 34px;
-  flex: none;
-  font-size: 11px;
-  letter-spacing: 0.06em;
-  color: var(--primary-foreground);
-  background: var(--hud-accent);
-  box-shadow:
-    0 0 18px color-mix(in oklab, var(--hud-accent) 45%, transparent),
-    2px 2px 0 color-mix(in oklab, var(--hud-shade) 55%, transparent);
 }
 
 .hud-masthead__name {
