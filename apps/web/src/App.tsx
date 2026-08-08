@@ -70,6 +70,44 @@ const maxBudgetUsd = Number(import.meta.env.VITE_MAX_BUDGET_USD ?? 1);
  */
 const RESCAN_DEBOUNCE_MS = 1_200;
 
+/** Basename of a repo path → title case words (claude-clan → Claude Clan). */
+function titleFromRepoPath(repoPath: string): string {
+  const base =
+    repoPath.split(/[/\\]/).filter(Boolean).at(-1)?.replace(/[-_]+/g, " ").trim() ??
+    "";
+  if (!base) {
+    return "City";
+  }
+  return base.replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+/** Header brand: `{Repo Name} City`, without doubling a trailing City. */
+function cityNameFromRepo(repoPath: string | undefined): string {
+  if (!repoPath) {
+    return "City";
+  }
+  const titled = titleFromRepoPath(repoPath);
+  if (/\bcity$/i.test(titled)) {
+    return titled;
+  }
+  return `${titled} City`;
+}
+
+function markFromCityName(cityName: string): string {
+  const words = cityName
+    .replace(/\s+City$/i, "")
+    .split(/\s+/)
+    .filter(Boolean);
+  const [first, second] = words;
+  if (!first) {
+    return "??";
+  }
+  if (!second) {
+    return first.slice(0, 2).toUpperCase();
+  }
+  return `${first[0] ?? ""}${second[0] ?? ""}`.toUpperCase();
+}
+
 /**
  * How long a site stands after the work on it actually finishes.
  *
@@ -562,6 +600,8 @@ export default function App() {
       dragPosition &&
       pointIsInside(orderFormRef.current, dragPosition),
   );
+  const cityName = cityNameFromRepo(world?.repoPath);
+  const cityMark = markFromCityName(cityName);
 
   useEffect(() => {
     const socket = new WebSocket(websocketUrl);
@@ -1078,13 +1118,12 @@ export default function App() {
         <div className="hud-column hud-column--console">
           <HudWindow
             id="hud-console"
-            title="Sudo City"
-            hint="mayor console"
+            title={cityName}
             fill
             expanded={hud.console}
             onToggle={() => toggleHud("console")}
             bodyClassName="flex min-h-0 flex-1 flex-col gap-2.5 p-2.5"
-            icon={<span className="hud-tile retro">SC</span>}
+            icon={<span className="hud-tile retro">{cityMark}</span>}
             meta={
               <span
                 className={cn(
@@ -1143,6 +1182,19 @@ export default function App() {
               </div>
             }
           >
+            <div className="hud-masthead">
+              <span aria-hidden="true" className="hud-masthead__mark retro">
+                {cityMark}
+              </span>
+              <div className="min-w-0">
+                <h1 className="hud-masthead__name retro">{cityName}</h1>
+                <p className="hud-masthead__sub retro">
+                  {world?.repoPath ? fileBasename(world.repoPath) : "linking"} ·
+                  mayor console
+                </p>
+              </div>
+            </div>
+
             <div className="flex items-center gap-2.5">
               <img
                 src={crewAvatarSrc}
