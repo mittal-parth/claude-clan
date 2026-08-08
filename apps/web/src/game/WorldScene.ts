@@ -1,6 +1,7 @@
 import type {
   Building,
   CitySummary,
+  Issue,
   PullRequestOverlay,
   WorldSnapshot,
 } from "@sudo-city/protocol";
@@ -20,6 +21,7 @@ import {
 } from "./terrain";
 import {
   HIGHLIGHT_KEY,
+  ISSUE_SHOP_KEY,
   RUBBLE_KEY,
   SCAFFOLD_KEY,
   SELECT_KEY,
@@ -122,6 +124,9 @@ export class WorldScene extends Phaser.Scene {
   private transitionClouds: Phaser.GameObjects.Graphics[] = [];
   /** Whiteout layer beneath the clouds; it guarantees a fully covered map. */
   private transitionCloudVeil?: Phaser.GameObjects.Rectangle;
+  private issues: Issue[] = [];
+  private issueShop?: Phaser.GameObjects.Sprite;
+  private issueShopClickListener?: () => void;
 
   constructor() {
     super("world");
@@ -165,6 +170,21 @@ export class WorldScene extends Phaser.Scene {
     this.shipClickListener = listener;
   }
 
+  setIssueShopClickListener(listener: () => void): void {
+    this.issueShopClickListener = listener;
+  }
+
+  setIssues(issues: readonly Issue[]): void {
+    this.issues = [...issues];
+    if (!this.scene?.isActive()) {
+      if (this.events) {
+        this.events.once(Phaser.Scenes.Events.CREATE, () => this.layoutIssueShop());
+      }
+      return;
+    }
+    this.layoutIssueShop();
+  }
+
   /**
    * The current PR roster. Every city gets a harbor: main has one ship per
    * open PR, while a PR city has one return ship. If cities arrive before the
@@ -172,7 +192,7 @@ export class WorldScene extends Phaser.Scene {
    */
   setCities(cities: readonly CitySummary[]): void {
     this.lastCities = [...cities];
-    if (this.currentCityId) {
+    if (this.currentCityId && this.scene?.isActive()) {
       this.layoutShips();
     }
   }
@@ -185,10 +205,12 @@ export class WorldScene extends Phaser.Scene {
    * every building as a coincidental match or a stale ghost.
    */
   setWorld(snapshot: WorldSnapshot, cityId: string): void {
-    if (!this.scene.isActive()) {
-      this.events.once(Phaser.Scenes.Events.CREATE, () =>
-        this.setWorld(snapshot, cityId),
-      );
+    if (!this.scene?.isActive()) {
+      if (this.events) {
+        this.events.once(Phaser.Scenes.Events.CREATE, () =>
+          this.setWorld(snapshot, cityId),
+        );
+      }
       return;
     }
 
@@ -215,6 +237,7 @@ export class WorldScene extends Phaser.Scene {
     this.applyOverlay();
 
     this.layoutShips();
+    this.layoutIssueShop();
 
     // hasFitCamera is reset to false by resetWorld() above, so this also
     // refits the camera for every newly-arrived city, not just the first
@@ -234,6 +257,9 @@ export class WorldScene extends Phaser.Scene {
    */
   setOverlay(overlay: PullRequestOverlay | undefined): void {
     this.overlay = overlay;
+    if (!this.scene?.isActive()) {
+      return;
+    }
     this.applyOverlay();
   }
 
@@ -342,6 +368,8 @@ export class WorldScene extends Phaser.Scene {
     this.overlay = undefined;
 
     this.clearShips();
+    this.issueShop?.destroy();
+    this.issueShop = undefined;
 
     this.select(undefined);
     this.snapshot = undefined;
@@ -854,6 +882,35 @@ export class WorldScene extends Phaser.Scene {
     }
     this.shipSprites.clear();
     this.shipHoverListener?.(undefined);
+  }
+
+  /** Places the issue marketplace beside the main city's harbour district. */
+  private layoutIssueShop(): void {
+    if (this.currentCityId !== "main" || !this.snapshot) {
+      this.issueShop?.destroy();
+      this.issueShop = undefined;
+      return;
+    }
+    const { width, height } = this.snapshot.size;
+    const gx = Math.min(1, width - 1);
+    const gy = Math.max(1, height - 2);
+    const point = projection.project(gx, gy);
+    if (!this.issueShop) {
+      const shop = this.add
+        .sprite(point.x, point.y + TILE_ANCHOR_Y, ISSUE_SHOP_KEY)
+        .setOrigin(0.5, 1)
+        .setInteractive({ pixelPerfect: true, useHandCursor: true });
+      shop.on("pointerdown", () => {
+        playUiClickSound();
+        this.issueShopClickListener?.();
+      });
+      this.issueShop = shop;
+    }
+    this.issueShop
+      .setPosition(point.x, point.y + TILE_ANCHOR_Y)
+      .setDepth(projection.depth(gx, gy) + 1)
+      .setVisible(true);
+    this.issueShop.setData("issueCount", this.issues.length);
   }
 
   /** Sails the clicked ship away from the island and out of view. */

@@ -148,6 +148,8 @@ export const SPARKLE_KEY = "fx:sparkle";
 export const CAR_KEYS = ["fx:car:0", "fx:car:1", "fx:car:2", "fx:car:3"] as const;
 /** The harbor marker for a PR city, moored offshore of the main island. */
 export const SHIP_KEY = "fx:ship";
+/** A clickable marketplace building where the mayor can pick an issue to fix. */
+export const ISSUE_SHOP_KEY = "fx:issue-shop";
 
 const GRASS_VARIANTS = TERRAIN_COLORS.grass.length;
 const PARK_VARIANTS = 2;
@@ -207,6 +209,7 @@ export function bakeTerrainTextures(scene: Phaser.Scene): void {
   bakeSparkle(baker);
   CAR_KEYS.forEach((key, index) => bakeCar(baker, key, index));
   bakeShip(baker);
+  bakeIssueShop(baker);
 
   baker.destroy();
 }
@@ -678,6 +681,46 @@ function bakeShip(baker: Baker): void {
   );
 
   baker.finish(SHIP_KEY, TILE_WIDTH, SHIP_HEIGHT);
+}
+
+function bakeIssueShop(baker: Baker): void {
+  const width = TILE_WIDTH;
+  const height = 106;
+  const baseY = height - TILE_ANCHOR_Y;
+
+  fillFace(baker, TERRAIN_COLORS.shadow, 0.22, diamond(0.35), HALF_W, baseY);
+  const base = baker.at([0, 0, 0], HALF_W, baseY);
+
+  baker.graphics.fillStyle(0x7d4e9b, 1);
+  baker.graphics.fillRect(base.x - 25, base.y - 39, 50, 39);
+  baker.graphics.fillStyle(0x5a3274, 1);
+  baker.graphics.fillRect(base.x + 18, base.y - 39, 7, 39);
+  baker.graphics.fillStyle(0xb699d0, 1);
+  baker.graphics.fillRect(base.x - 8, base.y - 24, 16, 24);
+
+  baker.graphics.fillStyle(0x443052, 1);
+  baker.graphics.fillTriangle(
+    base.x - 32,
+    base.y - 39,
+    base.x + 32,
+    base.y - 39,
+    base.x,
+    base.y - 66,
+  );
+  baker.graphics.fillStyle(0xd5c4e9, 1);
+  baker.graphics.fillRect(base.x - 28, base.y - 54, 56, 12);
+  baker.graphics.fillStyle(0x2b1d37, 1);
+  baker.graphics.fillRect(base.x - 21, base.y - 51, 42, 6);
+
+  // A tiny issue-ticket glyph on the sign makes the building recognisable at
+  // city scale without adding DOM labels over the map.
+  baker.graphics.fillStyle(0xffd166, 1);
+  baker.graphics.fillRect(base.x - 13, base.y - 50, 7, 4);
+  baker.graphics.fillRect(base.x + 6, base.y - 50, 7, 4);
+  baker.graphics.fillStyle(0xfff6d5, 1);
+  baker.graphics.fillRect(base.x - 3, base.y - 51, 6, 6);
+
+  baker.finish(ISSUE_SHOP_KEY, width, height);
 }
 
 // ---------------------------------------------------------------------------

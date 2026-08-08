@@ -1,6 +1,7 @@
 import type {
   Building,
   CitySummary,
+  Issue,
   PullRequestOverlay,
   WorldSnapshot,
 } from "@sudo-city/protocol";
@@ -20,6 +21,11 @@ export interface CanvasFileChange {
   change: FileChange;
 }
 
+export interface CanvasTravelRequest {
+  id: string;
+  cityId: string;
+}
+
 interface GameCanvasProps {
   cityId: string;
   world?: WorldSnapshot;
@@ -30,12 +36,16 @@ interface GameCanvasProps {
   travelOverlay?: PullRequestOverlay;
   fileChange?: CanvasFileChange;
   cities?: readonly CitySummary[];
+  issues?: readonly Issue[];
+  /** Programmatic travel from the issue shop, still using the cloud sequence. */
+  travelRequest?: CanvasTravelRequest;
   /** Starts loading the destination while the current city remains on screen. */
   onTravelRequest?: (cityId: string) => void;
   /** Commits the application chrome to the new city after the arrival animation. */
   onTravelComplete?: (cityId: string) => void;
   /** Lets the HTML map overlays yield to the canvas whiteout. */
   onTravelTransitionChange?: (transitioning: boolean) => void;
+  onIssueShopClick?: () => void;
   onSelectBuilding?: (building?: Building) => void;
   onShipHover?: (info?: ShipHoverInfo) => void;
 }
@@ -49,9 +59,12 @@ export function GameCanvas({
   travelOverlay,
   fileChange,
   cities,
+  issues,
+  travelRequest,
   onTravelRequest,
   onTravelComplete,
   onTravelTransitionChange,
+  onIssueShopClick,
   onSelectBuilding,
   onShipHover,
 }: GameCanvasProps) {
@@ -63,6 +76,7 @@ export function GameCanvas({
   const travelRequestRef = useRef(onTravelRequest);
   const travelCompleteRef = useRef(onTravelComplete);
   const travelTransitionRef = useRef(onTravelTransitionChange);
+  const issueShopClickRef = useRef(onIssueShopClick);
   const cityIdRef = useRef(cityId);
   const travelCityRef = useRef(travelCityId);
   const travelWorldRef = useRef(travelWorld);
@@ -74,6 +88,7 @@ export function GameCanvas({
   const revealStartedRef = useRef(false);
   const departureCityRef = useRef<string | undefined>(undefined);
   const destinationCityRef = useRef<string | undefined>(undefined);
+  const handledTravelRequestRef = useRef<string | undefined>(undefined);
 
   // Kept in refs so a changing prop identity never rebuilds the game, and so
   // the ship-click listener (registered once, at scene creation) always sees
@@ -83,6 +98,7 @@ export function GameCanvas({
   travelRequestRef.current = onTravelRequest;
   travelCompleteRef.current = onTravelComplete;
   travelTransitionRef.current = onTravelTransitionChange;
+  issueShopClickRef.current = onIssueShopClick;
   cityIdRef.current = cityId;
   travelCityRef.current = travelCityId;
   travelWorldRef.current = travelWorld;
@@ -124,6 +140,29 @@ export function GameCanvas({
     });
   }
 
+  function beginTravel(targetCityId: string): boolean {
+    const scene = sceneRef.current;
+    if (
+      !scene ||
+      transitioningRef.current ||
+      targetCityId === cityIdRef.current
+    ) {
+      return false;
+    }
+    transitioningRef.current = true;
+    coverDoneRef.current = false;
+    revealStartedRef.current = false;
+    departureCityRef.current = cityIdRef.current;
+    destinationCityRef.current = targetCityId;
+    travelTransitionRef.current?.(true);
+    void scene.coverForTravel(targetCityId).then(() => {
+      coverDoneRef.current = true;
+      tryReveal();
+    });
+    travelRequestRef.current?.(targetCityId);
+    return true;
+  }
+
   useEffect(() => {
     if (!hostRef.current || gameRef.current) {
       return;
@@ -133,30 +172,8 @@ export function GameCanvas({
     const scene = new WorldScene();
     scene.setSelectionListener((building) => selectRef.current?.(building));
     scene.setShipHoverListener((info) => shipHoverRef.current?.(info));
-    scene.setShipClickListener((targetCityId) => {
-      // Ignore a re-click on the city already being viewed, and ignore
-      // clicks that land mid-transition -- the cloud cover already hides
-      // the world, so a second click can't mean anything useful yet.
-      if (transitioningRef.current || targetCityId === cityIdRef.current) {
-        return;
-      }
-      transitioningRef.current = true;
-      coverDoneRef.current = false;
-      revealStartedRef.current = false;
-      departureCityRef.current = cityIdRef.current;
-      destinationCityRef.current = targetCityId;
-      travelTransitionRef.current?.(true);
-      // The network round trip runs concurrently with the departure/cover
-      // animation rather than after it, so a fast (already-built) travel
-      // isn't needlessly delayed by the animation's fixed duration; a slow
-      // (lazy PR build) travel just leaves the clouds covering a little
-      // longer, which reads fine as a loading state.
-      scene.coverForTravel(targetCityId).then(() => {
-        coverDoneRef.current = true;
-        tryReveal();
-      });
-      travelRequestRef.current?.(targetCityId);
-    });
+    scene.setShipClickListener(beginTravel);
+    scene.setIssueShopClickListener(() => issueShopClickRef.current?.());
     sceneRef.current = scene;
     const game = new Phaser.Game({
       type: Phaser.AUTO,
@@ -220,6 +237,23 @@ export function GameCanvas({
   useEffect(() => {
     sceneRef.current?.setCities(cities ?? []);
   }, [cities]);
+
+  useEffect(() => {
+    sceneRef.current?.setIssues(issues ?? []);
+  }, [issues]);
+
+  useEffect(() => {
+    if (
+      !travelRequest ||
+      travelRequest.id === handledTravelRequestRef.current ||
+      !sceneRef.current
+    ) {
+      return;
+    }
+    if (beginTravel(travelRequest.cityId)) {
+      handledTravelRequestRef.current = travelRequest.id;
+    }
+  }, [travelRequest]);
 
   useEffect(() => {
     if (fileChange) {

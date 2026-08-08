@@ -70,15 +70,25 @@ export const WorldSnapshotSchema = z.object({
   buildings: z.array(BuildingSchema),
 });
 
-// "main" is the primary checkout; "pr-<n>" is a replica city built from an
-// open PR's worktree.
+// "main" is the primary checkout; PR and issue cities are detached worktrees.
 export const CityIdSchema = z
   .string()
-  .regex(/^(main|pr-\d+)$/u, 'cityId must be "main" or "pr-<number>"');
+  .regex(
+    /^(main|pr-\d+|issue-\d+)$/u,
+    'cityId must be "main", "pr-<number>", or "issue-<number>"',
+  );
+
+export const IssueSchema = z.object({
+  number: z.number().int().positive(),
+  title: z.string().min(1),
+  body: z.string(),
+  author: z.string().min(1),
+  url: z.string().url(),
+});
 
 export const CitySummarySchema = z.object({
   id: CityIdSchema,
-  kind: z.enum(["main", "pull-request"]),
+  kind: z.enum(["main", "pull-request", "issue"]),
   title: z.string().min(1),
   ref: z.string().min(1),
   number: z.number().int().positive().optional(),
@@ -226,6 +236,10 @@ export const ServerMessageSchema = z.discriminatedUnion("kind", [
     cities: z.array(CitySummarySchema),
   }),
   z.object({
+    kind: z.literal("issues"),
+    issues: z.array(IssueSchema),
+  }),
+  z.object({
     kind: z.literal("overlay"),
     overlay: PullRequestOverlaySchema,
   }),
@@ -251,6 +265,7 @@ export type ExternalDependency = z.infer<typeof ExternalDependencySchema>;
 export type FileChangeKind = z.infer<typeof FileChangeKindSchema>;
 export type GameEvent = z.infer<typeof GameEventSchema>;
 export type ImportEdge = z.infer<typeof ImportEdgeSchema>;
+export type Issue = z.infer<typeof IssueSchema>;
 export type MayorCommand = z.infer<typeof MayorCommandSchema>;
 export type Plot = z.infer<typeof PlotSchema>;
 export type PullRequestOverlay = z.infer<typeof PullRequestOverlaySchema>;

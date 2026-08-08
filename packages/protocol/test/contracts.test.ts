@@ -116,9 +116,10 @@ describe("protocol contracts", () => {
     });
   });
 
-  it("accepts main and pr-<n> city ids, rejects anything else", () => {
+  it("accepts main, PR, and issue city ids, rejects anything else", () => {
     expect(CityIdSchema.parse("main")).toBe("main");
     expect(CityIdSchema.parse("pr-42")).toBe("pr-42");
+    expect(CityIdSchema.parse("issue-12")).toBe("issue-12");
     expect(() => CityIdSchema.parse("pr-")).toThrow();
     expect(() => CityIdSchema.parse("staging")).toThrow();
     expect(() => CityIdSchema.parse("")).toThrow();
