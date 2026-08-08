@@ -213,6 +213,10 @@ app.get("/ws", { websocket: true }, (socket) => {
           .start(
             decoded.data.prompt,
             decoded.data.permissionMode ?? "default",
+            {
+              model: decoded.data.model,
+              effort: decoded.data.effort,
+            },
           )
           .catch((error: unknown) => {
             emitAgentEvent({

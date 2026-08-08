@@ -116,10 +116,12 @@ describe("protocol contracts", () => {
       ...base,
       type: "session.started",
       model: "sonnet",
+      effort: "xhigh",
       permissionMode: "auto",
     });
     expect(started).toMatchObject({
       type: "session.started",
+      effort: "xhigh",
       permissionMode: "auto",
     });
 
@@ -128,7 +130,26 @@ describe("protocol contracts", () => {
       type: "session.started",
       model: "sonnet",
     });
-    expect(legacyStarted).toMatchObject({ permissionMode: "default" });
+    expect(legacyStarted).toMatchObject({
+      permissionMode: "default",
+      effort: "high",
+    });
+  });
+
+  it("accepts model and effort on session.prompt", () => {
+    const command = MayorCommandSchema.parse({
+      type: "session.prompt",
+      prompt: "refactor the district",
+      model: "opus",
+      effort: "max",
+    });
+
+    expect(command).toEqual({
+      type: "session.prompt",
+      prompt: "refactor the district",
+      model: "opus",
+      effort: "max",
+    });
   });
 
   it("trims and validates mayor prompts", () => {

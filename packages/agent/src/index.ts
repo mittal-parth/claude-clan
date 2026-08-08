@@ -9,6 +9,7 @@ import {
   type SDKMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 import type {
+  EffortLevel,
   GameEvent,
   PermissionMode as MayorPermissionMode,
 } from "@sudo-city/protocol";
@@ -28,7 +29,13 @@ export interface AgentSessionOptions {
   maxBudgetUsd?: number;
   maxTurns?: number;
   model?: string;
+  effort?: EffortLevel;
   safeTools?: readonly string[];
+}
+
+export interface AgentStartOverrides {
+  model?: string;
+  effort?: EffortLevel;
 }
 
 export class AgentSessionManager {
@@ -38,6 +45,7 @@ export class AgentSessionManager {
   private readonly maxTurns: number;
   private readonly safeTools: Set<string>;
   private model: string;
+  private effort: EffortLevel;
   private activeQuery?: Query;
   private abortController?: AbortController;
   private readonly pendingPermits = new Map<string, PendingPermit>();
@@ -48,19 +56,28 @@ export class AgentSessionManager {
     this.maxBudgetUsd = options.maxBudgetUsd ?? 1;
     this.maxTurns = options.maxTurns ?? 12;
     this.model = options.model ?? "sonnet";
+    this.effort = options.effort ?? "high";
     this.safeTools = new Set(options.safeTools ?? ["Read", "Glob", "Grep"]);
   }
 
   async start(
     prompt: string,
     permissionMode: MayorPermissionMode = "default",
+    overrides?: AgentStartOverrides,
   ): Promise<void> {
     await this.interrupt();
+    if (overrides?.model) {
+      this.model = overrides.model;
+    }
+    if (overrides?.effort) {
+      this.effort = overrides.effort;
+    }
     const abortController = new AbortController();
     this.abortController = abortController;
     this.emit({
       type: "session.started",
       model: this.model,
+      effort: this.effort,
       permissionMode,
     });
 
@@ -70,6 +87,7 @@ export class AgentSessionManager {
         abortController,
         canUseTool: this.canUseTool,
         cwd: this.cwd,
+        effort: this.effort,
         hooks: this.createHooks(),
         maxBudgetUsd: this.maxBudgetUsd,
         maxTurns: this.maxTurns,
