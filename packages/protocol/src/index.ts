@@ -70,6 +70,8 @@ export const WorldSnapshotSchema = z.object({
   buildings: z.array(BuildingSchema),
 });
 
+export const PermissionModeSchema = z.enum(["default", "auto"]);
+
 const EventBaseSchema = z.object({
   id: z.string().min(1),
   sessionId: z.string().min(1),
@@ -85,6 +87,7 @@ export const GameEventSchema = z.discriminatedUnion("type", [
   EventBaseSchema.extend({
     type: z.literal("session.started"),
     model: z.string().min(1),
+    permissionMode: PermissionModeSchema.default("default"),
   }),
   EventBaseSchema.extend({
     type: z.literal("session.message"),
@@ -148,6 +151,7 @@ export const MayorCommandSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("session.prompt"),
     prompt: z.string().trim().min(1).max(20_000),
+    permissionMode: PermissionModeSchema.optional(),
     model: z.string().min(1).optional(),
   }),
   z.object({
@@ -181,6 +185,7 @@ export type ExternalDependency = z.infer<typeof ExternalDependencySchema>;
 export type GameEvent = z.infer<typeof GameEventSchema>;
 export type ImportEdge = z.infer<typeof ImportEdgeSchema>;
 export type MayorCommand = z.infer<typeof MayorCommandSchema>;
+export type PermissionMode = z.infer<typeof PermissionModeSchema>;
 export type Plot = z.infer<typeof PlotSchema>;
 export type ServerMessage = z.infer<typeof ServerMessageSchema>;
 export type SourceFile = z.infer<typeof SourceFileSchema>;

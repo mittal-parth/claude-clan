@@ -99,6 +99,38 @@ describe("protocol contracts", () => {
     ).toThrow();
   });
 
+  it("carries permission mode on an individual order", () => {
+    const command = MayorCommandSchema.parse({
+      type: "session.prompt",
+      prompt: "add an endpoint",
+      permissionMode: "auto",
+    });
+
+    expect(command).toEqual({
+      type: "session.prompt",
+      prompt: "add an endpoint",
+      permissionMode: "auto",
+    });
+
+    const started = GameEventSchema.parse({
+      ...base,
+      type: "session.started",
+      model: "sonnet",
+      permissionMode: "auto",
+    });
+    expect(started).toMatchObject({
+      type: "session.started",
+      permissionMode: "auto",
+    });
+
+    const legacyStarted = GameEventSchema.parse({
+      ...base,
+      type: "session.started",
+      model: "sonnet",
+    });
+    expect(legacyStarted).toMatchObject({ permissionMode: "default" });
+  });
+
   it("trims and validates mayor prompts", () => {
     const command = MayorCommandSchema.parse({
       type: "session.prompt",

@@ -8,7 +8,10 @@ import {
   type SDKAssistantMessage,
   type SDKMessage,
 } from "@anthropic-ai/claude-agent-sdk";
-import type { GameEvent } from "@sudo-city/protocol";
+import type {
+  GameEvent,
+  PermissionMode as MayorPermissionMode,
+} from "@sudo-city/protocol";
 
 type AgentEvent<Event extends GameEvent = GameEvent> = Event extends GameEvent
   ? Omit<Event, "id" | "sessionId" | "sequence" | "timestamp">
@@ -48,11 +51,18 @@ export class AgentSessionManager {
     this.safeTools = new Set(options.safeTools ?? ["Read", "Glob", "Grep"]);
   }
 
-  async start(prompt: string): Promise<void> {
+  async start(
+    prompt: string,
+    permissionMode: MayorPermissionMode = "default",
+  ): Promise<void> {
     await this.interrupt();
     const abortController = new AbortController();
     this.abortController = abortController;
-    this.emit({ type: "session.started", model: this.model });
+    this.emit({
+      type: "session.started",
+      model: this.model,
+      permissionMode,
+    });
 
     const activeQuery = query({
       prompt,
@@ -64,7 +74,7 @@ export class AgentSessionManager {
         maxBudgetUsd: this.maxBudgetUsd,
         maxTurns: this.maxTurns,
         model: this.model,
-        permissionMode: "default",
+        permissionMode,
       },
     });
     this.activeQuery = activeQuery;
