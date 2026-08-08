@@ -86,9 +86,9 @@ let pendingScan: Promise<WorldSnapshot> | undefined;
 async function generateWorld(): Promise<WorldSnapshot> {
   try {
     const map = await scanRepository(targetRepo);
-    const layout = layoutWorld(map, { previousPlots: store.loadPlots() });
-    store.savePlots(layout.plots);
-    store.saveSnapshot(layout.snapshot);
+    const layout = layoutWorld(map, { previousPlots: store.loadPlots("main") });
+    store.savePlots("main", layout.plots);
+    store.saveSnapshot("main", layout.snapshot);
     return layout.snapshot;
   } catch (error) {
     app.log.warn({ error }, "Repository scan failed; using preview world");

@@ -13,11 +13,11 @@ import {
 export interface WorldStore {
   appendEvent(event: GameEvent): void;
   close(): void;
-  loadLatestSnapshot(): WorldSnapshot | undefined;
-  loadPlots(): Record<string, Plot>;
+  loadLatestSnapshot(worldId: string): WorldSnapshot | undefined;
+  loadPlots(worldId: string): Record<string, Plot>;
   readEvents(sessionId: string): GameEvent[];
-  savePlots(plots: Readonly<Record<string, Plot>>): void;
-  saveSnapshot(snapshot: WorldSnapshot): void;
+  savePlots(worldId: string, plots: Readonly<Record<string, Plot>>): void;
+  saveSnapshot(worldId: string, snapshot: WorldSnapshot): void;
 }
 
 export class SQLiteWorldStore implements WorldStore {
@@ -40,17 +40,55 @@ export class SQLiteWorldStore implements WorldStore {
       );
       CREATE INDEX IF NOT EXISTS events_session_sequence
         ON events(session_id, sequence);
-      CREATE TABLE IF NOT EXISTS snapshots (
-        id TEXT PRIMARY KEY,
-        generated_at TEXT NOT NULL,
-        payload TEXT NOT NULL
-      );
-      CREATE TABLE IF NOT EXISTS plots (
-        path TEXT PRIMARY KEY,
-        x INTEGER NOT NULL,
-        y INTEGER NOT NULL
-      );
     `);
+    this.migrateWorldScopedTables();
+  }
+
+  /**
+   * `plots` and `snapshots` predate per-city worlds and had no world column, so a
+   * second city would silently steal the first city's coordinates. `.sudocity/`
+   * is a gitignored local cache with nothing worth an ALTER migration, so an old
+   * shape is just dropped and recreated empty.
+   */
+  private migrateWorldScopedTables(): void {
+    if (this.hasColumn("plots", "world_id")) {
+      return;
+    }
+    this.database.exec(`
+      DROP TABLE IF EXISTS plots;
+      DROP TABLE IF EXISTS snapshots;
+      CREATE TABLE plots (
+        world_id TEXT NOT NULL,
+        path TEXT NOT NULL,
+        x INTEGER NOT NULL,
+        y INTEGER NOT NULL,
+        PRIMARY KEY (world_id, path)
+      );
+      CREATE TABLE snapshots (
+        id TEXT NOT NULL,
+        world_id TEXT NOT NULL,
+        generated_at TEXT NOT NULL,
+        payload TEXT NOT NULL,
+        PRIMARY KEY (world_id, id)
+      );
+      CREATE INDEX snapshots_world_generated
+        ON snapshots(world_id, generated_at);
+    `);
+  }
+
+  private hasColumn(table: string, column: string): boolean {
+    const exists = this.database
+      .prepare(
+        `SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`,
+      )
+      .get(table);
+    if (!exists) {
+      return false;
+    }
+    const columns = this.database
+      .prepare(`PRAGMA table_info(${table})`)
+      .all() as Array<{ name: string }>;
+    return columns.some((entry) => entry.name === column);
   }
 
   appendEvent(event: GameEvent): void {
@@ -78,39 +116,48 @@ export class SQLiteWorldStore implements WorldStore {
          ORDER BY sequence ASC`,
       )
       .all(sessionId) as Array<{ payload: string }>;
-    return rows.map((row) => GameEventSchema.parse(JSON.parse(row.payload)));
+    return rows.flatMap((row) => {
+      const parsed = GameEventSchema.safeParse(JSON.parse(row.payload));
+      return parsed.success ? [parsed.data] : [];
+    });
   }
 
-  saveSnapshot(snapshot: WorldSnapshot): void {
+  saveSnapshot(worldId: string, snapshot: WorldSnapshot): void {
     this.database
       .prepare(
-        `INSERT OR REPLACE INTO snapshots (id, generated_at, payload)
-         VALUES (?, ?, ?)`,
+        `INSERT OR REPLACE INTO snapshots (id, world_id, generated_at, payload)
+         VALUES (?, ?, ?, ?)`,
       )
-      .run(snapshot.id, snapshot.generatedAt, JSON.stringify(snapshot));
+      .run(
+        snapshot.id,
+        worldId,
+        snapshot.generatedAt,
+        JSON.stringify(snapshot),
+      );
   }
 
-  loadLatestSnapshot(): WorldSnapshot | undefined {
+  loadLatestSnapshot(worldId: string): WorldSnapshot | undefined {
     const row = this.database
       .prepare(
         `SELECT payload FROM snapshots
+         WHERE world_id = ?
          ORDER BY generated_at DESC
          LIMIT 1`,
       )
-      .get() as { payload: string } | undefined;
+      .get(worldId) as { payload: string } | undefined;
     return row
       ? WorldSnapshotSchema.parse(JSON.parse(row.payload))
       : undefined;
   }
 
-  savePlots(plots: Readonly<Record<string, Plot>>): void {
+  savePlots(worldId: string, plots: Readonly<Record<string, Plot>>): void {
     const insert = this.database.prepare(
-      `INSERT OR IGNORE INTO plots (path, x, y) VALUES (?, ?, ?)`,
+      `INSERT OR IGNORE INTO plots (world_id, path, x, y) VALUES (?, ?, ?, ?)`,
     );
     this.database.exec("BEGIN IMMEDIATE");
     try {
       for (const [path, plot] of Object.entries(plots)) {
-        insert.run(path, plot.x, plot.y);
+        insert.run(worldId, path, plot.x, plot.y);
       }
       this.database.exec("COMMIT");
     } catch (error) {
@@ -119,10 +166,12 @@ export class SQLiteWorldStore implements WorldStore {
     }
   }
 
-  loadPlots(): Record<string, Plot> {
+  loadPlots(worldId: string): Record<string, Plot> {
     const rows = this.database
-      .prepare("SELECT path, x, y FROM plots ORDER BY path")
-      .all() as Array<{ path: string; x: number; y: number }>;
+      .prepare(
+        "SELECT path, x, y FROM plots WHERE world_id = ? ORDER BY path",
+      )
+      .all(worldId) as Array<{ path: string; x: number; y: number }>;
     return Object.fromEntries(
       rows.map((row) => [
         row.path,
