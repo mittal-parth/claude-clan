@@ -4,6 +4,7 @@ import {
   type Building,
   type GameEvent,
   type MayorCommand,
+  type PermissionMode,
   type WorldSnapshot,
 } from "@sudo-city/protocol";
 import { FormEvent, useEffect, useRef, useState } from "react";
@@ -92,12 +93,16 @@ function statusLabel(status: ConnectionState): string {
   }
 }
 
+function permissionModeLabel(mode: PermissionMode): string {
+  return mode === "auto" ? "Don’t Disturb Mayor" : "Mayor approval";
+}
+
 function eventLabel(event: GameEvent): string {
   switch (event.type) {
     case "world.ready":
       return `${event.snapshot.buildings.length} structures surveyed`;
     case "session.started":
-      return `${event.model} crew dispatched`;
+      return `${event.model} crew dispatched · ${permissionModeLabel(event.permissionMode)}`;
     case "session.message":
       return `${event.role}: ${event.text}`;
     case "session.usage":
@@ -156,7 +161,7 @@ function timelineContentForEvent(
       };
     case "session.started":
       return {
-        label: `${event.model} crew dispatched`,
+        label: `${event.model} crew dispatched · ${permissionModeLabel(event.permissionMode)}`,
       };
     case "subagent.changed":
       return {
@@ -421,6 +426,8 @@ export default function App() {
   const [connection, setConnection] =
     useState<ConnectionState>("connecting");
   const [events, setEvents] = useState<GameEvent[]>(loadStoredEvents);
+  const [orderPermissionMode, setOrderPermissionMode] =
+    useState<PermissionMode>("default");
   const [prompt, setPrompt] = useState("");
   const [commandOpen, setCommandOpen] = useState(false);
   const [world, setWorld] = useState<WorldSnapshot>();
@@ -524,8 +531,13 @@ export default function App() {
     if (!nextPrompt) {
       return;
     }
-    send({ type: "session.prompt", prompt: nextPrompt });
+    send({
+      type: "session.prompt",
+      prompt: nextPrompt,
+      permissionMode: orderPermissionMode,
+    });
     setPrompt("");
+    setOrderPermissionMode("default");
   }
 
   return (
@@ -634,6 +646,46 @@ export default function App() {
               >
                 Mayor&apos;s order
               </label>
+              <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                <span className="retro text-[9px] text-muted-foreground">
+                  Permission&apos;s for this order
+                </span>
+                <div
+                  className="grid grid-cols-2 gap-1"
+                  role="group"
+                  aria-label="Permission mode for this order"
+                >
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant={
+                      orderPermissionMode === "default" ? "default" : "outline"
+                    }
+                    aria-pressed={orderPermissionMode === "default"}
+                    onClick={() => setOrderPermissionMode("default")}
+                    disabled={connection !== "online"}
+                  >
+                    Ask Mayor
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant={
+                      orderPermissionMode === "auto" ? "default" : "outline"
+                    }
+                    aria-pressed={orderPermissionMode === "auto"}
+                    onClick={() => setOrderPermissionMode("auto")}
+                    disabled={connection !== "online"}
+                  >
+                    Don&apos;t Disturb
+                  </Button>
+                </div>
+              </div>
+              <p className="retro mb-2 text-[8px] text-muted-foreground">
+                {orderPermissionMode === "auto"
+                  ? "Auto mode applies only to this order."
+                  : "Default mode pauses for your approval."}
+              </p>
               <div className="flex flex-col gap-2 sm:flex-row">
                 <Input
                   id="mayor-prompt"
@@ -679,9 +731,7 @@ export default function App() {
                   avatarFallback={agentModel.slice(0, 1).toUpperCase()}
                   title={agentModel}
                   description={
-                    pendingPermit
-                      ? "Awaiting permit stamp"
-                      : "Awaiting orders"
+                    pendingPermit ? "Awaiting permit stamp" : "Awaiting orders"
                   }
                 />
 

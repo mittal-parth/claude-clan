@@ -209,16 +209,21 @@ app.get("/ws", { websocket: true }, (socket) => {
             text: decoded.data.prompt,
           }),
         );
-        void agent.start(decoded.data.prompt).catch((error: unknown) => {
-          emitAgentEvent({
-            type: "session.message",
-            role: "system",
-            text:
-              error instanceof Error
-                ? `Agent stopped: ${error.message}`
-                : "Agent stopped unexpectedly.",
+        void agent
+          .start(
+            decoded.data.prompt,
+            decoded.data.permissionMode ?? "default",
+          )
+          .catch((error: unknown) => {
+            emitAgentEvent({
+              type: "session.message",
+              role: "system",
+              text:
+                error instanceof Error
+                  ? `Agent stopped: ${error.message}`
+                  : "Agent stopped unexpectedly.",
+            });
           });
-        });
         break;
       case "session.interrupt":
         void agent.interrupt();
