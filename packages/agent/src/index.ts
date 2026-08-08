@@ -71,7 +71,7 @@ export class AgentSessionManager {
     this.cwd = options.cwd;
     this.emit = options.emit;
     this.maxBudgetUsd = options.maxBudgetUsd ?? 1;
-    this.maxTurns = options.maxTurns ?? 12;
+    this.maxTurns = options.maxTurns ?? 50;
     this.model = options.model ?? "sonnet";
     this.effort = options.effort ?? "high";
     this.safeTools = new Set(options.safeTools ?? ["Read", "Glob", "Grep"]);
