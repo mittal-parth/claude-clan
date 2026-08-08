@@ -6,7 +6,7 @@ import {
   type AgentEvent,
 } from "@sudo-city/agent";
 import {
-  GhCliClient,
+  GitHubApiClient,
   changedFiles,
   cityIdFor,
   ensureWorktree,
@@ -405,7 +405,7 @@ async function computeOverlay(
   };
 }
 
-const githubClient: GitHubClient = new GhCliClient();
+const githubClient: GitHubClient = new GitHubApiClient();
 
 /**
  * gh's absence, an unauthenticated session, or no configured remote must
