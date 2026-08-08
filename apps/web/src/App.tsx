@@ -51,6 +51,17 @@ const maxBudgetUsd = Number(import.meta.env.VITE_MAX_BUDGET_USD ?? 1);
  */
 const RESCAN_DEBOUNCE_MS = 1_200;
 
+/**
+ * How long a building keeps its crane after the last sign of work on it.
+ *
+ * Writing a file takes milliseconds, so this is really a minimum on-screen
+ * time rather than a timeout: it is measured from the last activity, so a
+ * single instant edit still raises a site that stands long enough to read, and
+ * a burst of edits reads as one continuous site instead of flickering
+ * scaffolding. Roughly six cycles of the crane's hook.
+ */
+const CONSTRUCTION_LINGER_MS = 15_000;
+
 const EVENTS_STORAGE_KEY = "sudo-city:events";
 
 function loadStoredEvents(): GameEvent[] {
@@ -413,6 +424,7 @@ export default function App() {
   const [commandOpen, setCommandOpen] = useState(false);
   const [world, setWorld] = useState<WorldSnapshot>();
   const [fileChange, setFileChange] = useState<CanvasFileChange>();
+  const [buildingPaths, setBuildingPaths] = useState<string[]>([]);
   const [selected, setSelected] = useState<Building>();
   const pendingPermit = findPendingPermit(events);
   const usage = events
@@ -438,6 +450,23 @@ export default function App() {
     const socket = new WebSocket(websocketUrl);
     socketRef.current = socket;
     let rescanTimer: ReturnType<typeof setTimeout> | undefined;
+    const siteTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+    // A file the crew touches becomes a construction site, and stays one until
+    // the work on it goes quiet.
+    const openSite = (path: string): void => {
+      clearTimeout(siteTimers.get(path));
+      setBuildingPaths((current) =>
+        current.includes(path) ? current : [...current, path],
+      );
+      siteTimers.set(
+        path,
+        setTimeout(() => {
+          siteTimers.delete(path);
+          setBuildingPaths((current) => current.filter((item) => item !== path));
+        }, CONSTRUCTION_LINGER_MS),
+      );
+    };
 
     // The agent edits in bursts; one rescan after the burst settles is enough,
     // and the scene diffs the result so standing buildings do not flicker.
@@ -474,12 +503,22 @@ export default function App() {
           path: event.path,
           change: event.change,
         });
+        openSite(event.path);
         scheduleRescan();
+      }
+      // A tool's target is the earliest signal that work has started — the
+      // crane goes up before the file is written. Targets that are not a
+      // building path (a shell command, say) simply match nothing.
+      if (event.type === "tool.started" && event.target) {
+        openSite(event.target);
       }
     });
 
     return () => {
       clearTimeout(rescanTimer);
+      for (const timer of siteTimers.values()) {
+        clearTimeout(timer);
+      }
       socket.close();
       socketRef.current = null;
     };
@@ -562,6 +601,7 @@ export default function App() {
               <GameCanvas
                 world={world}
                 fileChange={fileChange}
+                buildingPaths={buildingPaths}
                 onSelectBuilding={setSelected}
               />
               <div className="pointer-events-none absolute left-4 top-4 border-2 border-foreground bg-card px-3 py-2 dark:border-ring">

@@ -1,6 +1,7 @@
 import type { Building, WorldSnapshot } from "@sudo-city/protocol";
 import Phaser from "phaser";
-import { AmbientLife } from "./ambient";
+import { AmbientLife, prefersReducedMotion } from "./ambient";
+import { ConstructionSites, type ConstructionTarget } from "./construction";
 import { playUiClickSound } from "@/lib/play-ui-click";
 import { hashCoords, hashText, pickIndex, unitFloat } from "./hash";
 import { createIsoProjection } from "./iso";
@@ -61,6 +62,9 @@ export class WorldScene extends Phaser.Scene {
   private propSprites: Phaser.GameObjects.Sprite[] = [];
   private views = new Map<string, BuildingView>();
   private ambient?: AmbientLife;
+  private construction?: ConstructionSites;
+  /** Paths the crew is currently working on, newest last. */
+  private buildingPaths: string[] = [];
 
   private highlight?: Phaser.GameObjects.Sprite;
   private selectionMarker?: Phaser.GameObjects.Sprite;
@@ -100,11 +104,45 @@ export class WorldScene extends Phaser.Scene {
       traffic: TRAFFIC_DEPTH,
       sky: SKY_DEPTH,
     });
+    this.construction = new ConstructionSites(this, prefersReducedMotion());
     this.bindCamera();
   }
 
   setSelectionListener(listener: (building?: Building) => void): void {
     this.selectionListener = listener;
+  }
+
+  /**
+   * The files the crew is working on right now. Each one that already has a
+   * building gets a crane, scaffolding and dust until it drops off the list.
+   */
+  setBuildingPaths(paths: string[]): void {
+    this.buildingPaths = paths;
+    this.syncConstruction();
+  }
+
+  private syncConstruction(): void {
+    if (!this.construction) {
+      return;
+    }
+
+    const targets: ConstructionTarget[] = [];
+    for (const path of this.buildingPaths) {
+      const view = this.views.get(path);
+      // A brand new file has no plot until the rescan lands; it picks up its
+      // crane on the next sync, once the building exists.
+      if (!view) {
+        continue;
+      }
+      targets.push({
+        path,
+        x: view.sprite.x,
+        y: view.sprite.y,
+        depth: view.sprite.depth,
+        height: view.sprite.height,
+      });
+    }
+    this.construction.sync(targets);
   }
 
   setWorld(snapshot: WorldSnapshot): void {
@@ -125,6 +163,9 @@ export class WorldScene extends Phaser.Scene {
     }
 
     this.syncBuildings(snapshot);
+    // A rescan can raise the building a crane was waiting on, or move the one
+    // it is standing beside.
+    this.syncConstruction();
 
     if (!this.hasFitCamera) {
       this.fitCamera();
