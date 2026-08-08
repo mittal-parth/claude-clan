@@ -7,8 +7,13 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   changedFiles,
   cityIdFor,
+  ensureMainWorktree,
   ensureWorktree,
   fileDiff,
+  issueCityIdFor,
+  parseGitHubRemote,
+  parseIssueListJson,
+  parsePullRequestApiJson,
   parsePullRequestListJson,
   pruneWorktrees,
   removeWorktree,
@@ -113,6 +118,19 @@ describe("changedFiles / fileDiff", () => {
 });
 
 describe("worktree lifecycle", () => {
+  it("creates a writable issue worktree from main", async () => {
+    const { repoPath } = await createFixtureRepo();
+    const cityId = issueCityIdFor({ number: 12 });
+
+    const path = await ensureMainWorktree(repoPath, cityId);
+    expect(path).toBe(worktreePath(repoPath, cityId));
+    expect(readFileSync(join(path, "kept.ts"), "utf8")).toContain("kept = 1");
+    expect(() => readFileSync(join(path, "added.ts"), "utf8")).toThrow();
+
+    writeFileSync(join(path, "issue-fix.ts"), "export const fixed = true;\n");
+    expect(readFileSync(join(path, "issue-fix.ts"), "utf8")).toContain("fixed");
+  });
+
   it("creates a worktree at the PR's head, checked out and scannable", async () => {
     const { repoPath, pr } = await createFixtureRepo();
 
@@ -191,6 +209,30 @@ describe("worktree lifecycle", () => {
 });
 
 describe("GhCliClient helpers", () => {
+  it("maps gh's issue JSON shape to IssueRef", () => {
+    expect(
+      parseIssueListJson(
+        JSON.stringify([
+          {
+            number: 12,
+            title: "Fix the shop",
+            body: "The issue shop needs a sign.",
+            author: { login: "octocat" },
+            url: "https://example.invalid/issues/12",
+          },
+        ]),
+      ),
+    ).toEqual([
+      {
+        number: 12,
+        title: "Fix the shop",
+        body: "The issue shop needs a sign.",
+        author: "octocat",
+        url: "https://example.invalid/issues/12",
+      },
+    ]);
+  });
+
   it("maps gh's JSON shape to PullRequestRef", () => {
     const refs = parsePullRequestListJson(
       JSON.stringify([
@@ -223,5 +265,62 @@ describe("GhCliClient helpers", () => {
     expect(reviewEventFlag("APPROVE")).toBe("--approve");
     expect(reviewEventFlag("REQUEST_CHANGES")).toBe("--request-changes");
     expect(reviewEventFlag("COMMENT")).toBe("--comment");
+  });
+
+  it("maps the REST shape, which names every field differently", () => {
+    const refs = parsePullRequestApiJson(
+      JSON.stringify([
+        {
+          number: 42,
+          title: "Fix the thing",
+          user: { login: "octocat" },
+          head: { sha: "abc123", ref: "fix-thing" },
+          base: { ref: "main" },
+          html_url: "https://example.invalid/pr/42",
+        },
+      ]),
+    );
+
+    expect(refs).toEqual([
+      {
+        number: 42,
+        title: "Fix the thing",
+        author: "octocat",
+        headSha: "abc123",
+        headRef: "fix-thing",
+        baseRef: "main",
+        url: "https://example.invalid/pr/42",
+      },
+    ]);
+  });
+
+  it("reports a deleted author as ghost, the way gh does", () => {
+    const [ref] = parsePullRequestApiJson(
+      JSON.stringify([
+        {
+          number: 1,
+          title: "Orphaned",
+          user: null,
+          head: { sha: "a", ref: "b" },
+          base: { ref: "main" },
+          html_url: "https://example.invalid/pr/1",
+        },
+      ]),
+    );
+
+    expect(ref?.author).toBe("ghost");
+  });
+
+  it("reads owner/repo from either remote transport", () => {
+    expect(parseGitHubRemote("https://github.com/mittal-parth/claude-clan.git"))
+      .toBe("mittal-parth/claude-clan");
+    expect(parseGitHubRemote("git@github.com:mittal-parth/claude-clan.git"))
+      .toBe("mittal-parth/claude-clan");
+    expect(parseGitHubRemote("https://github.com/mittal-parth/claude-clan\n"))
+      .toBe("mittal-parth/claude-clan");
+  });
+
+  it("declines to guess an API host for a non-GitHub remote", () => {
+    expect(parseGitHubRemote("https://gitlab.com/owner/repo.git")).toBeUndefined();
   });
 });

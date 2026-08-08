@@ -53,6 +53,9 @@ const KERB_HALF = 0.4;
 /** [u, v, height] — u/v in tile units from the tile centre, height in pixels up. */
 type Point3 = readonly [number, number, number];
 
+/** A point on the ground plane, in the same tile units as Point3's u/v. */
+type Corner = readonly [number, number];
+
 function shade(color: number, amount: number): number {
   const value = Phaser.Display.Color.IntegerToColor(color);
   return amount >= 0 ? value.lighten(amount).color : value.darken(-amount).color;
@@ -165,8 +168,27 @@ export const SCAFFOLD_KEY = "fx:scaffold";
 /** Height of the baked scaffold, which is scaled to the building it wraps. */
 export const SCAFFOLD_HEIGHT = 120;
 
+/**
+ * Heavier steel scaffolding, wrapped around every building a PR touches so a
+ * diff reads as a site under construction rather than only as a tint.
+ */
+export const DIFF_SCAFFOLD_KEY = "fx:diff-scaffold";
+export const DIFF_SCAFFOLD_HEIGHT = 140;
+/** Wider than a tile: the cage stands clear of the walls it wraps. */
+export const DIFF_SCAFFOLD_WIDTH = TILE_WIDTH + 8;
+
 /** The harbor marker for a PR city, moored offshore of the main island. */
 export const SHIP_KEY = "fx:ship";
+/** A clickable marketplace building where the mayor can pick an issue to fix. */
+export const ISSUE_SHOP_KEY = "fx:issue-shop";
+/** Half-footprint of the issue shop, in tiles -- it spans a 2x2 block so it reads as a landmark beside the harbour rather than another house. */
+const ISSUE_SHOP_HALF = 1;
+/**
+ * Screen-space offset from the issue shop's footprint centre (u=v=0) down to
+ * its south, nearest-viewer vertex. Double TILE_ANCHOR_Y because the
+ * footprint spans two tiles in each direction instead of one.
+ */
+export const ISSUE_SHOP_ANCHOR_Y = ISSUE_SHOP_HALF * TILE_HEIGHT;
 
 const GRASS_VARIANTS = TERRAIN_COLORS.grass.length;
 const PARK_VARIANTS = 2;
@@ -226,11 +248,13 @@ export function bakeTerrainTextures(scene: Phaser.Scene): void {
   bakeSparkle(baker);
   CAR_KEYS.forEach((key, index) => bakeCar(baker, key, index));
   bakeShip(baker);
+  bakeIssueShop(baker);
 
   bakeCrane(baker);
   bakeHook(baker);
   bakeCable(baker);
   bakeScaffold(baker);
+  bakeDiffScaffold(baker);
 
   baker.destroy();
 }
@@ -704,6 +728,232 @@ function bakeShip(baker: Baker): void {
   baker.finish(SHIP_KEY, TILE_WIDTH, SHIP_HEIGHT);
 }
 
+/**
+ * The issue marketplace, a 2x2-tile landmark drawn with the same lit/shaded
+ * wall + roof technique as ordinary buildings (see drawBox), just scaled to
+ * a bigger footprint and topped with a GitHub mark instead of a language
+ * glyph. It isn't part of the archetype/palette pipeline -- like the ship,
+ * it's a one-off prop -- so its wall/window drawing is written out here
+ * rather than shared with bakeBuilding, which hardcodes a single-tile origin.
+ */
+function bakeIssueShop(baker: Baker): void {
+  const half = ISSUE_SHOP_HALF;
+  const width = TILE_WIDTH * 2;
+  const originX = width / 2;
+
+  const wall = 0x6e4a94;
+  const wallShadow = shade(wall, -26);
+  const roof = 0x2f2047;
+  const roofShadow = shade(roof, -18);
+  const roofLight = shade(roof, 22);
+  const trim = 0xffd166;
+  const windowGlow = 0xf3e6ff;
+  const windowShadow = shade(windowGlow, -30);
+
+  const body = 150;
+  const crown = 26;
+  const plinthTop = body + crown;
+  const badgeZ = plinthTop + 8;
+  const height = 260;
+  const originY = height - ISSUE_SHOP_ANCHOR_Y;
+
+  // Ground contact shadow, inset from the walls -- a footprint this large
+  // needs no overhang to read as grounded.
+  fillFace(
+    baker,
+    TERRAIN_COLORS.shadow,
+    0.22,
+    [
+      [-0.87, -0.87, 0],
+      [0.97, -0.87, 0],
+      [0.97, 0.97, 0],
+      [-0.87, 0.97, 0],
+    ],
+    originX,
+    originY,
+  );
+
+  // Lit wall (screen-left, grid +v) and shaded wall (screen-right, grid +u).
+  fillFace(
+    baker,
+    wall,
+    1,
+    [
+      [-half, half, body],
+      [half, half, body],
+      [half, half, 0],
+      [-half, half, 0],
+    ],
+    originX,
+    originY,
+  );
+  fillFace(
+    baker,
+    wallShadow,
+    1,
+    [
+      [half, half, body],
+      [half, -half, body],
+      [half, -half, 0],
+      [half, half, 0],
+    ],
+    originX,
+    originY,
+  );
+
+  // A wide glass frontage across both visible walls.
+  const rows = 4;
+  const columns = 7;
+  const rowStep = body / (rows + 1);
+  const columnStep = (half * 2 * 0.86) / (columns + 1);
+  const start = -half * 0.86;
+  const size = Math.min(rowStep * 0.5, 9);
+  for (let row = 1; row <= rows; row += 1) {
+    const z = rowStep * row;
+    for (let column = 1; column <= columns; column += 1) {
+      const offset = start + columnStep * column;
+      fillFace(
+        baker,
+        windowGlow,
+        0.92,
+        [
+          [offset - 0.06, half, z + size / 2],
+          [offset + 0.06, half, z + size / 2],
+          [offset + 0.06, half, z - size / 2],
+          [offset - 0.06, half, z - size / 2],
+        ],
+        originX,
+        originY,
+      );
+      fillFace(
+        baker,
+        windowShadow,
+        0.92,
+        [
+          [half, offset - 0.06, z + size / 2],
+          [half, offset + 0.06, z + size / 2],
+          [half, offset + 0.06, z - size / 2],
+          [half, offset - 0.06, z - size / 2],
+        ],
+        originX,
+        originY,
+      );
+    }
+  }
+
+  // Gold ground-floor rail, echoing the ticket-shop signage of the old sign.
+  fillFace(
+    baker,
+    trim,
+    1,
+    [
+      [-half, half, 18],
+      [half, half, 18],
+      [half, half, 6],
+      [-half, half, 6],
+    ],
+    originX,
+    originY,
+  );
+  fillFace(
+    baker,
+    shade(trim, -22),
+    1,
+    [
+      [half, half, 18],
+      [half, -half, 18],
+      [half, -half, 6],
+      [half, half, 6],
+    ],
+    originX,
+    originY,
+  );
+
+  // Flat parapet roof.
+  fillFace(baker, roof, 1, diamond(half, body), originX, originY);
+  strokeFace(baker, roofShadow, 0.9, 1, diamond(half, body), originX, originY);
+  fillFace(baker, roofLight, 0.22, diamond(half * 0.7, body + 1), originX, originY);
+
+  // A short plinth lifts the GitHub mark clear of the roofline.
+  fillFace(
+    baker,
+    roofLight,
+    1,
+    [
+      [-0.22, 0.22, plinthTop],
+      [0.22, 0.22, plinthTop],
+      [0.22, 0.22, body],
+      [-0.22, 0.22, body],
+    ],
+    originX,
+    originY,
+  );
+  fillFace(
+    baker,
+    roofShadow,
+    1,
+    [
+      [0.22, 0.22, plinthTop],
+      [0.22, -0.22, plinthTop],
+      [0.22, -0.22, body],
+      [0.22, 0.22, body],
+    ],
+    originX,
+    originY,
+  );
+  fillFace(baker, roof, 1, diamond(0.22, plinthTop), originX, originY);
+
+  drawGithubBadge(baker, originX, originY, badgeZ);
+
+  baker.finish(ISSUE_SHOP_KEY, width, height);
+}
+
+/**
+ * GitHub's mark, stamped on a plaque above the roofline the same way
+ * drawLanguageBadge stamps a language glyph -- flat pixel art in screen
+ * space so it stays crisp and legible at the isometric skew.
+ */
+const GITHUB_MARK: readonly string[] = [
+  "..1...1..",
+  ".11.1.11.",
+  "111111111",
+  "111111111",
+  "11.111.11",
+  "111111111",
+  ".1111111.",
+  "..11111..",
+];
+
+function drawGithubBadge(
+  baker: Baker,
+  originX: number,
+  originY: number,
+  badgeZ: number,
+): void {
+  fillFace(baker, 0x0d1117, 1, diamond(0.42, badgeZ), originX, originY);
+  fillFace(baker, 0xffffff, 1, diamond(0.36, badgeZ + 1), originX, originY);
+
+  const rows = GITHUB_MARK.length;
+  const columns = Math.max(1, ...GITHUB_MARK.map((row) => row.length));
+  const pixelSize = 3;
+  const center = baker.at([0, 0, badgeZ + 5], originX, originY);
+  baker.graphics.fillStyle(0x0d1117, 1);
+  for (let row = 0; row < rows; row += 1) {
+    const glyphRow = GITHUB_MARK[row] ?? "";
+    for (let column = 0; column < columns; column += 1) {
+      if (glyphRow[column] !== "1") {
+        continue;
+      }
+      baker.graphics.fillRect(
+        Math.round(center.x - (columns * pixelSize) / 2 + column * pixelSize),
+        Math.round(center.y - (rows * pixelSize) / 2 + row * pixelSize),
+        pixelSize,
+        pixelSize,
+      );
+    }
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Construction site
 // ---------------------------------------------------------------------------
@@ -895,6 +1145,121 @@ function bakeScaffold(baker: Baker): void {
   }
 
   baker.finish(SCAFFOLD_KEY, TILE_WIDTH, SCAFFOLD_HEIGHT);
+}
+
+/**
+ * The diff scaffold: the tube-and-clamp cage that goes up around a building
+ * under construction. Standards on the plot corners and at the middle of each
+ * bay, a ledger and toe board at every lift, cross-bracing between lifts and
+ * a sheet of netting behind it all.
+ *
+ * Only the two faces that point at the camera are drawn -- the back two are
+ * behind the building and would only show through it as noise.
+ *
+ * Baked in near-white steel so the scene can tint one texture per change kind;
+ * the tint multiplies, so anything already coloured here would drag the result
+ * off-hue.
+ */
+function bakeDiffScaffold(baker: Baker): void {
+  const graphics = baker.graphics;
+  const originY = DIFF_SCAFFOLD_HEIGHT - TILE_ANCHOR_Y;
+  const steel = 0xdfe7ee;
+  const shade = 0x9fadbb;
+  const lifts = 4;
+  /** Standards per face: corners plus one in the middle. */
+  const bays = 2;
+  /** Leaves room for the standards to stand proud of the top lift. */
+  const top = DIFF_SCAFFOLD_HEIGHT - TILE_ANCHOR_Y - 10;
+  const overshoot = 6;
+
+  // Half a tile out from the centre, so the cage clears the walls it wraps.
+  const half = 0.5;
+  const east: Corner = [half, -half];
+  const south: Corner = [half, half];
+  const west: Corner = [-half, half];
+  const faces: Array<[Corner, Corner]> = [
+    [west, south],
+    [south, east],
+  ];
+
+  const at = (corner: Corner, height: number): Phaser.Math.Vector2 =>
+    baker.at(
+      [corner[0], corner[1], height],
+      DIFF_SCAFFOLD_WIDTH / 2,
+      originY,
+    );
+  const along = (a: Corner, b: Corner, t: number): Corner => [
+    a[0] + (b[0] - a[0]) * t,
+    a[1] + (b[1] - a[1]) * t,
+  ];
+  const liftHeight = (lift: number): number => (lift / lifts) * top;
+
+  // Netting behind the frame.
+  graphics.fillStyle(shade, 0.14);
+  for (const [a, b] of faces) {
+    graphics.fillPoints(
+      [at(a, 0), at(b, 0), at(b, top), at(a, top)],
+      true,
+    );
+  }
+
+  // Cross-bracing, one diagonal per bay per lift, alternating direction the
+  // way real bracing zig-zags up a face.
+  graphics.lineStyle(1, steel, 0.45);
+  for (const [a, b] of faces) {
+    for (let lift = 0; lift < lifts; lift += 1) {
+      for (let bay = 0; bay < bays; bay += 1) {
+        const left = along(a, b, bay / bays);
+        const right = along(a, b, (bay + 1) / bays);
+        const rising = (lift + bay) % 2 === 0;
+        const foot = at(rising ? left : right, liftHeight(lift));
+        const head = at(rising ? right : left, liftHeight(lift + 1));
+        graphics.lineBetween(foot.x, foot.y, head.x, head.y);
+      }
+    }
+  }
+
+  // Ledgers, each with a toe board hanging under it.
+  for (const [a, b] of faces) {
+    for (let lift = 0; lift <= lifts; lift += 1) {
+      const height = liftHeight(lift);
+      const from = at(a, height);
+      const to = at(b, height);
+      graphics.fillStyle(shade, 0.5);
+      graphics.fillPoints(
+        [
+          from,
+          to,
+          new Phaser.Math.Vector2(to.x, to.y + 3),
+          new Phaser.Math.Vector2(from.x, from.y + 3),
+        ],
+        true,
+      );
+      graphics.lineStyle(2, steel, 0.9);
+      graphics.lineBetween(from.x, from.y, to.x, to.y);
+    }
+  }
+
+  // Standards last, so they read in front of everything they carry.
+  for (const [a, b] of faces) {
+    for (let post = 0; post <= bays; post += 1) {
+      const corner = along(a, b, post / bays);
+      const width = post === 0 || post === bays ? 3 : 2;
+      const foot = at(corner, 0);
+      const head = at(corner, top + overshoot);
+      graphics.fillStyle(shade, 1);
+      graphics.fillRect(foot.x - width / 2, head.y, width, foot.y - head.y);
+      graphics.fillStyle(steel, 1);
+      graphics.fillRect(
+        foot.x - width / 2,
+        head.y,
+        Math.max(1, width - 1),
+        foot.y - head.y,
+      );
+    }
+  }
+
+  baker.finish(DIFF_SCAFFOLD_KEY, DIFF_SCAFFOLD_WIDTH, DIFF_SCAFFOLD_HEIGHT);
 }
 
 // ---------------------------------------------------------------------------

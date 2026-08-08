@@ -6,13 +6,16 @@ import {
   type AgentEvent,
 } from "@sudo-city/agent";
 import {
-  GhCliClient,
+  GitHubApiClient,
   changedFiles,
   cityIdFor,
+  ensureMainWorktree,
   ensureWorktree,
   fileDiff,
+  issueCityIdFor,
   pruneWorktrees,
   type GitHubClient,
+  type IssueRef,
   type PullRequestRef,
 } from "@sudo-city/cities";
 import websocket from "@fastify/websocket";
@@ -23,6 +26,7 @@ import {
   type CityId,
   type CitySummary,
   type GameEvent,
+  type Issue,
   type PullRequestOverlay,
   type ServerMessage,
   type WorldSnapshot,
@@ -123,6 +127,8 @@ class CityRegistry {
   private readonly cities = new Map<CityId, City>();
   /** Every open PR known from the last gh pr list, whether or not it's been travelled to yet. */
   private readonly pullRequests = new Map<CityId, PullRequestRef>();
+  /** Every open GitHub issue known from the last gh issue list. */
+  private readonly issues = new Map<CityId, IssueRef>();
   /** In-flight ensureCity builds, so summaries() can report "building" and a second travel command reuses the same build. */
   private readonly pendingBuilds = new Map<CityId, Promise<City>>();
 
@@ -151,6 +157,21 @@ class CityRegistry {
 
   pullRequestFor(id: CityId): PullRequestRef | undefined {
     return this.pullRequests.get(id);
+  }
+
+  setIssues(issues: readonly IssueRef[]): void {
+    this.issues.clear();
+    for (const issue of issues) {
+      this.issues.set(issueCityIdFor(issue) as CityId, issue);
+    }
+  }
+
+  issueFor(id: CityId): IssueRef | undefined {
+    return this.issues.get(id);
+  }
+
+  listIssues(): Issue[] {
+    return [...this.issues.values()].map((issue) => ({ ...issue }));
   }
 
   knownPullRequestIds(): CityId[] {
@@ -193,6 +214,25 @@ class CityRegistry {
         number: pr.number,
         author: pr.author,
         url: pr.url,
+        status: this.cities.has(id)
+          ? "ready"
+          : this.pendingBuilds.has(id)
+            ? "building"
+            : "idle",
+      });
+    }
+    for (const [id, issue] of this.issues) {
+      if (!this.cities.has(id) && !this.pendingBuilds.has(id)) {
+        continue;
+      }
+      entries.push({
+        id,
+        kind: "issue",
+        title: `#${issue.number} ${issue.title}`,
+        ref: "main",
+        number: issue.number,
+        author: issue.author,
+        url: issue.url,
         status: this.cities.has(id)
           ? "ready"
           : this.pendingBuilds.has(id)
@@ -321,6 +361,18 @@ function broadcastCities(): void {
   }
 }
 
+function broadcastIssues(): void {
+  const message = JSON.stringify({
+    kind: "issues",
+    issues: registry.listIssues(),
+  } satisfies ServerMessage);
+  for (const client of clients.keys()) {
+    if (client.readyState === WebSocket.OPEN) {
+      client.send(message);
+    }
+  }
+}
+
 function emitAgentEvent(cityId: CityId, event: AgentEvent): void {
   const city = registry.get(cityId);
   if (!city) {
@@ -405,7 +457,7 @@ async function computeOverlay(
   };
 }
 
-const githubClient: GitHubClient = new GhCliClient();
+const githubClient: GitHubClient = new GitHubApiClient();
 
 /**
  * gh's absence, an unauthenticated session, or no configured remote must
@@ -414,17 +466,25 @@ const githubClient: GitHubClient = new GhCliClient();
  */
 async function refreshRoster(): Promise<void> {
   let pullRequests: PullRequestRef[] = [];
+  let issues: IssueRef[] = [];
   try {
-    pullRequests = await githubClient.listOpenPullRequests(targetRepo);
+    [pullRequests, issues] = await Promise.all([
+      githubClient.listOpenPullRequests(targetRepo),
+      githubClient.listOpenIssues(targetRepo),
+    ]);
   } catch (error) {
     app.log.warn(
       { error },
-      "Failed to list open pull requests; only the main city is available",
+      "Failed to list GitHub work; only the main city is available",
     );
   }
 
-  const keep = new Set(pullRequests.map((pr) => cityIdFor(pr) as CityId));
+  const keep = new Set<CityId>([
+    ...pullRequests.map((pr) => cityIdFor(pr) as CityId),
+    ...issues.map((issue) => issueCityIdFor(issue) as CityId),
+  ]);
   registry.setPullRequests(pullRequests);
+  registry.setIssues(issues);
 
   for (const city of registry.list()) {
     if (city.id !== "main" && !keep.has(city.id)) {
@@ -438,6 +498,7 @@ async function refreshRoster(): Promise<void> {
   });
 
   broadcastCities();
+  broadcastIssues();
 }
 
 /**
@@ -502,6 +563,30 @@ async function buildPrCity(cityId: CityId, pr: PullRequestRef): Promise<City> {
   };
 }
 
+async function buildIssueCity(cityId: CityId, issue: IssueRef): Promise<City> {
+  const worktree = await ensureMainWorktree(targetRepo, cityId);
+  const snapshot = await generateWorld(cityId, worktree);
+  const agent = new AgentSessionManager({
+    cwd: worktree,
+    emit: (event) => emitAgentEvent(cityId, event),
+    maxBudgetUsd: remainingBudget(),
+    systemPromptAppend: [
+      `You are fixing GitHub issue #${issue.number}, "${issue.title}".`,
+      "This city is a writable detached worktree based on main. Implement and verify the fix here; do not change the primary checkout.",
+      issue.body ? `Issue details:\n${issue.body}` : "No issue description was provided.",
+    ].join("\n\n"),
+  });
+  return {
+    id: cityId,
+    cwd: worktree,
+    agent,
+    sessionId: `local-${randomUUID()}`,
+    sequence: 0,
+    snapshot,
+    spentUsd: 0,
+  };
+}
+
 /**
  * Returns an existing city, or builds one lazily if its PR is known but not
  * yet materialised. Broadcasts the roster around the build so clients see
@@ -513,11 +598,14 @@ async function ensureCity(cityId: CityId): Promise<City | undefined> {
     return existing;
   }
   const pr = registry.pullRequestFor(cityId);
-  if (!pr) {
+  const issue = registry.issueFor(cityId);
+  if (!pr && !issue) {
     return undefined;
   }
 
-  const building = registry.ensureBuild(cityId, () => buildPrCity(cityId, pr));
+  const building = registry.ensureBuild(cityId, () =>
+    pr ? buildPrCity(cityId, pr) : buildIssueCity(cityId, issue!),
+  );
   broadcastCities();
   try {
     const city = await building;
@@ -563,6 +651,7 @@ app.get("/ws", { websocket: true }, (socket) => {
 
   clients.set(socket, { cityId: "main" });
   send(socket, { kind: "cities", cities: registry.summaries() });
+  send(socket, { kind: "issues", issues: registry.listIssues() });
   sendWorld(socket, mainCity);
   socket.once("close", () => clients.delete(socket));
 

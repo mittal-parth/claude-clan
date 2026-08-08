@@ -5,6 +5,7 @@ import {
   type CitySummary,
   type EffortLevel,
   type GameEvent,
+  type Issue,
   type MayorCommand,
   type PermissionMode,
   type PullRequestOverlay,
@@ -47,6 +48,7 @@ import {
   type CanvasDragPreview,
   type CanvasFileChange,
   type CanvasPointerPosition,
+  type CanvasTravelRequest,
   type GameCanvasHandle,
 } from "./components/GameCanvas";
 import type { ShipHoverInfo } from "./game/WorldScene";
@@ -77,6 +79,15 @@ const RESCAN_DEBOUNCE_MS = 1_200;
 const EVENTS_STORAGE_PREFIX = "sudo-city:events:";
 /** The full quest log for a city; generous since each city keeps its own. */
 const EVENTS_PER_CITY_CAP = 200;
+
+function promptForIssue(issue: Issue): string {
+  return [
+    `Fix GitHub issue #${issue.number}: ${issue.title}`,
+    issue.body ? `Issue details:\n${issue.body}` : "",
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+}
 
 /** Basename of a repo path → title case words (claude-clan → Claude Clan). */
 function titleFromRepoPath(repoPath: string): string {
@@ -143,8 +154,6 @@ function colorWithAlpha(color: number, alpha: number): string {
     .toString(16)
     .padStart(2, "0")}`;
 }
-
-
 
 function loadStoredEvents(cityId: string): GameEvent[] {
   try {
@@ -674,6 +683,7 @@ export default function App() {
   const [connection, setConnection] =
     useState<ConnectionState>("connecting");
   const [cities, setCities] = useState<CitySummary[]>([]);
+  const [issues, setIssues] = useState<Issue[]>([]);
   const [activeCityId, setActiveCityId] = useState("main");
   const [eventsByCity, setEventsByCity] = useState<
     Record<string, GameEvent[]>
@@ -710,6 +720,10 @@ export default function App() {
   const [shipHover, setShipHover] = useState<ShipHoverInfo>();
   const [shipTravelTargetId, setShipTravelTargetId] = useState<string>();
   const [shipTransitioning, setShipTransitioning] = useState(false);
+  const [issueShopOpen, setIssueShopOpen] = useState(false);
+  const [issueTravelRequest, setIssueTravelRequest] =
+    useState<CanvasTravelRequest>();
+  const [issueBeingFixed, setIssueBeingFixed] = useState<Issue>();
 
   const events = eventsByCity[activeCityId] ?? [];
   const world = worldByCity[activeCityId];
@@ -830,6 +844,11 @@ export default function App() {
 
       if (decoded.data.kind === "cities") {
         setCities(decoded.data.cities);
+        return;
+      }
+
+      if (decoded.data.kind === "issues") {
+        setIssues(decoded.data.issues);
         return;
       }
 
@@ -991,6 +1010,21 @@ export default function App() {
   function completeShipTravel(cityId: string): void {
     setActiveCityId(cityId);
     setShipTravelTargetId(undefined);
+    if (issueBeingFixed && cityId === `issue-${issueBeingFixed.number}`) {
+      // Deliberately do not send this prompt. It is a ready-to-review draft
+      // in Mayor's order, exactly as if the mayor had typed it themselves.
+      setPrompt(promptForIssue(issueBeingFixed));
+      setIssueBeingFixed(undefined);
+    }
+  }
+
+  function takeIssueToFix(issue: Issue): void {
+    setIssueShopOpen(false);
+    setIssueBeingFixed(issue);
+    setIssueTravelRequest({
+      id: `issue-${issue.number}-${Date.now()}`,
+      cityId: `issue-${issue.number}`,
+    });
   }
 
   function selectBuilding(building?: Building): void {
@@ -1092,15 +1126,73 @@ export default function App() {
         cities={cities}
         buildingPaths={buildingPaths}
         crewSprite={crewAvatarSrc}
+        issues={issues}
+        travelRequest={issueTravelRequest}
         onTravelRequest={requestShipTravel}
         onTravelComplete={completeShipTravel}
         onTravelTransitionChange={setShipTransitioning}
+        onIssueShopClick={() => {
+          setSelected(undefined);
+          setDiff(undefined);
+          setIssueShopOpen(true);
+        }}
         onShipHover={setShipHover}
         onSelectBuilding={selectBuilding}
         onBuildingDragStart={handleBuildingDragStart}
         onBuildingDragMove={handleBuildingDragMove}
         onBuildingDragEnd={handleBuildingDrop}
       />
+
+      {issueShopOpen ? (
+        <div className="absolute inset-x-4 bottom-4 top-4 z-20 flex flex-col border-4 border-foreground bg-card shadow-xl dark:border-ring">
+          <div className="flex items-center justify-between border-b-2 border-foreground px-3 py-2 dark:border-ring">
+            <div>
+              <p className="retro text-[10px] text-primary">Issue shop</p>
+              <h2 className="retro text-xs">Open GitHub issues</h2>
+            </div>
+            <button
+              type="button"
+              className="retro text-xs text-muted-foreground hover:text-foreground"
+              aria-label="Close issue shop"
+              onClick={() => setIssueShopOpen(false)}
+            >
+              ✕
+            </button>
+          </div>
+          <div className="min-h-0 flex-1 overflow-y-auto p-3">
+            {issues.length ? (
+              <div className="space-y-3">
+                {issues.map((issue) => (
+                  <article
+                    key={issue.number}
+                    className="border-2 border-border bg-background p-3 dark:border-ring"
+                  >
+                    <p className="retro text-[10px] text-primary">
+                      #{issue.number} · @{issue.author}
+                    </p>
+                    <h3 className="retro mt-1 text-xs">{issue.title}</h3>
+                    {issue.body ? (
+                      <p className="mt-2 whitespace-pre-wrap text-xs text-muted-foreground">
+                        {truncatePreview(issue.body, 280)}
+                      </p>
+                    ) : null}
+                    <HudButton
+                      className="mt-3"
+                      onClick={() => takeIssueToFix(issue)}
+                    >
+                      Take this issue to fix
+                    </HudButton>
+                  </article>
+                ))}
+              </div>
+            ) : (
+              <p className="retro text-xs text-muted-foreground">
+                No open GitHub issues found.
+              </p>
+            )}
+          </div>
+        </div>
+      ) : null}
 
       {shipHover ? (
         <div
@@ -1504,11 +1596,9 @@ export default function App() {
                 <button
                   type="button"
                   className="hud-icon-button"
-                  aria-label={
-                    sfxEnabled ? "Mute UI sounds" : "Unmute UI sounds"
-                  }
+                  aria-label={sfxEnabled ? "Mute sound" : "Unmute sound"}
                   aria-pressed={!sfxEnabled}
-                  title={sfxEnabled ? "Mute UI sounds" : "Unmute UI sounds"}
+                  title={sfxEnabled ? "Mute sound" : "Unmute sound"}
                   onClick={toggleSfx}
                 >
                   {sfxEnabled ? (
