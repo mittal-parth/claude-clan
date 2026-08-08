@@ -22,6 +22,8 @@ import {
 } from "./terrain";
 import {
   CRANE_HEIGHT,
+  DIFF_SCAFFOLD_HEIGHT,
+  DIFF_SCAFFOLD_KEY,
   HIGHLIGHT_KEY,
   RUBBLE_KEY,
   ADDED_MARKER_KEY,
@@ -43,6 +45,15 @@ import {
 const ADDED_TINT = 0xffcf94;
 const MODIFIED_TINT = 0x9fe7ff;
 const MODIFIED_GLOW_TINT = 0x66d9ef;
+
+/**
+ * Site red, on every diff scaffold whatever the change kind — the cage says
+ * "work in progress", and the building's own tint already says which kind.
+ */
+const SCAFFOLD_TINT = 0xe0453a;
+/** How much of a building the cage climbs, and the shortest cage worth drawing. */
+const SCAFFOLD_WRAP = 0.82;
+const MIN_SCAFFOLD_HEIGHT = 40;
 
 const projection = createIsoProjection(TILE_WIDTH, TILE_HEIGHT);
 
@@ -137,6 +148,8 @@ export class WorldScene extends Phaser.Scene {
   private addedMarkers = new Map<string, Phaser.GameObjects.Sprite>();
   /** Looping glow for modified buildings, keyed by path. */
   private modifiedGlows = new Map<string, Phaser.GameObjects.Sprite>();
+  /** Steel cage around every building the PR touches, keyed by path. */
+  private diffScaffolds = new Map<string, Phaser.GameObjects.Sprite>();
   private rubbleSprites: Phaser.GameObjects.Sprite[] = [];
 
   /** Ships link main to PR cities and provide every PR city a way home. */
@@ -286,6 +299,14 @@ export class WorldScene extends Phaser.Scene {
 
     const opened = targets.find((target) => !this.sitedPaths.has(target.path));
     this.sitedPaths = new Set(targets.map((target) => target.path));
+
+    // A crane arriving on a plot takes the diff scaffold's place; the overlay
+    // pass ran before this one, so it could not know. The scaffold goes back up
+    // on the next snapshot, once the site is struck.
+    for (const path of this.sitedPaths) {
+      this.diffScaffolds.get(path)?.destroy();
+      this.diffScaffolds.delete(path);
+    }
 
     this.construction.sync(targets);
 
@@ -546,6 +567,7 @@ export class WorldScene extends Phaser.Scene {
       glow.destroy();
     }
     this.modifiedGlows.clear();
+    this.clearDiffScaffolds();
     for (const rubble of this.rubbleSprites) {
       rubble.destroy();
     }
@@ -586,6 +608,10 @@ export class WorldScene extends Phaser.Scene {
         });
         this.modifiedGlows.set(view.building.path, glow);
       }
+
+      if (change) {
+        this.raiseDiffScaffold(view);
+      }
     }
 
     for (const rubble of rubbleMarkers(overlay)) {
@@ -597,6 +623,38 @@ export class WorldScene extends Phaser.Scene {
           .setDepth(projection.depth(rubble.plot.x, rubble.plot.y)),
       );
     }
+  }
+
+  /**
+   * Wraps one changed building in steel. Drawn in front of the building so the
+   * cage reads as standing around it, and skipped where a construction site is
+   * already standing — the crew's own scaffold is there, and two lattices on
+   * one plot just read as noise.
+   */
+  private raiseDiffScaffold(view: BuildingView): void {
+    if (this.sitedPaths.has(view.building.path)) {
+      return;
+    }
+
+    const wrapped = Math.max(
+      MIN_SCAFFOLD_HEIGHT,
+      view.sprite.height * SCAFFOLD_WRAP,
+    );
+    const scaffold = this.add
+      .sprite(view.sprite.x, view.sprite.y, DIFF_SCAFFOLD_KEY)
+      .setOrigin(0.5, 1)
+      .setDepth(view.sprite.depth + 1)
+      .setAlpha(0.85)
+      .setTint(SCAFFOLD_TINT)
+      .setScale(1, wrapped / DIFF_SCAFFOLD_HEIGHT);
+    this.diffScaffolds.set(view.building.path, scaffold);
+  }
+
+  private clearDiffScaffolds(): void {
+    for (const scaffold of this.diffScaffolds.values()) {
+      scaffold.destroy();
+    }
+    this.diffScaffolds.clear();
   }
 
   /**
@@ -643,6 +701,7 @@ export class WorldScene extends Phaser.Scene {
       glow.destroy();
     }
     this.modifiedGlows.clear();
+    this.clearDiffScaffolds();
     for (const rubble of this.rubbleSprites) {
       rubble.destroy();
     }
