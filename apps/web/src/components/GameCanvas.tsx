@@ -6,17 +6,20 @@ import { WorldScene, type FileChange } from "../game/WorldScene";
 export interface CanvasFileChange {
   /** Monotonic id so the same path changing twice still re-triggers. */
   id: string;
+  cityId: string;
   path: string;
   change: FileChange;
 }
 
 interface GameCanvasProps {
+  cityId: string;
   world?: WorldSnapshot;
   fileChange?: CanvasFileChange;
   onSelectBuilding?: (building?: Building) => void;
 }
 
 export function GameCanvas({
+  cityId,
   world,
   fileChange,
   onSelectBuilding,
@@ -79,13 +82,17 @@ export function GameCanvas({
 
   useEffect(() => {
     if (world) {
-      sceneRef.current?.setWorld(world);
+      sceneRef.current?.setWorld(world, cityId);
     }
-  }, [world]);
+  }, [world, cityId]);
 
   useEffect(() => {
     if (fileChange) {
-      sceneRef.current?.applyFileChange(fileChange.path, fileChange.change);
+      sceneRef.current?.applyFileChange(
+        fileChange.path,
+        fileChange.change,
+        fileChange.cityId,
+      );
     }
   }, [fileChange]);
 

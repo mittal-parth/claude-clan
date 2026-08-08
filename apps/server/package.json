@@ -12,6 +12,7 @@
   "dependencies": {
     "@fastify/websocket": "^11.3.0",
     "@sudo-city/agent": "workspace:*",
+    "@sudo-city/cities": "workspace:*",
     "@sudo-city/layout": "workspace:*",
     "@sudo-city/protocol": "workspace:*",
     "@sudo-city/world": "workspace:*",

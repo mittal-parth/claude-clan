@@ -39,6 +39,9 @@ importers:
       '@sudo-city/agent':
         specifier: workspace:*
         version: link:../../packages/agent
+      '@sudo-city/cities':
+        specifier: workspace:*
+        version: link:../../packages/cities
       '@sudo-city/layout':
         specifier: workspace:*
         version: link:../../packages/layout

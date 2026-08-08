@@ -2,6 +2,7 @@ import {
   GameEventSchema,
   ServerMessageSchema,
   type Building,
+  type CitySummary,
   type GameEvent,
   type MayorCommand,
   type WorldSnapshot,
@@ -51,11 +52,13 @@ const maxBudgetUsd = Number(import.meta.env.VITE_MAX_BUDGET_USD ?? 1);
  */
 const RESCAN_DEBOUNCE_MS = 1_200;
 
-const EVENTS_STORAGE_KEY = "sudo-city:events";
+const EVENTS_STORAGE_PREFIX = "sudo-city:events:";
+/** The full quest log for a city; generous since each city keeps its own. */
+const EVENTS_PER_CITY_CAP = 200;
 
-function loadStoredEvents(): GameEvent[] {
+function loadStoredEvents(cityId: string): GameEvent[] {
   try {
-    const raw = localStorage.getItem(EVENTS_STORAGE_KEY);
+    const raw = localStorage.getItem(EVENTS_STORAGE_PREFIX + cityId);
     if (!raw) return [];
     const parsed = JSON.parse(raw) as unknown[];
     return parsed.filter(
@@ -64,6 +67,10 @@ function loadStoredEvents(): GameEvent[] {
   } catch {
     return [];
   }
+}
+
+function cityLabel(city: CitySummary): string {
+  return city.kind === "main" ? "main" : city.title;
 }
 
 function statusLabel(status: ConnectionState): string {
@@ -408,12 +415,22 @@ export default function App() {
   const socketRef = useRef<WebSocket>(null);
   const [connection, setConnection] =
     useState<ConnectionState>("connecting");
-  const [events, setEvents] = useState<GameEvent[]>(loadStoredEvents);
+  const [cities, setCities] = useState<CitySummary[]>([]);
+  const [activeCityId, setActiveCityId] = useState("main");
+  const [eventsByCity, setEventsByCity] = useState<
+    Record<string, GameEvent[]>
+  >(() => ({ main: loadStoredEvents("main") }));
+  const [worldByCity, setWorldByCity] = useState<
+    Record<string, WorldSnapshot>
+  >({});
   const [prompt, setPrompt] = useState("");
   const [commandOpen, setCommandOpen] = useState(false);
-  const [world, setWorld] = useState<WorldSnapshot>();
   const [fileChange, setFileChange] = useState<CanvasFileChange>();
   const [selected, setSelected] = useState<Building>();
+
+  const events = eventsByCity[activeCityId] ?? [];
+  const world = worldByCity[activeCityId];
+  const activeCity = cities.find((city) => city.id === activeCityId);
   const pendingPermit = findPendingPermit(events);
   const usage = events
     .slice()
@@ -437,23 +454,38 @@ export default function App() {
   useEffect(() => {
     const socket = new WebSocket(websocketUrl);
     socketRef.current = socket;
-    let rescanTimer: ReturnType<typeof setTimeout> | undefined;
+    // Every city rescans on its own schedule -- an edit burst in one city
+    // must not delay or coalesce with another city's rescan.
+    const rescanTimers: Record<string, ReturnType<typeof setTimeout>> = {};
 
     // The agent edits in bursts; one rescan after the burst settles is enough,
     // and the scene diffs the result so standing buildings do not flicker.
-    const scheduleRescan = (): void => {
-      clearTimeout(rescanTimer);
-      rescanTimer = setTimeout(() => {
+    const scheduleRescan = (cityId: string): void => {
+      clearTimeout(rescanTimers[cityId]);
+      rescanTimers[cityId] = setTimeout(() => {
         if (socket.readyState === WebSocket.OPEN) {
           socket.send(
             JSON.stringify({
               type: "world.request",
-              cityId: "main",
+              cityId,
             } satisfies MayorCommand),
           );
         }
       }, RESCAN_DEBOUNCE_MS);
     };
+
+    function appendEvent(cityId: string, event: GameEvent): void {
+      setEventsByCity((current) => {
+        const bucket = current[cityId] ?? [];
+        return {
+          ...current,
+          [cityId]: [
+            ...bucket.slice(-(EVENTS_PER_CITY_CAP - 1)),
+            event,
+          ],
+        };
+      });
+    }
 
     socket.addEventListener("open", () => setConnection("online"));
     socket.addEventListener("close", () => setConnection("offline"));
@@ -462,37 +494,57 @@ export default function App() {
       const decoded = ServerMessageSchema.safeParse(
         JSON.parse(String(message.data)) as unknown,
       );
-      // City roster and diff messages arrive starting in a later step; for
-      // now this client only understands its own game events.
-      if (!decoded.success || decoded.data.kind !== "event") {
+      if (!decoded.success) {
+        return;
+      }
+
+      if (decoded.data.kind === "cities") {
+        setCities(decoded.data.cities);
+        return;
+      }
+
+      // Diff overlays and single-file patches arrive starting in a later
+      // step; this client doesn't request them yet.
+      if (decoded.data.kind !== "event") {
         return;
       }
 
       const event = decoded.data.event;
-      setEvents((current) => [...current.slice(-19), event]);
+      appendEvent(event.cityId, event);
       if (event.type === "world.ready") {
-        setWorld(event.snapshot);
+        setWorldByCity((current) => ({
+          ...current,
+          [event.cityId]: event.snapshot,
+        }));
       }
       if (event.type === "file.changed") {
         setFileChange({
           id: event.id,
+          cityId: event.cityId,
           path: event.path,
           change: event.change,
         });
-        scheduleRescan();
+        scheduleRescan(event.cityId);
       }
     });
 
     return () => {
-      clearTimeout(rescanTimer);
+      for (const timer of Object.values(rescanTimers)) {
+        clearTimeout(timer);
+      }
       socket.close();
       socketRef.current = null;
     };
   }, []);
 
   useEffect(() => {
-    localStorage.setItem(EVENTS_STORAGE_KEY, JSON.stringify(events));
-  }, [events]);
+    for (const [cityId, bucket] of Object.entries(eventsByCity)) {
+      localStorage.setItem(
+        EVENTS_STORAGE_PREFIX + cityId,
+        JSON.stringify(bucket),
+      );
+    }
+  }, [eventsByCity]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
@@ -511,13 +563,22 @@ export default function App() {
     }
   }
 
+  function travelTo(cityId: string): void {
+    setActiveCityId(cityId);
+    setSelected(undefined);
+    setEventsByCity((current) =>
+      cityId in current ? current : { ...current, [cityId]: loadStoredEvents(cityId) },
+    );
+    send({ type: "city.travel", cityId });
+  }
+
   function submitPrompt(event: FormEvent<HTMLFormElement>): void {
     event.preventDefault();
     const nextPrompt = prompt.trim();
     if (!nextPrompt) {
       return;
     }
-    send({ type: "session.prompt", cityId: "main", prompt: nextPrompt });
+    send({ type: "session.prompt", cityId: activeCityId, prompt: nextPrompt });
     setPrompt("");
   }
 
@@ -530,8 +591,10 @@ export default function App() {
           </span>
           <div className="min-w-0">
             <h1 className="retro truncate text-sm md:text-base">Sudo City</h1>
-            <p className="retro text-[10px] text-muted-foreground">
-              Local repository · mayor console
+            <p className="retro truncate text-[10px] text-muted-foreground">
+              {activeCity ? cityLabel(activeCity) : activeCityId} · mayor
+              console
+              {activeCity?.status === "building" ? " · constructing…" : ""}
             </p>
           </div>
         </div>
@@ -565,6 +628,7 @@ export default function App() {
           <div className="flex h-full min-h-0 flex-col">
             <section className="relative min-h-0 flex-1 overflow-hidden">
               <GameCanvas
+                cityId={activeCityId}
                 world={world}
                 fileChange={fileChange}
                 onSelectBuilding={setSelected}
@@ -646,7 +710,10 @@ export default function App() {
                     type="button"
                     variant="secondary"
                     onClick={() =>
-                      send({ type: "session.interrupt", cityId: "main" })
+                      send({
+                        type: "session.interrupt",
+                        cityId: activeCityId,
+                      })
                     }
                     disabled={connection !== "online"}
                   >
@@ -752,7 +819,7 @@ export default function App() {
           <CommandGroup heading="Mayor">
             <CommandItem
               onSelect={() => {
-                send({ type: "world.request", cityId: "main" });
+                send({ type: "world.request", cityId: activeCityId });
                 setCommandOpen(false);
               }}
             >
@@ -760,12 +827,37 @@ export default function App() {
             </CommandItem>
             <CommandItem
               onSelect={() => {
-                send({ type: "session.interrupt", cityId: "main" });
+                send({ type: "session.interrupt", cityId: activeCityId });
                 setCommandOpen(false);
               }}
             >
               Halt construction
             </CommandItem>
+            <CommandItem
+              onSelect={() => {
+                send({ type: "city.refresh" });
+                setCommandOpen(false);
+              }}
+            >
+              Refresh open pull requests
+            </CommandItem>
+          </CommandGroup>
+          <CommandGroup heading="Travel">
+            {cities.map((city) => (
+              <CommandItem
+                key={city.id}
+                disabled={city.id === activeCityId}
+                onSelect={() => {
+                  travelTo(city.id);
+                  setCommandOpen(false);
+                }}
+              >
+                {cityLabel(city)}
+                {city.id === activeCityId ? " (current)" : ""}
+                {city.status === "building" ? " · building…" : ""}
+                {city.status === "failed" ? " · failed" : ""}
+              </CommandItem>
+            ))}
           </CommandGroup>
         </CommandList>
       </CommandDialog>

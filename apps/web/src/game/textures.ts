@@ -166,8 +166,20 @@ export const TERRAIN_VARIANT_COUNTS: Record<TerrainKind, number> = {
 export const TERRAIN_ATLAS_KEY = "terrain-atlas";
 const ATLAS_COLUMNS = 8;
 
-/** Bakes every terrain tile, prop and effect sprite. Call once, in create(). */
+/**
+ * Bakes every terrain tile, prop and effect sprite. Call once, in create().
+ *
+ * Textures live on the Game's TextureManager, not the Scene, so they are
+ * shared across every scene in the game -- baking is genuinely a one-time
+ * cost. Without this guard, a second scene's create() would remove and
+ * regenerate the same texture keys out from under the first scene's still-
+ * live sprites, which reference their Texture by key.
+ */
 export function bakeTerrainTextures(scene: Phaser.Scene): void {
+  if (scene.textures.exists(TERRAIN_ATLAS_KEY)) {
+    return;
+  }
+
   const baker = createBaker(scene);
 
   bakeTerrainAtlas(scene, baker);

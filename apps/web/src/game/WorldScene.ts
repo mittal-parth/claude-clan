@@ -72,6 +72,8 @@ export class WorldScene extends Phaser.Scene {
   private hasFitCamera = false;
   /** Continuous zoom, accumulated across wheel events. */
   private zoomTarget = 1;
+  /** Which city's snapshot the scene currently holds, if any. */
+  private currentCityId?: string;
 
   constructor() {
     super("world");
@@ -107,11 +109,25 @@ export class WorldScene extends Phaser.Scene {
     this.selectionListener = listener;
   }
 
-  setWorld(snapshot: WorldSnapshot): void {
+  /**
+   * cityId identifies which city this snapshot belongs to. When it differs
+   * from the city the scene currently holds, every per-world sprite and flag
+   * is torn down first (resetWorld) rather than diffed against the outgoing
+   * city's buildings -- diffing two unrelated cities by path would treat
+   * every building as a coincidental match or a stale ghost.
+   */
+  setWorld(snapshot: WorldSnapshot, cityId: string): void {
     if (!this.scene.isActive()) {
-      this.events.once(Phaser.Scenes.Events.CREATE, () => this.setWorld(snapshot));
+      this.events.once(Phaser.Scenes.Events.CREATE, () =>
+        this.setWorld(snapshot, cityId),
+      );
       return;
     }
+
+    if (this.currentCityId !== undefined && this.currentCityId !== cityId) {
+      this.resetWorld();
+    }
+    this.currentCityId = cityId;
 
     const previous = this.snapshot;
     this.snapshot = snapshot;
@@ -126,6 +142,9 @@ export class WorldScene extends Phaser.Scene {
 
     this.syncBuildings(snapshot);
 
+    // hasFitCamera is reset to false by resetWorld() above, so this also
+    // refits the camera for every newly-arrived city, not just the first
+    // snapshot the scene ever sees.
     if (!this.hasFitCamera) {
       this.fitCamera();
       this.hasFitCamera = true;
@@ -133,10 +152,50 @@ export class WorldScene extends Phaser.Scene {
   }
 
   /**
+   * Tears down every sprite and flag that belongs to the outgoing city
+   * before a different city's snapshot lands. Destroys immediately rather
+   * than tweening demolition, so rapidly switching cities never leaves a
+   * ghost sprite from a still-in-flight demolish() tween. Clearing
+   * hasFitCamera here is what makes setWorld refit the camera and skip the
+   * "new construction" rise tween for the incoming city's first snapshot --
+   * both already gated on that one flag.
+   */
+  private resetWorld(): void {
+    for (const view of this.views.values()) {
+      this.tweens.killTweensOf(view.sprite);
+      this.ambient?.releaseSmoke(view.sprite);
+      view.sprite.destroy();
+    }
+    this.views.clear();
+
+    for (const sprite of this.groundSprites) {
+      sprite.destroy();
+    }
+    for (const sprite of this.propSprites) {
+      sprite.destroy();
+    }
+    this.groundSprites = [];
+    this.propSprites = [];
+
+    this.select(undefined);
+    this.snapshot = undefined;
+    this.terrain = undefined;
+    this.hasFitCamera = false;
+    this.dragOrigin = undefined;
+    this.pressOrigin = undefined;
+  }
+
+  /**
    * Immediate feedback for an agent edit. The authoritative rescan follows and
    * lands through setWorld; this only animates what is already standing.
+   * cityId is checked against the scene's current city so a file.changed
+   * event that arrives just after a travel -- for a city the scene has
+   * already left -- cannot animate the wrong city's building.
    */
-  applyFileChange(path: string, change: FileChange): void {
+  applyFileChange(path: string, change: FileChange, cityId: string): void {
+    if (this.currentCityId !== cityId) {
+      return;
+    }
     const view = this.views.get(path);
     if (!view) {
       return;
@@ -306,6 +365,7 @@ export class WorldScene extends Phaser.Scene {
 
   private demolish(view: BuildingView): void {
     this.tweens.killTweensOf(view.sprite);
+    this.ambient?.releaseSmoke(view.sprite);
     this.tweens.add({
       targets: view.sprite,
       scaleY: 0,

@@ -5,6 +5,14 @@ import {
   AgentSessionManager,
   type AgentEvent,
 } from "@sudo-city/agent";
+import {
+  GhCliClient,
+  cityIdFor,
+  ensureWorktree,
+  pruneWorktrees,
+  type GitHubClient,
+  type PullRequestRef,
+} from "@sudo-city/cities";
 import websocket from "@fastify/websocket";
 import { layoutWorld } from "@sudo-city/layout";
 import {
@@ -61,9 +69,17 @@ interface City {
 
 class CityRegistry {
   private readonly cities = new Map<CityId, City>();
+  /** Every open PR known from the last gh pr list, whether or not it's been travelled to yet. */
+  private readonly pullRequests = new Map<CityId, PullRequestRef>();
+  /** In-flight ensureCity builds, so summaries() can report "building" and a second travel command reuses the same build. */
+  private readonly pendingBuilds = new Map<CityId, Promise<City>>();
 
   add(city: City): void {
     this.cities.set(city.id, city);
+  }
+
+  remove(id: CityId): void {
+    this.cities.delete(id);
   }
 
   get(id: CityId): City | undefined {
@@ -74,24 +90,65 @@ class CityRegistry {
     return [...this.cities.values()];
   }
 
+  setPullRequests(prs: readonly PullRequestRef[]): void {
+    this.pullRequests.clear();
+    for (const pr of prs) {
+      this.pullRequests.set(cityIdFor(pr) as CityId, pr);
+    }
+  }
+
+  pullRequestFor(id: CityId): PullRequestRef | undefined {
+    return this.pullRequests.get(id);
+  }
+
+  knownPullRequestIds(): CityId[] {
+    return [...this.pullRequests.keys()];
+  }
+
+  isBuilding(id: CityId): boolean {
+    return this.pendingBuilds.has(id);
+  }
+
+  /** Builds a PR city at most once concurrently; a second travel while one is in flight reuses the same promise. */
+  async ensureBuild(id: CityId, build: () => Promise<City>): Promise<City> {
+    let pending = this.pendingBuilds.get(id);
+    if (!pending) {
+      pending = build().finally(() => this.pendingBuilds.delete(id));
+      this.pendingBuilds.set(id, pending);
+    }
+    const city = await pending;
+    this.cities.set(id, city);
+    return city;
+  }
+
   summaries(): CitySummary[] {
-    return this.list().map((city) =>
-      city.id === "main"
-        ? {
-            id: city.id,
-            kind: "main",
-            title: "main",
-            ref: "main",
-            status: "ready",
-          }
-        : {
-            id: city.id,
-            kind: "pull-request",
-            title: city.id,
-            ref: city.id,
-            status: "ready",
-          },
-    );
+    const entries: CitySummary[] = [];
+    if (this.cities.has("main")) {
+      entries.push({
+        id: "main",
+        kind: "main",
+        title: "main",
+        ref: "main",
+        status: "ready",
+      });
+    }
+    for (const [id, pr] of this.pullRequests) {
+      entries.push({
+        id,
+        kind: "pull-request",
+        title: `#${pr.number} ${pr.title}`,
+        ref: pr.headRef,
+        number: pr.number,
+        author: pr.author,
+        url: pr.url,
+        status: this.cities.has(id)
+          ? "ready"
+          : this.pendingBuilds.has(id)
+            ? "building"
+            : "idle",
+      });
+    }
+    return entries;
   }
 
   async disposeAll(): Promise<void> {
@@ -139,10 +196,28 @@ function fallbackWorld(city: CityId, repoPath: string): WorldSnapshot {
   };
 }
 
+/**
+ * A PR city must render the same island as main -- buildTerrain derives
+ * every street from district geometry, and squarify reweights every
+ * rectangle from LOC, so recomputing districts for a PR would silently
+ * reshuffle the city even though only a few files changed. Pinning to
+ * main's own size/districts, and seeding plots from main's (with the PR
+ * city's own already-persisted plots winning if it's been scanned before),
+ * keeps a PR city spatially comparable to main: only the occupied plots
+ * differ.
+ */
 async function generateWorld(city: CityId, cwd: string): Promise<WorldSnapshot> {
   try {
     const map = await scanRepository(cwd);
-    const layout = layoutWorld(map, { previousPlots: store.loadPlots(city) });
+    const main = city === "main" ? undefined : registry.get("main");
+    const layout = layoutWorld(map, {
+      width: main?.snapshot.size.width,
+      height: main?.snapshot.size.height,
+      districts: main?.snapshot.districts,
+      previousPlots: main
+        ? { ...store.loadPlots("main"), ...store.loadPlots(city) }
+        : store.loadPlots(city),
+    });
     store.savePlots(city, layout.plots);
     store.saveSnapshot(city, layout.snapshot);
     return layout.snapshot;
@@ -224,6 +299,94 @@ function sendWorld(socket: WebSocket, city: City): void {
     event: createEvent(city, { type: "world.ready", snapshot: city.snapshot }),
   });
 }
+
+const githubClient: GitHubClient = new GhCliClient();
+
+/**
+ * gh's absence, an unauthenticated session, or no configured remote must
+ * never fail the boot -- they degrade to a roster with only "main", the
+ * same fallback posture the repository scan itself already has.
+ */
+async function refreshRoster(): Promise<void> {
+  let pullRequests: PullRequestRef[] = [];
+  try {
+    pullRequests = await githubClient.listOpenPullRequests(targetRepo);
+  } catch (error) {
+    app.log.warn(
+      { error },
+      "Failed to list open pull requests; only the main city is available",
+    );
+  }
+
+  const keep = new Set(pullRequests.map((pr) => cityIdFor(pr) as CityId));
+  registry.setPullRequests(pullRequests);
+
+  for (const city of registry.list()) {
+    if (city.id !== "main" && !keep.has(city.id)) {
+      await city.agent.interrupt();
+      registry.remove(city.id);
+    }
+  }
+
+  await pruneWorktrees(targetRepo, keep).catch((error: unknown) => {
+    app.log.warn({ error }, "Failed to prune stale PR worktrees");
+  });
+
+  broadcastCities();
+}
+
+/**
+ * Builds a PR city's worktree, scan, and agent. Called lazily on first
+ * travel, never eagerly for every open PR -- startup cost stays flat
+ * regardless of how many PRs are open.
+ */
+async function buildPrCity(cityId: CityId, pr: PullRequestRef): Promise<City> {
+  const worktree = await ensureWorktree(targetRepo, pr);
+  const snapshot = await generateWorld(cityId, worktree);
+  const agent = new AgentSessionManager({
+    cwd: worktree,
+    emit: (event) => emitAgentEvent(cityId, event),
+    maxBudgetUsd: Number(process.env.SUDO_CITY_MAX_BUDGET_USD ?? 1),
+  });
+  return {
+    id: cityId,
+    cwd: worktree,
+    agent,
+    sessionId: `local-${randomUUID()}`,
+    sequence: 0,
+    snapshot,
+  };
+}
+
+/**
+ * Returns an existing city, or builds one lazily if its PR is known but not
+ * yet materialised. Broadcasts the roster around the build so clients see
+ * the "building" status flip to "ready" (or back to "idle" on failure).
+ */
+async function ensureCity(cityId: CityId): Promise<City | undefined> {
+  const existing = registry.get(cityId);
+  if (existing) {
+    return existing;
+  }
+  const pr = registry.pullRequestFor(cityId);
+  if (!pr) {
+    return undefined;
+  }
+
+  const building = registry.ensureBuild(cityId, () => buildPrCity(cityId, pr));
+  broadcastCities();
+  try {
+    const city = await building;
+    broadcastCities();
+    return city;
+  } catch (error) {
+    app.log.error({ error, cityId }, "Failed to build PR city");
+    broadcastCities();
+    return undefined;
+  }
+}
+
+await refreshRoster();
 
 /**
  * Rescans a city's repository and broadcasts the result to that city's
@@ -379,17 +542,46 @@ app.get("/ws", { websocket: true }, (socket) => {
         break;
       }
       case "city.travel": {
-        const city = requireCity(data.cityId);
-        if (!city) {
-          break;
-        }
-        clients.set(socket, { cityId: city.id });
-        sendWorld(socket, city);
+        const cityId = data.cityId;
+        // A PR city may not exist yet -- ensureCity builds it lazily on
+        // first travel and broadcasts "building" -> "ready"/failed status
+        // around the wait, which is why this can't reuse requireCity's
+        // synchronous lookup.
+        void ensureCity(cityId)
+          .then((city) => {
+            if (!city) {
+              send(socket, {
+                kind: "error",
+                code: "CITY_NOT_FOUND",
+                message: `No city "${cityId}" is available.`,
+              });
+              return;
+            }
+            clients.set(socket, { cityId: city.id });
+            sendWorld(socket, city);
+          })
+          .catch((error: unknown) => {
+            app.log.error({ error, cityId }, "Failed to travel to city");
+            send(socket, {
+              kind: "error",
+              code: "CITY_NOT_FOUND",
+              message:
+                error instanceof Error
+                  ? error.message
+                  : "Failed to build that city.",
+            });
+          });
         break;
       }
       case "city.refresh":
-        // gh pr list / worktree pruning land with packages/cities.
-        broadcastCities();
+        void refreshRoster().catch((error: unknown) => {
+          app.log.error({ error }, "Failed to refresh the city roster");
+          send(socket, {
+            kind: "error",
+            code: "CITY_NOT_FOUND",
+            message: "Failed to refresh open pull requests.",
+          });
+        });
         break;
       case "diff.request":
         send(socket, {
