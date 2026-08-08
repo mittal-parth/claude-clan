@@ -70,6 +70,11 @@ export interface QuestLogProps {
   className?: string;
   showEmptyState?: boolean;
   emptyStateMessage?: string;
+  /**
+   * `bare` drops the card chrome and the heading for hosts that already frame
+   * the log — the HUD's console window carries both in its title bar.
+   */
+  variant?: "card" | "bare";
 }
 
 const getStatusBadgeVariant = (status: QuestStatus) => {
@@ -140,7 +145,7 @@ function QuestItem({
   return (
     <button
       type="button"
-      className="w-full border-b-2 border-foreground px-3 py-2.5 text-left transition-colors hover:bg-muted/40 dark:border-ring"
+      className="w-full border-b border-border/60 px-2.5 py-2 text-left transition-colors last:border-b-0 hover:bg-muted/40"
       onClick={() => {
         playClick();
         onSelect(quest);
@@ -296,6 +301,7 @@ export function QuestLog({
   className,
   showEmptyState = true,
   emptyStateMessage = "No quests available.",
+  variant = "card",
 }: QuestLogProps) {
   const [selectedQuest, setSelectedQuest] = React.useState<Quest | null>(null);
   const activeQuests = quests.filter((quest) => quest.status === "active");
@@ -304,35 +310,46 @@ export function QuestLog({
     ...quests.filter((quest) => quest.status !== "active"),
   ];
 
+  const list =
+    quests.length === 0 && showEmptyState ? (
+      <EmptyState message={emptyStateMessage} />
+    ) : (
+      <ScrollArea className="h-full min-h-0 w-full flex-1">
+        <div className="w-full">
+          {sortedQuests.map((quest) => (
+            <QuestItem
+              key={quest.id}
+              quest={quest}
+              onSelect={setSelectedQuest}
+            />
+          ))}
+        </div>
+      </ScrollArea>
+    );
+
   return (
     <>
-      <Card className={cn("flex h-full min-h-0 w-full flex-col", className)}>
-        <CardHeader className="shrink-0 pb-2">
-          <CardTitle className="flex items-center gap-2 text-xs justify-between">
-            Quest Log
-            {activeQuests.length > 0 ? (
-              <Badge className="text-[8px]">{activeQuests.length} Active</Badge>
-            ) : null}
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="flex min-h-0 flex-1 flex-col p-0">
-          {quests.length === 0 && showEmptyState ? (
-            <EmptyState message={emptyStateMessage} />
-          ) : (
-            <ScrollArea className="h-full min-h-0 w-full flex-1">
-              <div className="w-full">
-                {sortedQuests.map((quest) => (
-                  <QuestItem
-                    key={quest.id}
-                    quest={quest}
-                    onSelect={setSelectedQuest}
-                  />
-                ))}
-              </div>
-            </ScrollArea>
-          )}
-        </CardContent>
-      </Card>
+      {variant === "bare" ? (
+        <div className={cn("flex h-full min-h-0 w-full flex-col", className)}>
+          {list}
+        </div>
+      ) : (
+        <Card className={cn("flex h-full min-h-0 w-full flex-col", className)}>
+          <CardHeader className="shrink-0 pb-2">
+            <CardTitle className="flex items-center gap-2 text-xs justify-between">
+              Quest Log
+              {activeQuests.length > 0 ? (
+                <Badge className="text-[8px]">
+                  {activeQuests.length} Active
+                </Badge>
+              ) : null}
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="flex min-h-0 flex-1 flex-col p-0">
+            {list}
+          </CardContent>
+        </Card>
+      )}
 
       <Dialog
         open={selectedQuest !== null}

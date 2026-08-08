@@ -11,18 +11,25 @@ import {
   type WorldSnapshot,
 } from "@sudo-city/protocol";
 import { FormEvent, useEffect, useRef, useState } from "react";
-import { Volume2, VolumeX } from "lucide-react";
+import { Command, ShieldAlert, Volume2, VolumeX, X } from "lucide-react";
 import { useAudio } from "@/components/audio-provider";
 import { Markdown } from "@/components/markdown";
 import { ConstructionTracker } from "@/lib/construction-tracker";
-import Dialogue from "@/components/ui/8bit/blocks/dialogue";
+import { cn } from "@/lib/utils";
+import HudWindow from "@/components/hud/HudWindow";
+import HudButton from "@/components/hud/HudButton";
+import HudMeter from "@/components/hud/HudMeter";
+import {
+  readHudState,
+  toggleHudPanel,
+  writeHudState,
+  type HudPanelId,
+} from "@/components/hud/hud-state";
 import QuestLog, {
   type Quest,
   type QuestStatus,
   type QuestTimelineStep,
 } from "@/components/ui/8bit/blocks/quest-log";
-import { Badge } from "@/components/ui/8bit/badge";
-import { Button } from "@/components/ui/8bit/button";
 import {
   CommandDialog,
   CommandEmpty,
@@ -31,15 +38,6 @@ import {
   CommandItem,
   CommandList,
 } from "@/components/ui/8bit/command";
-import HealthBar from "@/components/ui/8bit/health-bar";
-import { Input } from "@/components/ui/8bit/input";
-import { Kbd } from "@/components/ui/8bit/kbd";
-import ManaBar from "@/components/ui/8bit/mana-bar";
-import {
-  ResizableHandle,
-  ResizablePanel,
-  ResizablePanelGroup,
-} from "@/components/ui/8bit/resizable";
 import {
   colorToCss,
   paletteFor,
@@ -79,6 +77,29 @@ const RESCAN_DEBOUNCE_MS = 1_200;
 const EVENTS_STORAGE_PREFIX = "sudo-city:events:";
 /** The full quest log for a city; generous since each city keeps its own. */
 const EVENTS_PER_CITY_CAP = 200;
+
+/** Basename of a repo path → title case words (claude-clan → Claude Clan). */
+function titleFromRepoPath(repoPath: string): string {
+  const base =
+    repoPath.split(/[/\\]/).filter(Boolean).at(-1)?.replace(/[-_]+/g, " ").trim() ??
+    "";
+  if (!base) {
+    return "City";
+  }
+  return base.replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+/** Header brand: `{Repo Name} City`, without doubling a trailing City. */
+function cityNameFromRepo(repoPath: string | undefined): string {
+  if (!repoPath) {
+    return "City";
+  }
+  const titled = titleFromRepoPath(repoPath);
+  if (/\bcity$/i.test(titled)) {
+    return titled;
+  }
+  return `${titled} City`;
+}
 
 /**
  * How long a site stands after the work on it actually finishes.
@@ -543,7 +564,7 @@ export default function App() {
     effort: DEFAULT_EFFORT,
   });
   const [crewDialogOpen, setCrewDialogOpen] = useState(false);
-  const [cityScanOpen, setCityScanOpen] = useState(true);
+  const [hud, setHud] = useState(readHudState);
   const [fileChange, setFileChange] = useState<CanvasFileChange>();
   const [buildingPaths, setBuildingPaths] = useState<string[]>([]);
   const [selected, setSelected] = useState<Building>();
@@ -586,16 +607,36 @@ export default function App() {
       ? startedSession.effort
       : crewSelection.effort;
   const crewAvatarSrc = crewSpriteUrl(activeCrew.id, activeEffort);
-  const crewDialogueTitle = activeCrew.name;
-  const crewDialogueDescription = pendingPermit
+  const crewStatus = pendingPermit
     ? "Awaiting permit stamp"
     : `${effortLabel(activeEffort)} effort · ${activeCrew.title}`;
+  const quests = eventsToQuests(events);
+  const activeQuestCount = quests.filter(
+    (quest) => quest.status === "active",
+  ).length;
+  // No snapshot yet is a survey still in flight, not an empty city.
+  const surveying = !world && connection !== "offline";
   const showDragPreview = Boolean(
     draggingBuilding &&
       dragPreview?.src &&
       dragPosition &&
       pointIsInside(orderFormRef.current, dragPosition),
   );
+  // A PR city is checked out under .sudocity/worktrees/pr-<n>, so deriving its
+  // name from the repo path would brand the console "Pr 10 City". Only main is
+  // named after the repo; a PR city is named after its pull request.
+  const cityName =
+    activeCity && activeCity.kind === "pull-request"
+      ? cityLabel(activeCity)
+      : cityNameFromRepo(world?.repoPath);
+  const cityStatusLine =
+    activeCity?.status === "building"
+      ? "constructing…"
+      : activeCity && activeCity.kind === "pull-request"
+        ? activeCity.ref
+        : world?.repoPath
+          ? fileBasename(world.repoPath)
+          : "linking";
 
   useEffect(() => {
     const socket = new WebSocket(websocketUrl);
@@ -733,6 +774,14 @@ export default function App() {
     return () => document.removeEventListener("keydown", onKeyDown);
   }, []);
 
+  useEffect(() => {
+    writeHudState(hud);
+  }, [hud]);
+
+  function toggleHud(id: HudPanelId): void {
+    setHud((current) => toggleHudPanel(current, id));
+  }
+
   function send(command: MayorCommand): void {
     if (socketRef.current?.readyState === WebSocket.OPEN) {
       socketRef.current.send(JSON.stringify(command));
@@ -830,9 +879,8 @@ export default function App() {
     setContextPaths([]);
     setOrderPermissionMode("default");
   }
-
   return (
-    <div className="flex h-dvh min-h-[36rem] flex-col bg-background">
+    <div className="hud-root">
       {showDragPreview && dragPreview && dragPosition ? (
         <img
           src={dragPreview.src}
@@ -851,290 +899,275 @@ export default function App() {
           }}
         />
       ) : null}
-      <header className="flex items-center justify-between border-b-4 border-foreground px-4 py-3 dark:border-ring">
-        <div className="flex min-w-0 items-center gap-3">
-          <span className="retro flex size-9 shrink-0 items-center justify-center border-2 border-foreground bg-primary text-xs text-primary-foreground dark:border-ring">
-            SC
-          </span>
-          <div className="min-w-0">
-            <h1 className="retro truncate text-sm md:text-base">Sudo City</h1>
-            <p className="retro truncate text-[10px] text-muted-foreground">
-              {activeCity ? cityLabel(activeCity) : activeCityId} · mayor
-              console
-              {activeCity?.status === "building" ? " · constructing…" : ""}
-            </p>
-          </div>
-        </div>
-        <div className="flex items-center gap-2">
-          <Button
-            type="button"
-            size="icon"
-            variant="ghost"
-            sound={false}
-            aria-label={sfxEnabled ? "Mute UI sounds" : "Unmute UI sounds"}
-            aria-pressed={!sfxEnabled}
-            onClick={toggleSfx}
-          >
-            {sfxEnabled ? (
-              <Volume2 className="size-4" aria-hidden="true" />
-            ) : (
-              <VolumeX className="size-4" aria-hidden="true" />
-            )}
-          </Button>
-          <Badge
-            variant={connection === "online" ? "default" : "outline"}
-            className="retro text-[10px]"
-          >
-            {statusLabel(connection)}
-          </Badge>
-        </div>
-      </header>
+      <GameCanvas
+        ref={canvasRef}
+        cityId={activeCityId}
+        world={world}
+        overlay={overlay}
+        travelCityId={shipTravelTargetId}
+        travelWorld={
+          shipTravelTargetId ? worldByCity[shipTravelTargetId] : undefined
+        }
+        travelOverlay={
+          shipTravelTargetId ? overlayByCity[shipTravelTargetId] : undefined
+        }
+        fileChange={fileChange}
+        cities={cities}
+        buildingPaths={buildingPaths}
+        crewSprite={crewAvatarSrc}
+        onTravelRequest={requestShipTravel}
+        onTravelComplete={completeShipTravel}
+        onTravelTransitionChange={setShipTransitioning}
+        onShipHover={setShipHover}
+        onSelectBuilding={selectBuilding}
+        onBuildingDragStart={handleBuildingDragStart}
+        onBuildingDragMove={handleBuildingDragMove}
+        onBuildingDragEnd={handleBuildingDrop}
+      />
 
-      <ResizablePanelGroup orientation="horizontal" className="min-h-0 flex-1">
-        <ResizablePanel defaultSize={72} minSize={45}>
-          <div className="flex h-full min-h-0 flex-col">
-            <section className="city-stage relative min-h-0 flex-1 overflow-hidden">
-              <GameCanvas
-                ref={canvasRef}
-                cityId={activeCityId}
-                world={world}
-                overlay={overlay}
-                travelCityId={shipTravelTargetId}
-                travelWorld={
-                  shipTravelTargetId
-                    ? worldByCity[shipTravelTargetId]
-                    : undefined
-                }
-                travelOverlay={
-                  shipTravelTargetId
-                    ? overlayByCity[shipTravelTargetId]
-                    : undefined
-                }
-                fileChange={fileChange}
-                cities={cities}
-                buildingPaths={buildingPaths}
-                crewSprite={crewAvatarSrc}
-                onTravelRequest={requestShipTravel}
-                onTravelComplete={completeShipTravel}
-                onTravelTransitionChange={setShipTransitioning}
-                onShipHover={setShipHover}
-                onSelectBuilding={selectBuilding}
-                onBuildingDragStart={handleBuildingDragStart}
-                onBuildingDragMove={handleBuildingDragMove}
-                onBuildingDragEnd={handleBuildingDrop}
-              />
-              {!shipTransitioning ? (
-                <>
-              <div
-                id="city-scan-panel"
-                className={`city-panel city-scan-panel pointer-events-auto absolute left-4 top-4 z-20 ${
-                  cityScanOpen
-                    ? "w-[min(26rem,calc(100%-2rem))] px-3 py-3"
-                    : "w-auto px-1.5 py-1.5"
-                }`}
+      {shipHover ? (
+        <div
+          className="retro pointer-events-none absolute z-30 -translate-x-1/2 -translate-y-full whitespace-nowrap border-2 border-foreground bg-card px-2 py-1 text-[10px] text-foreground dark:border-ring"
+          style={{ left: shipHover.screenX, top: shipHover.screenY - 12 }}
+        >
+          {shipHover.action}
+        </div>
+      ) : null}
+
+      <div aria-hidden="true" className="hud-vignette" />
+
+      {/* The canvas whiteout owns the screen while a ship is sailing; the
+          HUD would otherwise float over clouds describing the city being
+          left behind. */}
+      <div className="hud-layer" hidden={shipTransitioning}>
+        <div className="hud-column hud-column--main">
+          <HudWindow
+            id="hud-scan"
+            title="City scan"
+            hint={surveying ? "surveying" : world ? "live" : "offline"}
+            expanded={hud.scan}
+            onToggle={() => toggleHud("scan")}
+            className="w-[min(20rem,100%)]"
+            meta={
+              <span
+                className={cn("hud-pill", !world && "hud-pill--muted")}
               >
-                <div
-                  className={`flex ${
-                    cityScanOpen ? "items-start gap-3" : "items-center gap-2"
-                  }`}
-                >
-                  <button
-                    type="button"
-                    aria-controls="city-scan-panel"
-                    aria-expanded={cityScanOpen}
-                    aria-label={
-                      cityScanOpen
-                        ? "Collapse City Scan panel"
-                        : "Expand City Scan panel"
-                    }
-                    title={cityScanOpen ? "Collapse City Scan" : "Expand City Scan"}
-                    onClick={() => setCityScanOpen((open) => !open)}
-                    className="retro flex size-6 shrink-0 items-center justify-center border border-primary/60 bg-primary/10 text-sm leading-none text-primary transition-colors hover:bg-primary hover:text-primary-foreground"
-                  >
-                    <span aria-hidden="true">{cityScanOpen ? "‹" : "›"}</span>
-                  </button>
-                  {cityScanOpen ? (
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center justify-between gap-3">
-                        <span className="retro text-[9px] tracking-[0.16em] text-primary">
-                          CITY SCAN // LIVE
-                        </span>
-                        <span className="retro border border-primary/50 px-1.5 py-0.5 text-[8px] text-primary">
-                          {world ? "SYNCED" : "LINKING"}
-                        </span>
-                      </div>
-                      <div className="mt-2 flex items-end justify-between gap-4">
-                        <strong className="retro text-sm text-foreground">
-                          {world?.buildings.length ?? 0}
-                        </strong>
-                        <span className="retro mb-0.5 flex-1 text-[9px] text-muted-foreground">
-                          file structures mapped
-                        </span>
-                        <span className="retro text-[8px] text-muted-foreground">
-                          {languageSummary.length} types
-                        </span>
-                      </div>
-                      {languageSummary.length > 0 ? (
-                        <div className="mt-3 flex flex-wrap gap-1.5">
-                          {languageSummary.slice(0, 6).map(({ language, count }) => {
-                            const palette = paletteFor(language);
-                            return (
-                              <span
-                                key={language}
-                                className="retro inline-flex items-center gap-1 border px-1.5 py-1 text-[8px]"
-                                style={{
-                                  backgroundColor: colorWithAlpha(palette.accent, 0.16),
-                                  borderColor: colorWithAlpha(palette.accent, 0.72),
-                                  color: colorToCss(palette.accent),
-                                }}
-                              >
-                                <span className="font-black">{palette.mark}</span>
-                                <span className="text-foreground/80">{count}</span>
-                              </span>
-                            );
-                          })}
-                        </div>
-                      ) : null}
-                    </div>
-                  ) : (
-                    <span className="retro text-[8px] tracking-[0.16em] text-primary">
-                      SCAN
-                    </span>
-                  )}
-                </div>
-              </div>
-
-              {shipHover ? (
-                <div
-                  className="retro pointer-events-none absolute z-10 -translate-x-1/2 -translate-y-full whitespace-nowrap border-2 border-foreground bg-card px-2 py-1 text-[10px] text-foreground dark:border-ring"
-                  style={{
-                    left: shipHover.screenX,
-                    top: shipHover.screenY - 12,
-                  }}
-                >
-                  {shipHover.action}
-                </div>
-              ) : null}
-
-              {selected ? (
-                <div className="city-panel absolute bottom-4 left-4 w-max max-w-[calc(100%-2rem)] overflow-x-auto overflow-y-hidden">
-                  <div
-                    className="h-1"
-                    style={{ backgroundColor: colorToCss(selectedPalette.accent) }}
-                  />
-                  <div className="shrink-0 p-3">
-                    <div className="flex items-start justify-between gap-3 whitespace-nowrap">
-                      <div className="flex shrink-0 items-center gap-2">
-                        <span
-                          className="retro flex size-8 shrink-0 items-center justify-center border text-[9px] font-black"
-                          style={{
-                            backgroundColor: colorToCss(selectedPalette.accent),
-                            borderColor: colorToCss(selectedPalette.accentDark),
-                            color: colorToCss(selectedPalette.ink),
-                          }}
-                        >
-                          {selectedPalette.mark}
-                        </span>
-                        <div className="shrink-0">
-                          <span className="retro block whitespace-nowrap text-[10px] text-primary">
-                            {selected.language} structure
-                          </span>
-                          <span className="retro block whitespace-nowrap text-[8px] text-muted-foreground">
-                            {selected.path}
-                          </span>
-                        </div>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => selectBuilding(undefined)}
-                        aria-label="Close structure details"
-                        className="retro shrink-0 text-[10px] text-muted-foreground transition-colors hover:text-foreground"
-                      >
-                        ✕
-                      </button>
-                    </div>
-                    <dl className="retro mt-3 flex gap-2 whitespace-nowrap text-[9px]">
-                      <div className="border border-border/70 bg-background/30 px-2 py-1.5">
-                        <dt className="inline text-[7px] text-muted-foreground">
-                          LINES OF CODE{" "}
-                        </dt>
-                        <dd className="inline text-foreground">
-                          {selected.loc.toLocaleString()}
-                        </dd>
-                      </div>
-                      <div className="border border-border/70 bg-background/30 px-2 py-1.5">
-                        <dt className="inline text-[7px] text-muted-foreground">
-                          FILE TYPE{" "}
-                        </dt>
-                        <dd
-                          className="inline"
-                          style={{ color: colorToCss(selectedPalette.accent) }}
-                        >
-                          {selected.language}
-                        </dd>
-                      </div>
-                      {selectedChange ? (
-                        <div className="border border-border/70 bg-background/30 px-2 py-1.5">
-                          <dt className="inline text-[7px] text-muted-foreground">
-                            IN THIS PR{" "}
-                          </dt>
-                          <dd className="inline text-foreground">
-                            {selectedChange.change}
-                          </dd>
-                        </div>
-                      ) : null}
-                    </dl>
-                    {selectedChange && selectedChange.change !== "deleted" ? (
-                      <div className="mt-3 max-h-64 overflow-auto">
-                        {diff &&
-                        diff.cityId === activeCityId &&
-                        diff.path === selected.path ? (
-                          <Markdown className="retro text-[10px]">
-                            {`\`\`\`diff\n${diff.patch}\n\`\`\``}
-                          </Markdown>
-                        ) : (
-                          <p className="retro text-[10px] text-muted-foreground">
-                            Loading diff…
-                          </p>
-                        )}
-                      </div>
-                    ) : null}
-                  </div>
-                </div>
-              ) : null}
-
-              <div className="city-panel pointer-events-none absolute bottom-4 right-4 px-2 py-1.5">
-                <span className="retro text-[8px] text-muted-foreground">
-                  Drag to pan · Scroll to zoom · Click a building
+                <span
+                  aria-hidden="true"
+                  className={cn("hud-dot", world && "hud-dot--live")}
+                />
+                {world ? "synced" : surveying ? "linking" : "no link"}
+              </span>
+            }
+          >
+            <div className="grid gap-2 p-2.5">
+              <div className="flex items-baseline gap-2">
+                <span className="hud-figure retro">
+                  {world ? world.buildings.length : "—"}
+                </span>
+                <span className="hud-label flex-1">structures mapped</span>
+                <span className="hud-label">
+                  {languageSummary.length} types
                 </span>
               </div>
-                </>
-              ) : null}
-            </section>
 
-            <form
-              ref={orderFormRef}
-              className={`city-order-form border-t-4 border-foreground p-4 dark:border-ring ${
-                draggingBuilding ? "is-drop-target ring-2 ring-inset ring-primary" : ""
-              }`}
-              onSubmit={submitPrompt}
+              {surveying ? (
+                <div className="hud-scanline" aria-label="Surveying district" />
+              ) : null}
+
+              {languageSummary.length > 0 ? (
+                <div className="flex flex-wrap gap-1">
+                  {languageSummary.slice(0, 8).map(({ language, count }) => {
+                    const palette = paletteFor(language);
+                    return (
+                      <span
+                        key={language}
+                        title={`${count} ${language} structures`}
+                        className="retro inline-flex items-center gap-1 border px-1 py-0.5 text-[8px]"
+                        style={{
+                          backgroundColor: colorWithAlpha(palette.accent, 0.14),
+                          borderColor: colorWithAlpha(palette.accent, 0.6),
+                          color: colorToCss(palette.accent),
+                        }}
+                      >
+                        <span>{palette.mark}</span>
+                        <span className="text-foreground/75">{count}</span>
+                      </span>
+                    );
+                  })}
+                </div>
+              ) : null}
+            </div>
+          </HudWindow>
+
+          <div className="flex-1" />
+
+          {selected ? (
+            <HudWindow
+              id="hud-inspector"
+              title={fileBasename(selected.path)}
+              hint={selected.language}
+              accent={colorToCss(selectedPalette.accent)}
+              expanded={hud.inspector}
+              onToggle={() => toggleHud("inspector")}
+              className="w-[min(22rem,100%)]"
+              icon={
+                <span
+                  className="hud-mark retro size-[18px] text-[8px]"
+                  style={{
+                    backgroundColor: colorToCss(selectedPalette.accent),
+                    borderColor: colorToCss(selectedPalette.accentDark),
+                    color: colorToCss(selectedPalette.ink),
+                  }}
+                >
+                  {selectedPalette.mark}
+                </span>
+              }
+              actions={
+                <button
+                  type="button"
+                  className="hud-icon-button"
+                  aria-label="Close structure details"
+                  title="Close"
+                  onClick={() => selectBuilding(undefined)}
+                >
+                  <X className="size-3" aria-hidden="true" />
+                </button>
+              }
             >
-              <label
-                htmlFor="mayor-prompt"
-                className="retro mb-2 block text-[10px] text-muted-foreground"
-              >
-                Mayor&apos;s order
-              </label>
+              <div className="grid gap-2 p-2.5">
+                <code className="retro block truncate text-[9px] text-muted-foreground">
+                  {fileDirname(selected.path)}
+                </code>
+                <dl className="retro flex flex-wrap gap-1.5 text-[9px]">
+                  <div className="border border-border/60 bg-background/30 px-1.5 py-1">
+                    <dt className="inline text-[7px] text-muted-foreground">
+                      LINES{" "}
+                    </dt>
+                    <dd className="inline text-foreground">
+                      {selected.loc.toLocaleString()}
+                    </dd>
+                  </div>
+                  <div className="border border-border/60 bg-background/30 px-1.5 py-1">
+                    <dt className="inline text-[7px] text-muted-foreground">
+                      TYPE{" "}
+                    </dt>
+                    <dd
+                      className="inline"
+                      style={{ color: colorToCss(selectedPalette.accent) }}
+                    >
+                      {selected.language}
+                    </dd>
+                  </div>
+                  {selectedChange ? (
+                    <div className="border border-border/60 bg-background/30 px-1.5 py-1">
+                      <dt className="inline text-[7px] text-muted-foreground">
+                        IN THIS PR{" "}
+                      </dt>
+                      <dd className="inline text-foreground">
+                        {selectedChange.change}
+                      </dd>
+                    </div>
+                  ) : null}
+                </dl>
+                {selectedChange && selectedChange.change !== "deleted" ? (
+                  <div className="max-h-64 overflow-auto border-t border-border/50 pt-2">
+                    {diff &&
+                    diff.cityId === activeCityId &&
+                    diff.path === selected.path ? (
+                      <Markdown className="retro text-[9px]">
+                        {`\`\`\`diff\n${diff.patch}\n\`\`\``}
+                      </Markdown>
+                    ) : (
+                      <p className="retro text-[9px] text-muted-foreground">
+                        Loading diff…
+                      </p>
+                    )}
+                  </div>
+                ) : null}
+              </div>
+            </HudWindow>
+          ) : (
+            <p className="hud-caption retro">
+              Drag to pan · Scroll to zoom · Click a building
+            </p>
+          )}
+
+          <form
+            ref={orderFormRef}
+            onSubmit={submitPrompt}
+            className={cn(
+              "hud-form w-[min(34rem,100%)]",
+              draggingBuilding && "is-drop-target",
+            )}
+          >
+            <HudWindow
+              id="hud-order"
+              title="Mayor's order"
+              hint={draggingBuilding ? "drop to attach" : undefined}
+              expanded={hud.order}
+              onToggle={() => toggleHud("order")}
+              bodyClassName="grid gap-2 p-2.5"
+              meta={
+                contextPaths.length > 0 ? (
+                  <span className="hud-pill">
+                    {contextPaths.length} in context
+                  </span>
+                ) : null
+              }
+              persistent={
+                <div className="flex flex-col gap-2 sm:flex-row">
+                  <div className="hud-field min-w-0 flex-1">
+                    <span aria-hidden="true" className="hud-field__caret">
+                      ❯
+                    </span>
+                    <input
+                      id="mayor-prompt"
+                      className="hud-field__input retro"
+                      value={prompt}
+                      onChange={(event) => setPrompt(event.target.value)}
+                      placeholder="What should the crew build?"
+                      aria-label="Mayor's order"
+                      autoComplete="off"
+                      disabled={connection !== "online"}
+                    />
+                  </div>
+                  <div className="flex shrink-0 gap-2">
+                    <HudButton
+                      type="submit"
+                      size="sm"
+                      disabled={connection !== "online" || !prompt.trim()}
+                    >
+                      Dispatch
+                    </HudButton>
+                    <HudButton
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      onClick={() =>
+                        send({
+                          type: "session.interrupt",
+                          cityId: activeCityId,
+                        })
+                      }
+                      disabled={connection !== "online"}
+                    >
+                      Halt
+                    </HudButton>
+                  </div>
+                </div>
+              }
+            >
               {draggingBuilding ? (
                 <div
-                  className="mb-3 flex items-center gap-2 border px-2 py-2"
+                  className="flex items-center gap-2 border px-2 py-1.5"
                   style={{
                     backgroundColor: colorWithAlpha(draggingPalette.accent, 0.14),
-                    borderColor: colorWithAlpha(draggingPalette.accent, 0.72),
+                    borderColor: colorWithAlpha(draggingPalette.accent, 0.7),
                   }}
                 >
                   <span
-                    className="retro flex size-6 shrink-0 items-center justify-center border text-[8px] font-black"
+                    className="hud-mark retro size-5 text-[8px]"
                     style={{
                       backgroundColor: colorToCss(draggingPalette.accent),
                       borderColor: colorToCss(draggingPalette.accentDark),
@@ -1143,21 +1176,14 @@ export default function App() {
                   >
                     {draggingPalette.mark}
                   </span>
-                  <div className="min-w-0">
-                    <span className="retro block text-[8px] text-primary">
-                      Drop to attach {draggingBuilding.language} context
-                    </span>
-                    <code className="block truncate text-[9px] text-foreground">
-                      {draggingBuilding.path}
-                    </code>
-                  </div>
+                  <code className="retro min-w-0 flex-1 truncate text-[9px] text-foreground">
+                    {draggingBuilding.path}
+                  </code>
                 </div>
               ) : null}
+
               {contextPaths.length > 0 ? (
-                <div className="mb-3 flex flex-wrap items-center gap-1.5">
-                  <span className="retro mr-1 text-[8px] text-muted-foreground">
-                    Context queue
-                  </span>
+                <div className="flex flex-wrap items-center gap-1">
                   {contextPaths.map((path) => {
                     const contextBuilding = world?.buildings.find(
                       (building) => building.path === path,
@@ -1171,14 +1197,14 @@ export default function App() {
                         type="button"
                         title={`Remove ${path} from context`}
                         onClick={() => removeContextPath(path)}
-                        className="retro inline-flex max-w-full items-center gap-1.5 border px-2 py-1.5 text-left text-[8px] transition-colors hover:text-primary-foreground"
+                        className="retro inline-flex max-w-full items-center gap-1.5 border px-1.5 py-1 text-left text-[8px] transition-colors hover:border-primary"
                         style={{
                           backgroundColor: colorWithAlpha(palette.accent, 0.12),
-                          borderColor: colorWithAlpha(palette.accent, 0.72),
+                          borderColor: colorWithAlpha(palette.accent, 0.6),
                         }}
                       >
                         <span
-                          className="flex size-4 shrink-0 items-center justify-center border text-[7px] font-black"
+                          className="hud-mark size-3.5 text-[7px]"
                           style={{
                             backgroundColor: colorToCss(palette.accent),
                             borderColor: colorToCss(palette.accentDark),
@@ -1187,7 +1213,7 @@ export default function App() {
                         >
                           {palette.mark}
                         </span>
-                        <span className="max-w-[16rem] truncate text-foreground">
+                        <span className="max-w-[14rem] truncate text-foreground">
                           {path}
                         </span>
                         <span aria-hidden="true" className="text-muted-foreground">
@@ -1198,22 +1224,24 @@ export default function App() {
                   })}
                 </div>
               ) : null}
-              <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                <span className="retro text-[9px] text-muted-foreground">
-                  Crew for this order
-                </span>
-                <Button
+
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="hud-label">Crew</span>
+                <HudButton
                   type="button"
-                  size="sm"
+                  size="auto"
                   variant="outline"
                   disabled={connection !== "online"}
                   onClick={() => setCrewDialogOpen(true)}
-                  className="retro h-auto justify-start gap-2 px-2 py-1.5 text-left"
+                  className="justify-start gap-2 text-left"
                 >
                   <img
-                    src={crewSpriteUrl(crewSelection.crewId, crewSelection.effort)}
+                    src={crewSpriteUrl(
+                      crewSelection.crewId,
+                      crewSelection.effort,
+                    )}
                     alt=""
-                    className="size-8 object-contain [image-rendering:pixelated]"
+                    className="size-6 object-contain [image-rendering:pixelated]"
                   />
                   <span className="min-w-0">
                     <span className="block text-[8px] text-primary">
@@ -1223,166 +1251,221 @@ export default function App() {
                       {effortLabel(crewSelection.effort)} effort
                     </span>
                   </span>
-                </Button>
+                </HudButton>
               </div>
-              <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                <span className="retro text-[9px] text-muted-foreground">
-                  Permission&apos;s for this order
-                </span>
+
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="hud-label">Permissions</span>
                 <div
-                  className="grid grid-cols-2 gap-1"
+                  className="flex gap-1.5"
                   role="group"
                   aria-label="Permission mode for this order"
                 >
-                  <Button
+                  <HudButton
                     type="button"
                     size="sm"
                     variant={
-                      orderPermissionMode === "default" ? "default" : "outline"
+                      orderPermissionMode === "default" ? "primary" : "outline"
                     }
                     aria-pressed={orderPermissionMode === "default"}
                     onClick={() => setOrderPermissionMode("default")}
                     disabled={connection !== "online"}
                   >
                     Ask Mayor
-                  </Button>
-                  <Button
+                  </HudButton>
+                  <HudButton
                     type="button"
                     size="sm"
                     variant={
-                      orderPermissionMode === "auto" ? "default" : "outline"
+                      orderPermissionMode === "auto" ? "primary" : "outline"
                     }
                     aria-pressed={orderPermissionMode === "auto"}
                     onClick={() => setOrderPermissionMode("auto")}
                     disabled={connection !== "online"}
                   >
                     Don&apos;t Disturb
-                  </Button>
+                  </HudButton>
                 </div>
               </div>
-              <p className="retro mb-2 text-[8px] text-muted-foreground">
+
+              <p className="retro text-[8px] leading-relaxed text-muted-foreground">
                 {orderPermissionMode === "auto"
                   ? "Auto mode applies only to this order."
                   : "Default mode pauses for your approval."}
               </p>
-              <div className="flex flex-col gap-2 sm:flex-row">
-                <Input
-                  id="mayor-prompt"
-                  value={prompt}
-                  onChange={(event) => setPrompt(event.target.value)}
-                  placeholder="What should the crew build?"
-                  disabled={connection !== "online"}
-                  className="min-w-0 flex-1"
+            </HudWindow>
+          </form>
+        </div>
+
+        <div className="hud-column hud-column--console">
+          <HudWindow
+            id="hud-console"
+            title={cityName}
+            fill
+            expanded={hud.console}
+            onToggle={() => toggleHud("console")}
+            bodyClassName="flex min-h-0 flex-1 flex-col gap-2.5 p-2.5"
+            meta={
+              <span
+                className={cn(
+                  "hud-pill",
+                  connection !== "online" && "hud-pill--muted",
+                )}
+              >
+                <span
+                  aria-hidden="true"
+                  className={cn(
+                    "hud-dot",
+                    connection === "online" && "hud-dot--live",
+                  )}
                 />
-                <div className="flex shrink-0 gap-2">
-                  <Button
-                    type="submit"
-                    disabled={connection !== "online" || !prompt.trim()}
-                  >
-                    Dispatch
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="secondary"
-                    onClick={() =>
-                      send({
-                        type: "session.interrupt",
-                        cityId: activeCityId,
-                      })
-                    }
-                    disabled={connection !== "online"}
-                  >
-                    Halt
-                  </Button>
-                </div>
+                {statusLabel(connection)}
+              </span>
+            }
+            actions={
+              <>
+                <button
+                  type="button"
+                  className="hud-icon-button"
+                  aria-label={
+                    sfxEnabled ? "Mute UI sounds" : "Unmute UI sounds"
+                  }
+                  aria-pressed={!sfxEnabled}
+                  title={sfxEnabled ? "Mute UI sounds" : "Unmute UI sounds"}
+                  onClick={toggleSfx}
+                >
+                  {sfxEnabled ? (
+                    <Volume2 className="size-3" aria-hidden="true" />
+                  ) : (
+                    <VolumeX className="size-3" aria-hidden="true" />
+                  )}
+                </button>
+                <button
+                  type="button"
+                  className="hud-icon-button retro gap-0.5 px-1 text-[8px]"
+                  aria-label="Open the command palette"
+                  title="Command palette (⌘K)"
+                  onClick={() => setCommandOpen(true)}
+                >
+                  <Command className="size-2.5" aria-hidden="true" />K
+                </button>
+              </>
+            }
+            footer={
+              <div className="flex items-center justify-between gap-2">
+                <span className="hud-label">
+                  Permits · {orderPermissionMode === "auto" ? "auto" : "mayor"}
+                </span>
+                <span className="hud-label">
+                  {world?.buildings.length ?? 0} structures ·{" "}
+                  {languageSummary.length} types
+                </span>
               </div>
-            </form>
-          </div>
-        </ResizablePanel>
-
-        <ResizableHandle withHandle />
-
-        <ResizablePanel defaultSize={28} minSize={20}>
-          <aside className="flex h-full min-h-0 flex-col overflow-hidden border-l-4 border-foreground bg-card dark:border-ring">
-            <div className="flex shrink-0 items-center justify-between border-b-4 border-foreground px-4 py-3 dark:border-ring">
-              <span className="retro text-[10px] text-primary">City works</span>
-              <Kbd>⌘ K</Kbd>
+            }
+          >
+            <div className="hud-masthead">
+              <div className="min-w-0">
+                <h1 className="hud-masthead__name retro">{cityName}</h1>
+                <p className="hud-masthead__sub retro">
+                  {cityStatusLine} · mayor console
+                </p>
+              </div>
             </div>
 
-            <div className="flex min-h-0 flex-1 flex-col gap-4 p-4">
-              <div className="shrink-0 space-y-4">
-                <Dialogue
-                  avatarSrc={crewAvatarSrc}
-                  avatarFallback={activeCrew.name.slice(0, 1)}
-                  title={crewDialogueTitle}
-                  description={crewDialogueDescription}
-                />
+            <div className="flex items-center gap-2.5">
+              <img
+                src={crewAvatarSrc}
+                alt=""
+                className="hud-crew__portrait"
+              />
+              <div className="min-w-0 flex-1">
+                <span className="hud-label">Crew on duty</span>
+                <p className="retro truncate text-[11px] text-foreground">
+                  {activeCrew.name}
+                </p>
+                <p className="retro truncate text-[9px] text-muted-foreground">
+                  {crewStatus}
+                </p>
+              </div>
+            </div>
 
-                <div className="space-y-3">
-                  <div className="space-y-1">
-                    <div className="retro flex justify-between text-[10px] text-muted-foreground">
-                      <span>Context stamina</span>
-                      <span>100%</span>
-                    </div>
-                    <HealthBar variant="retro" value={100} className="h-4" />
-                  </div>
-                  <div className="space-y-1">
-                    <div className="retro flex justify-between text-[10px] text-muted-foreground">
-                      <span>Treasury</span>
-                      <span>${treasuryUsed.toFixed(4)}</span>
-                    </div>
-                    <ManaBar variant="retro" value={treasuryPercent} className="h-4" />
-                  </div>
+            <div className="grid gap-1.5">
+              <HudMeter
+                label="Context stamina"
+                readout="100%"
+                value={100}
+                tone="var(--color-signal, oklch(0.74 0.16 155))"
+              />
+              <HudMeter
+                label="Treasury"
+                readout={`$${treasuryUsed.toFixed(4)} / $${maxBudgetUsd.toFixed(2)}`}
+                value={treasuryPercent}
+              />
+            </div>
+
+            {pendingPermit ? (
+              <div className="hud-permit grid gap-2">
+                <div className="flex items-center gap-1.5">
+                  <ShieldAlert
+                    className="size-3 shrink-0 text-primary"
+                    aria-hidden="true"
+                  />
+                  <span className="hud-label truncate text-primary">
+                    Permit · {pendingPermit.tool}
+                  </span>
                 </div>
+                <p className="retro text-[9px] leading-relaxed text-foreground">
+                  {pendingPermit.message}
+                </p>
+                <div className="grid grid-cols-2 gap-2">
+                  <HudButton
+                    type="button"
+                    size="sm"
+                    onClick={() =>
+                      send({
+                        type: "permit.resolve",
+                        toolCallId: pendingPermit.toolCallId,
+                        decision: "allow",
+                      })
+                    }
+                  >
+                    Stamp
+                  </HudButton>
+                  <HudButton
+                    type="button"
+                    size="sm"
+                    variant="danger"
+                    onClick={() =>
+                      send({
+                        type: "permit.resolve",
+                        toolCallId: pendingPermit.toolCallId,
+                        decision: "deny",
+                      })
+                    }
+                  >
+                    Deny
+                  </HudButton>
+                </div>
+              </div>
+            ) : null}
 
-                {pendingPermit ? (
-                  <div className="space-y-3">
-                    <Dialogue
-                      player={false}
-                      avatarFallback="!"
-                      title={`Permit: ${pendingPermit.tool}`}
-                      description={pendingPermit.message}
-                    />
-                    <div className="grid grid-cols-2 gap-2">
-                      <Button
-                        type="button"
-                        onClick={() =>
-                          send({
-                            type: "permit.resolve",
-                            toolCallId: pendingPermit.toolCallId,
-                            decision: "allow",
-                          })
-                        }
-                      >
-                        Stamp
-                      </Button>
-                      <Button
-                        type="button"
-                        variant="destructive"
-                        onClick={() =>
-                          send({
-                            type: "permit.resolve",
-                            toolCallId: pendingPermit.toolCallId,
-                            decision: "deny",
-                          })
-                        }
-                      >
-                        Deny
-                      </Button>
-                    </div>
-                  </div>
+            <div className="flex min-h-0 flex-1 flex-col gap-1.5 border-t border-border/50 pt-2">
+              <div className="flex items-center justify-between gap-2">
+                <span className="hud-label">Transmissions</span>
+                {activeQuestCount > 0 ? (
+                  <span className="hud-pill">{activeQuestCount} active</span>
                 ) : null}
               </div>
-
               <QuestLog
-                quests={eventsToQuests(events)}
+                variant="bare"
+                quests={quests}
                 emptyStateMessage="The radio is quiet."
                 className="min-h-0 flex-1"
               />
             </div>
-          </aside>
-        </ResizablePanel>
-      </ResizablePanelGroup>
+          </HudWindow>
+        </div>
+      </div>
 
       <CrewSelectDialog
         open={crewDialogOpen}
@@ -1403,7 +1486,7 @@ export default function App() {
                   value={building.path}
                   onSelect={() => {
                     canvasRef.current?.focusBuilding(building.path);
-                    setSelected(building);
+                    selectBuilding(building);
                     setCommandOpen(false);
                   }}
                 >
