@@ -1,6 +1,7 @@
 import type { Building, WorldSnapshot } from "@sudo-city/protocol";
 import Phaser from "phaser";
 import { AmbientLife } from "./ambient";
+import { playUiClickSound } from "@/lib/play-ui-click";
 import { hashCoords, hashText, pickIndex, unitFloat } from "./hash";
 import { createIsoProjection } from "./iso";
 import { archetypeFor, tierFor } from "./palette";
@@ -397,7 +398,11 @@ export class WorldScene extends Phaser.Scene {
         pointer.y,
       );
       if (travel <= CLICK_SLOP) {
-        this.select(this.buildingAtPointer(pointer)?.path);
+        const building = this.buildingAtPointer(pointer);
+        if (building) {
+          playUiClickSound();
+        }
+        this.select(building?.path);
       }
     };
 

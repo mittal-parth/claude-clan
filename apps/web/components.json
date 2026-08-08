@@ -16,6 +16,7 @@
     "hooks": "@/hooks"
   },
   "registries": {
-    "@8bitcn": "https://www.8bitcn.com/r/{name}.json"
+    "@8bitcn": "https://www.8bitcn.com/r/{name}.json",
+    "@soundcn": "https://soundcn.xyz/r/{name}.json"
   }
 }

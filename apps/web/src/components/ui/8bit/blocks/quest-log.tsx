@@ -22,6 +22,7 @@ import {
 } from "lucide-react";
 
 import { Markdown } from "@/components/markdown";
+import { useUiClick } from "@/hooks/use-ui-click";
 import { cn } from "@/lib/utils";
 
 import { Badge } from "@/components/ui/8bit/badge";
@@ -133,13 +134,17 @@ function QuestItem({
   quest: Quest;
   onSelect: (quest: Quest) => void;
 }) {
+  const playClick = useUiClick();
   const timelineCount = quest.timeline?.length ?? 0;
 
   return (
     <button
       type="button"
       className="w-full border-b-2 border-foreground px-3 py-2.5 text-left transition-colors hover:bg-muted/40 dark:border-ring"
-      onClick={() => onSelect(quest)}
+      onClick={() => {
+        playClick();
+        onSelect(quest);
+      }}
     >
       <div className="flex items-start gap-2 w-full">
         <div className="flex-1 min-w-0">

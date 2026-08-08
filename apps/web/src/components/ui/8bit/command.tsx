@@ -3,6 +3,7 @@
 import { Command as CommandPrimitive } from "cmdk";
 
 import { cn } from "@/lib/utils";
+import { useUiClick } from "@/hooks/use-ui-click";
 
 import { Separator } from "@/components/ui/8bit/separator";
 import {
@@ -198,8 +199,11 @@ function CommandSeparator({
 
 function CommandItem({
   className,
+  onSelect,
   ...props
 }: React.ComponentProps<typeof CommandPrimitive.Item>) {
+  const playClick = useUiClick();
+
   return (
     <ShadcnCommandItem
       data-slot="command-item"
@@ -207,6 +211,10 @@ function CommandItem({
         "rounded-none border-dashed border-y-3 border-ring/0 hover:border-foreground dark:hover:border-ring",
         className
       )}
+      onSelect={(value) => {
+        playClick();
+        onSelect?.(value);
+      }}
       {...props}
     />
   );
