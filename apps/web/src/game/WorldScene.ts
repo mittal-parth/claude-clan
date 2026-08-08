@@ -39,6 +39,8 @@ const SKY_DEPTH = 100_000_000;
 
 const MIN_ZOOM = 0.2;
 const MAX_ZOOM = 2;
+const FOCUS_ZOOM = 1.25;
+const FOCUS_DURATION_MS = 450;
 /** Pointer travel, in screen pixels, above which a press is a drag not a click. */
 const CLICK_SLOP = 5;
 /** Most trees, bushes and fountains the world will place, at any size. */
@@ -72,6 +74,7 @@ export class WorldScene extends Phaser.Scene {
   private hasFitCamera = false;
   /** Continuous zoom, accumulated across wheel events. */
   private zoomTarget = 1;
+  private focusTween?: Phaser.Tweens.Tween;
 
   constructor() {
     super("world");
@@ -105,6 +108,52 @@ export class WorldScene extends Phaser.Scene {
 
   setSelectionListener(listener: (building?: Building) => void): void {
     this.selectionListener = listener;
+  }
+
+  /** Pan and zoom the camera onto a building, then select it. */
+  focusBuilding(path: string): boolean {
+    const view = this.views.get(path);
+    if (!view) {
+      return false;
+    }
+
+    this.focusTween?.stop();
+    this.focusTween = undefined;
+
+    const camera = this.cameras.main;
+    const targetZoom = Phaser.Math.Clamp(FOCUS_ZOOM, MIN_ZOOM, MAX_ZOOM);
+    const startScrollX = camera.scrollX;
+    const startScrollY = camera.scrollY;
+    const startZoom = camera.zoom;
+
+    camera.setZoom(targetZoom);
+    camera.centerOn(view.sprite.x, view.sprite.y);
+    const targetScrollX = camera.scrollX;
+    const targetScrollY = camera.scrollY;
+
+    camera.setZoom(startZoom);
+    camera.scrollX = startScrollX;
+    camera.scrollY = startScrollY;
+
+    playUiClickSound();
+    this.focusTween = this.tweens.add({
+      targets: camera,
+      scrollX: targetScrollX,
+      scrollY: targetScrollY,
+      zoom: targetZoom,
+      duration: FOCUS_DURATION_MS,
+      ease: "Cubic.easeOut",
+      onUpdate: () => {
+        this.zoomTarget = camera.zoom;
+      },
+      onComplete: () => {
+        this.zoomTarget = targetZoom;
+        this.focusTween = undefined;
+        this.select(path);
+      },
+    });
+
+    return true;
   }
 
   setWorld(snapshot: WorldSnapshot): void {

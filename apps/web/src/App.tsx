@@ -37,6 +37,7 @@ import {
 import {
   GameCanvas,
   type CanvasFileChange,
+  type GameCanvasHandle,
 } from "./components/GameCanvas";
 
 type ConnectionState = "connecting" | "online" | "offline";
@@ -50,6 +51,16 @@ const maxBudgetUsd = Number(import.meta.env.VITE_MAX_BUDGET_USD ?? 1);
  * rescan. The agent usually writes several files in a row.
  */
 const RESCAN_DEBOUNCE_MS = 1_200;
+
+function fileBasename(path: string): string {
+  const slash = path.lastIndexOf("/");
+  return slash >= 0 ? path.slice(slash + 1) : path;
+}
+
+function fileDirname(path: string): string {
+  const slash = path.lastIndexOf("/");
+  return slash >= 0 ? path.slice(0, slash) : ".";
+}
 
 const EVENTS_STORAGE_KEY = "sudo-city:events";
 
@@ -406,6 +417,7 @@ function findPendingPermit(
 export default function App() {
   const { sfxEnabled, toggleSfx } = useAudio();
   const socketRef = useRef<WebSocket>(null);
+  const canvasRef = useRef<GameCanvasHandle>(null);
   const [connection, setConnection] =
     useState<ConnectionState>("connecting");
   const [events, setEvents] = useState<GameEvent[]>(loadStoredEvents);
@@ -560,6 +572,7 @@ export default function App() {
           <div className="flex h-full min-h-0 flex-col">
             <section className="relative min-h-0 flex-1 overflow-hidden">
               <GameCanvas
+                ref={canvasRef}
                 world={world}
                 fileChange={fileChange}
                 onSelectBuilding={setSelected}
@@ -739,9 +752,29 @@ export default function App() {
       </ResizablePanelGroup>
 
       <CommandDialog open={commandOpen} onOpenChange={setCommandOpen}>
-        <CommandInput placeholder="Type a mayor command..." />
+        <CommandInput placeholder="Search files or mayor commands..." />
         <CommandList>
-          <CommandEmpty>No command found.</CommandEmpty>
+          <CommandEmpty>No file or command found.</CommandEmpty>
+          {world?.buildings.length ? (
+            <CommandGroup heading="Files">
+              {world.buildings.map((building) => (
+                <CommandItem
+                  key={building.path}
+                  value={building.path}
+                  onSelect={() => {
+                    canvasRef.current?.focusBuilding(building.path);
+                    setSelected(building);
+                    setCommandOpen(false);
+                  }}
+                >
+                  <span className="truncate">{fileBasename(building.path)}</span>
+                  <span className="text-muted-foreground ml-2 truncate text-xs">
+                    {fileDirname(building.path)}
+                  </span>
+                </CommandItem>
+              ))}
+            </CommandGroup>
+          ) : null}
           <CommandGroup heading="Mayor">
             <CommandItem
               onSelect={() => {
