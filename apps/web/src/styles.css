@@ -77,3 +77,43 @@
 .game-canvas canvas {
   display: block;
 }
+
+
+.city-stage {
+  background:
+    radial-gradient(circle at 20% 15%, rgba(255, 255, 255, 0.08), transparent 28%),
+    linear-gradient(145deg, rgba(18, 32, 43, 0.12), rgba(5, 13, 20, 0.32));
+}
+
+.city-panel {
+  border: 2px solid color-mix(in oklab, var(--foreground) 72%, transparent);
+  background:
+    linear-gradient(135deg, rgba(30, 45, 58, 0.96), rgba(12, 22, 31, 0.94));
+  box-shadow:
+    4px 4px 0 rgba(3, 8, 12, 0.42),
+    inset 0 1px 0 rgba(255, 255, 255, 0.1);
+  backdrop-filter: blur(8px);
+}
+
+.city-order-form {
+  background:
+    linear-gradient(180deg, rgba(23, 37, 49, 0.98), rgba(14, 25, 35, 0.98));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+.city-order-form.is-drop-target {
+  background:
+    linear-gradient(180deg, rgba(79, 64, 28, 0.3), rgba(14, 25, 35, 0.98));
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .city-panel,
+  .city-order-form {
+    transition:
+      width 180ms ease,
+      padding 180ms ease,
+      border-color 180ms ease,
+      box-shadow 180ms ease,
+      background 180ms ease;
+  }
+}
