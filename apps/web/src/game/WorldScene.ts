@@ -1,5 +1,6 @@
 import type {
   Building,
+  CitySummary,
   PullRequestOverlay,
   WorldSnapshot,
 } from "@sudo-city/protocol";
@@ -12,14 +13,18 @@ import { markerFor, rubbleMarkers } from "./overlay";
 import { archetypeFor, tierFor } from "./palette";
 import {
   buildTerrain,
+  COUNTRYSIDE_RING,
+  COAST_RING,
   type TerrainCell,
   type TerrainGrid,
 } from "./terrain";
 import {
+  CLOUD_KEY,
   HIGHLIGHT_KEY,
   RUBBLE_KEY,
   SCAFFOLD_KEY,
   SELECT_KEY,
+  SHIP_KEY,
   TERRAIN_ATLAS_KEY,
   TERRAIN_VARIANT_COUNTS,
   TILE_ANCHOR_Y,
@@ -66,6 +71,17 @@ interface BuildingView {
   sprite: Phaser.GameObjects.Sprite;
 }
 
+export interface ShipHoverInfo {
+  cityId: string;
+  title: string;
+  /** Position relative to the canvas element, for an HTML tooltip. */
+  screenX: number;
+  screenY: number;
+}
+
+/** How far apart, in tiles, two moored ships sit. */
+const SHIP_SPACING = 3;
+
 export class WorldScene extends Phaser.Scene {
   private terrain?: TerrainGrid;
   private snapshot?: WorldSnapshot;
@@ -93,6 +109,13 @@ export class WorldScene extends Phaser.Scene {
   /** Looping glow for modified buildings, keyed by path. */
   private modifiedGlows = new Map<string, Phaser.GameObjects.Sprite>();
   private rubbleSprites: Phaser.GameObjects.Sprite[] = [];
+
+  /** Ships are only shown while standing in main -- see setWorld. */
+  private lastCities: CitySummary[] = [];
+  private shipSprites = new Map<string, Phaser.GameObjects.Sprite>();
+  private shipHoverListener?: (info?: ShipHoverInfo) => void;
+  private shipClickListener?: (cityId: string) => void;
+  private transitionClouds: Phaser.GameObjects.Sprite[] = [];
 
   constructor() {
     super("world");
@@ -126,6 +149,28 @@ export class WorldScene extends Phaser.Scene {
 
   setSelectionListener(listener: (building?: Building) => void): void {
     this.selectionListener = listener;
+  }
+
+  setShipHoverListener(listener: (info?: ShipHoverInfo) => void): void {
+    this.shipHoverListener = listener;
+  }
+
+  setShipClickListener(listener: (cityId: string) => void): void {
+    this.shipClickListener = listener;
+  }
+
+  /**
+   * The current PR roster. Ships are only drawn while standing in main --
+   * see the layoutShips call in setWorld -- so this just records the roster
+   * and relays out if a city is currently main; if cities arrive before the
+   * first world snapshot, layoutShips no-ops until setWorld has a snapshot
+   * to place ships against.
+   */
+  setCities(cities: readonly CitySummary[]): void {
+    this.lastCities = [...cities];
+    if (this.currentCityId === "main") {
+      this.layoutShips();
+    }
   }
 
   /**
@@ -164,6 +209,13 @@ export class WorldScene extends Phaser.Scene {
     // produced -- a structural change replaces a building's sprite outright,
     // so a marker positioned off the old sprite would be orphaned.
     this.applyOverlay();
+
+    // Ships only make sense as a way OUT of main, to a PR -- inside a PR
+    // city there is nothing to sail past. resetWorld() already cleared any
+    // standing ships when the city changed; this only ever re-adds them.
+    if (cityId === "main") {
+      this.layoutShips();
+    }
 
     // hasFitCamera is reset to false by resetWorld() above, so this also
     // refits the camera for every newly-arrived city, not just the first
@@ -289,6 +341,8 @@ export class WorldScene extends Phaser.Scene {
     }
     this.rubbleSprites = [];
     this.overlay = undefined;
+
+    this.clearShips();
 
     this.select(undefined);
     this.snapshot = undefined;
@@ -693,6 +747,215 @@ export class WorldScene extends Phaser.Scene {
     view?.sprite.setTint(0xffd9a0);
 
     this.selectionListener?.(view?.building);
+  }
+
+  // -------------------------------------------------------------------------
+  // Ships and city travel
+  // -------------------------------------------------------------------------
+
+  /**
+   * Moors one ship per open PR just past the coast, east of the island,
+   * spaced out along the shore. Reuses existing sprites by cityId so a
+   * roster refresh doesn't make every ship flicker, and removes ships for
+   * PRs that closed.
+   */
+  private layoutShips(): void {
+    const snapshot = this.snapshot;
+    if (!snapshot) {
+      return;
+    }
+    const prCities = this.lastCities.filter(
+      (city) => city.kind === "pull-request",
+    );
+    const { width, height } = snapshot.size;
+    // Just past the sand ring, safely in open water.
+    const dockX = width - 1 + COUNTRYSIDE_RING + COAST_RING + 2;
+    const startY = height / 2 - ((prCities.length - 1) * SHIP_SPACING) / 2;
+
+    const seen = new Set<string>();
+    prCities.forEach((city, index) => {
+      seen.add(city.id);
+      const gy = startY + index * SHIP_SPACING;
+      const point = projection.project(dockX, gy);
+
+      let sprite = this.shipSprites.get(city.id);
+      if (!sprite) {
+        sprite = this.add
+          .sprite(point.x, point.y + TILE_ANCHOR_Y, SHIP_KEY)
+          .setOrigin(0.5, 1)
+          .setInteractive({ useHandCursor: true });
+        this.shipSprites.set(city.id, sprite);
+        this.bindShipInteractions(sprite, city.id);
+      } else {
+        this.tweens.killTweensOf(sprite);
+      }
+
+      sprite
+        .setPosition(point.x, point.y + TILE_ANCHOR_Y)
+        .setDepth(projection.depth(dockX, gy))
+        .setAlpha(1);
+      sprite.setData("title", city.title);
+
+      const restY = sprite.y;
+      this.tweens.add({
+        targets: sprite,
+        y: restY - 4,
+        duration: 1_400 + index * 90,
+        yoyo: true,
+        repeat: -1,
+        ease: "Sine.easeInOut",
+      });
+    });
+
+    for (const [cityId, sprite] of this.shipSprites) {
+      if (!seen.has(cityId)) {
+        this.tweens.killTweensOf(sprite);
+        sprite.destroy();
+        this.shipSprites.delete(cityId);
+      }
+    }
+  }
+
+  private bindShipInteractions(
+    sprite: Phaser.GameObjects.Sprite,
+    cityId: string,
+  ): void {
+    sprite.on("pointerover", () => {
+      const camera = this.cameras.main;
+      this.shipHoverListener?.({
+        cityId,
+        title: String(sprite.getData("title") ?? cityId),
+        screenX: (sprite.x - camera.scrollX) * camera.zoom,
+        screenY: (sprite.y - camera.scrollY) * camera.zoom,
+      });
+    });
+    sprite.on("pointerout", () => {
+      this.shipHoverListener?.(undefined);
+    });
+    sprite.on("pointerdown", () => {
+      playUiClickSound();
+      this.shipHoverListener?.(undefined);
+      this.shipClickListener?.(cityId);
+    });
+  }
+
+  private clearShips(): void {
+    for (const sprite of this.shipSprites.values()) {
+      this.tweens.killTweensOf(sprite);
+      sprite.destroy();
+    }
+    this.shipSprites.clear();
+    this.shipHoverListener?.(undefined);
+  }
+
+  /** Sails the clicked ship away from the island and out of view. */
+  private playShipDeparture(cityId: string): Promise<void> {
+    const sprite = this.shipSprites.get(cityId);
+    if (!sprite) {
+      return Promise.resolve();
+    }
+    return new Promise((resolve) => {
+      this.tweens.killTweensOf(sprite);
+      this.tweens.add({
+        targets: sprite,
+        x: sprite.x + 240,
+        y: sprite.y - 60,
+        alpha: 0,
+        duration: 700,
+        ease: "Cubic.easeIn",
+        onComplete: () => resolve(),
+      });
+    });
+  }
+
+  /**
+   * Converges five oversized, screen-fixed clouds to cover the whole
+   * viewport. Reuses the existing sky-decoration cloud texture rather than
+   * baking a dedicated one -- at this scale and opacity the overlap already
+   * reads as solid cover.
+   */
+  private playCoverTransition(): Promise<void> {
+    const camera = this.cameras.main;
+    const targets: Array<{ x: number; y: number }> = [
+      { x: camera.width * 0.2, y: camera.height * 0.28 },
+      { x: camera.width * 0.8, y: camera.height * 0.22 },
+      { x: camera.width * 0.5, y: camera.height * 0.55 },
+      { x: camera.width * 0.18, y: camera.height * 0.82 },
+      { x: camera.width * 0.82, y: camera.height * 0.78 },
+    ];
+
+    return new Promise((resolve) => {
+      let remaining = targets.length;
+      targets.forEach((target, index) => {
+        const fromLeft = index % 2 === 0;
+        const cloud = this.add
+          .sprite(
+            fromLeft ? -240 : camera.width + 240,
+            target.y,
+            CLOUD_KEY,
+          )
+          .setOrigin(0.5, 0.5)
+          .setScrollFactor(0)
+          .setScale(7)
+          .setDepth(SKY_DEPTH + 10);
+        this.transitionClouds.push(cloud);
+        this.tweens.add({
+          targets: cloud,
+          x: target.x,
+          duration: 650,
+          delay: index * 40,
+          ease: "Cubic.easeOut",
+          onComplete: () => {
+            remaining -= 1;
+            if (remaining === 0) {
+              resolve();
+            }
+          },
+        });
+      });
+    });
+  }
+
+  /**
+   * Departs the clicked ship, then covers the screen in cloud. Resolves once
+   * fully covered -- the caller swaps to the new city's snapshot at that
+   * point, hidden behind the cover, then calls revealAfterTravel.
+   */
+  async coverForTravel(cityId: string): Promise<void> {
+    await this.playShipDeparture(cityId);
+    await this.playCoverTransition();
+  }
+
+  /** Parts the cloud cover to reveal whatever city has landed underneath. */
+  revealAfterTravel(): Promise<void> {
+    const clouds = this.transitionClouds;
+    this.transitionClouds = [];
+    if (clouds.length === 0) {
+      return Promise.resolve();
+    }
+
+    const camera = this.cameras.main;
+    return new Promise((resolve) => {
+      let remaining = clouds.length;
+      clouds.forEach((cloud, index) => {
+        const toRight = index % 2 === 0;
+        this.tweens.add({
+          targets: cloud,
+          x: toRight ? camera.width + 240 : -240,
+          alpha: 0,
+          duration: 600,
+          delay: index * 60,
+          ease: "Cubic.easeIn",
+          onComplete: () => {
+            cloud.destroy();
+            remaining -= 1;
+            if (remaining === 0) {
+              resolve();
+            }
+          },
+        });
+      });
+    });
   }
 }
 

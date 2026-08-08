@@ -146,6 +146,8 @@ export const CLOUD_KEY = "fx:cloud";
 export const SMOKE_KEY = "fx:smoke";
 export const SPARKLE_KEY = "fx:sparkle";
 export const CAR_KEYS = ["fx:car:0", "fx:car:1", "fx:car:2", "fx:car:3"] as const;
+/** The harbor marker for a PR city, moored offshore of the main island. */
+export const SHIP_KEY = "fx:ship";
 
 const GRASS_VARIANTS = TERRAIN_COLORS.grass.length;
 const PARK_VARIANTS = 2;
@@ -204,6 +206,7 @@ export function bakeTerrainTextures(scene: Phaser.Scene): void {
   bakeSmoke(baker);
   bakeSparkle(baker);
   CAR_KEYS.forEach((key, index) => bakeCar(baker, key, index));
+  bakeShip(baker);
 
   baker.destroy();
 }
@@ -610,6 +613,71 @@ function bakeCar(baker: Baker, key: string, index: number): void {
   ], HALF_W, originY);
 
   baker.finish(key, TILE_WIDTH, CAR_TEXTURE_HEIGHT);
+}
+
+const SHIP_HEIGHT = 88;
+/** Tile-anchored the same way as every prop: origin (0.5, 1) at the tile's bottom corner. */
+const SHIP_ORIGIN_Y = SHIP_HEIGHT - TILE_ANCHOR_Y;
+
+function bakeShip(baker: Baker): void {
+  const base = baker.at([0, 0, 0], HALF_W, SHIP_ORIGIN_Y);
+
+  baker.graphics.fillStyle(0xffffff, 0.3);
+  baker.graphics.fillEllipse(base.x, base.y + 3, 44, 10);
+
+  baker.graphics.fillStyle(0x8a5a34, 1);
+  baker.graphics.fillTriangle(
+    base.x - 22,
+    base.y - 6,
+    base.x + 22,
+    base.y - 6,
+    base.x + 15,
+    base.y + 5,
+  );
+  baker.graphics.fillTriangle(
+    base.x - 22,
+    base.y - 6,
+    base.x - 15,
+    base.y + 5,
+    base.x + 15,
+    base.y + 5,
+  );
+  baker.graphics.fillStyle(shade(0x8a5a34, -18), 1);
+  baker.graphics.fillRect(base.x - 22, base.y - 10, 44, 5);
+
+  baker.graphics.fillStyle(0x4a3220, 1);
+  baker.graphics.fillRect(base.x - 1, base.y - 48, 2, 40);
+
+  baker.graphics.fillStyle(0xf3ead8, 1);
+  baker.graphics.fillTriangle(
+    base.x,
+    base.y - 46,
+    base.x,
+    base.y - 9,
+    base.x + 20,
+    base.y - 11,
+  );
+  baker.graphics.fillStyle(shade(0xf3ead8, -12), 1);
+  baker.graphics.fillTriangle(
+    base.x,
+    base.y - 46,
+    base.x,
+    base.y - 9,
+    base.x - 15,
+    base.y - 13,
+  );
+
+  baker.graphics.fillStyle(0xd94f4f, 1);
+  baker.graphics.fillTriangle(
+    base.x,
+    base.y - 48,
+    base.x,
+    base.y - 42,
+    base.x + 9,
+    base.y - 45,
+  );
+
+  baker.finish(SHIP_KEY, TILE_WIDTH, SHIP_HEIGHT);
 }
 
 // ---------------------------------------------------------------------------

@@ -41,6 +41,7 @@ import {
   GameCanvas,
   type CanvasFileChange,
 } from "./components/GameCanvas";
+import type { ShipHoverInfo } from "./game/WorldScene";
 
 type ConnectionState = "connecting" | "online" | "offline";
 
@@ -437,6 +438,7 @@ export default function App() {
   const [commandOpen, setCommandOpen] = useState(false);
   const [fileChange, setFileChange] = useState<CanvasFileChange>();
   const [selected, setSelected] = useState<Building>();
+  const [shipHover, setShipHover] = useState<ShipHoverInfo>();
 
   const events = eventsByCity[activeCityId] ?? [];
   const world = worldByCity[activeCityId];
@@ -670,6 +672,9 @@ export default function App() {
                 world={world}
                 overlay={overlay}
                 fileChange={fileChange}
+                cities={cities}
+                onTravel={travelTo}
+                onShipHover={setShipHover}
                 onSelectBuilding={selectBuilding}
               />
               <div className="pointer-events-none absolute left-4 top-4 border-2 border-foreground bg-card px-3 py-2 dark:border-ring">
@@ -680,6 +685,18 @@ export default function App() {
                   {world?.buildings.length ?? 0} structures mapped
                 </strong>
               </div>
+
+              {shipHover ? (
+                <div
+                  className="retro pointer-events-none absolute z-10 -translate-x-1/2 -translate-y-full whitespace-nowrap border-2 border-foreground bg-card px-2 py-1 text-[10px] text-foreground dark:border-ring"
+                  style={{
+                    left: shipHover.screenX,
+                    top: shipHover.screenY - 12,
+                  }}
+                >
+                  Sail to {shipHover.title}
+                </div>
+              ) : null}
 
               {selected ? (
                 <div className="absolute bottom-4 left-4 max-w-[min(28rem,calc(100%-2rem))] border-2 border-foreground bg-card px-3 py-2 dark:border-ring">
