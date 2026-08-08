@@ -9,6 +9,18 @@ import type {
 export type { DistrictRect } from "@sudo-city/protocol";
 
 export interface LayoutOptions {
+  /**
+   * Skip squarify and use these rectangles verbatim. A PR city must render
+   * the same island as main: buildTerrain derives every street from district
+   * geometry, and squarify reweights every rectangle whenever a single
+   * file's line count changes, so recomputing districts for a PR would
+   * silently reshuffle the whole city out from under plots seeded from
+   * main. Pass main's own snapshot.districts (and its width/height) to keep
+   * a PR city geometrically identical to main; only the occupied plots
+   * differ. Files whose directory has no matching district fall through to
+   * the field-wide overflow search, same as a district that's already full.
+   */
+  districts?: readonly DistrictRect[];
   generatedAt?: string;
   height?: number;
   previousPlots?: Readonly<Record<string, Plot>>;
@@ -51,10 +63,12 @@ export function layoutWorld(
   const size = fieldSizeFor(world.files.length);
   const width = options.width ?? size;
   const height = options.height ?? size;
-  const districts = squarify(
-    districtWeights(world),
-    { path: "", x: 0, y: 0, width, height, weight: width * height },
-  );
+  const districts = options.districts
+    ? [...options.districts]
+    : squarify(
+        districtWeights(world),
+        { path: "", x: 0, y: 0, width, height, weight: width * height },
+      );
   const plots: Record<string, Plot> = {};
   const occupied = new Set<string>();
 
