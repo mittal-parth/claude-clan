@@ -1,0 +1,8 @@
+.env
+.DS_Store
+.pnpm-store/
+.sudocity/
+dist/
+node_modules/
+playwright-report/
+test-results/
