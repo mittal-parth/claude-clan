@@ -35,13 +35,16 @@ describe("AgentSessionManager", () => {
       emit,
     });
 
-    await manager.start("ship the endpoint", "auto");
+    await manager.start("ship the endpoint", "auto", ["src/index.ts"]);
 
     expect(queryMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        prompt: "ship the endpoint",
+        prompt: expect.stringContaining("ship the endpoint"),
         options: expect.objectContaining({ permissionMode: "auto" }),
       }),
+    );
+    expect(queryMock.mock.calls[0]?.[0]?.prompt).toEqual(
+      expect.stringContaining("src/index.ts"),
     );
     expect(emit).toHaveBeenCalledWith({
       type: "session.started",

@@ -54,6 +54,7 @@ export class AgentSessionManager {
   async start(
     prompt: string,
     permissionMode: MayorPermissionMode = "default",
+    contextPaths: readonly string[] = [],
   ): Promise<void> {
     await this.interrupt();
     const abortController = new AbortController();
@@ -65,7 +66,7 @@ export class AgentSessionManager {
     });
 
     const activeQuery = query({
-      prompt,
+      prompt: promptWithContext(prompt, contextPaths),
       options: {
         abortController,
         canUseTool: this.canUseTool,
@@ -333,6 +334,22 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function normalizePath(path: string): string {
   return sep === "/" ? path : path.split(sep).join("/");
+}
+
+function promptWithContext(
+  prompt: string,
+  contextPaths: readonly string[],
+): string {
+  if (contextPaths.length === 0) {
+    return prompt;
+  }
+
+  return [
+    prompt,
+    "",
+    "Read these repository files before acting; they were attached as context for this order:",
+    ...contextPaths.map((path) => `- ${path}`),
+  ].join("\n");
 }
 
 export type { AgentEvent };
