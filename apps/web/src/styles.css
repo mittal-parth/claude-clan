@@ -651,6 +651,56 @@
   cursor: not-allowed;
 }
 
+/* --- masthead ------------------------------------------------------------- */
+
+.hud-masthead {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding-bottom: 0.55rem;
+  border-bottom: 1px solid
+    color-mix(in oklab, var(--foreground) 12%, transparent);
+}
+
+.hud-masthead__mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  flex: none;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  color: var(--primary-foreground);
+  background: var(--hud-accent);
+  box-shadow:
+    0 0 18px color-mix(in oklab, var(--hud-accent) 45%, transparent),
+    2px 2px 0 color-mix(in oklab, var(--hud-shade) 55%, transparent);
+}
+
+.hud-masthead__name {
+  font-size: 15px;
+  line-height: 1.15;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--foreground);
+  text-shadow: 0 0 20px color-mix(in oklab, var(--hud-accent) 30%, transparent);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hud-masthead__sub {
+  margin-top: 2px;
+  font-size: 8px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--hud-accent);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .hud-crew__portrait {
   width: 3.25rem;
   height: 3.25rem;
