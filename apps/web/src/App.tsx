@@ -1,4 +1,5 @@
 import {
+  GameEventSchema,
   ServerMessageSchema,
   type Building,
   type GameEvent,
@@ -47,6 +48,21 @@ const maxBudgetUsd = Number(import.meta.env.VITE_MAX_BUDGET_USD ?? 1);
  * rescan. The agent usually writes several files in a row.
  */
 const RESCAN_DEBOUNCE_MS = 1_200;
+
+const EVENTS_STORAGE_KEY = "sudo-city:events";
+
+function loadStoredEvents(): GameEvent[] {
+  try {
+    const raw = localStorage.getItem(EVENTS_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as unknown[];
+    return parsed.filter(
+      (item): item is GameEvent => GameEventSchema.safeParse(item).success,
+    );
+  } catch {
+    return [];
+  }
+}
 
 function statusLabel(status: ConnectionState): string {
   switch (status) {
@@ -389,7 +405,7 @@ export default function App() {
   const socketRef = useRef<WebSocket>(null);
   const [connection, setConnection] =
     useState<ConnectionState>("connecting");
-  const [events, setEvents] = useState<GameEvent[]>([]);
+  const [events, setEvents] = useState<GameEvent[]>(loadStoredEvents);
   const [prompt, setPrompt] = useState("");
   const [commandOpen, setCommandOpen] = useState(false);
   const [world, setWorld] = useState<WorldSnapshot>();
@@ -465,6 +481,10 @@ export default function App() {
       socketRef.current = null;
     };
   }, []);
+
+  useEffect(() => {
+    localStorage.setItem(EVENTS_STORAGE_KEY, JSON.stringify(events));
+  }, [events]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
