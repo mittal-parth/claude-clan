@@ -782,7 +782,7 @@ function drawBox(
   roofColor = palette.roof,
 ): void {
   const litWall = palette.wall;
-  const shadedWall = shade(palette.wall, -16);
+  const shadedWall = palette.wallShadow;
 
   fillFace(
     baker,
@@ -815,7 +815,7 @@ function drawBox(
   fillFace(baker, roofColor, 1, diamond(half, top), HALF_W, originY);
   strokeFace(
     baker,
-    shade(roofColor, -28),
+    roofColor === palette.roof ? palette.roofShadow : shade(roofColor, -28),
     0.9,
     1,
     diamond(half, top),
@@ -877,6 +877,16 @@ function drawFacadeDetails(
     0.96,
     "shade",
   );
+  wallStrip(
+    baker,
+    originY,
+    half,
+    top - Math.min(3, Math.max(1, span * 0.06)),
+    Math.min(2, Math.max(1, span * 0.04)),
+    palette.wallLight,
+    0.46,
+    "lit",
+  );
 
   switch (palette.material) {
     case "brick":
@@ -888,7 +898,7 @@ function drawFacadeDetails(
           half,
           base + (span * row) / 3,
           1,
-          shade(palette.wall, -18),
+          palette.wallShadow,
           0.4,
           "lit",
         );
@@ -898,7 +908,7 @@ function drawFacadeDetails(
           half,
           base + (span * row) / 3,
           1,
-          shade(palette.wall, -28),
+          shade(palette.wallShadow, -12),
           0.4,
           "shade",
         );
@@ -991,7 +1001,7 @@ function drawRoofMaterialDetails(
     case "paper":
     case "painted":
     case "wood":
-      fillFace(baker, palette.accent, 0.2, diamond(half * 0.62, top + 1), HALF_W, originY);
+      fillFace(baker, palette.roofLight, 0.2, diamond(half * 0.62, top + 1), HALF_W, originY);
       break;
     default: {
       const exhaustive: never = palette.material;
@@ -1024,7 +1034,7 @@ function drawWindows(
       // Lit wall (grid +v).
       fillFace(
         baker,
-        palette.window,
+        palette.windowGlow,
         0.92,
         [
           [offset - 0.05, half, z + size / 2],
@@ -1038,7 +1048,7 @@ function drawWindows(
       // Shaded wall (grid +u).
       fillFace(
         baker,
-        shade(palette.window, -18),
+        palette.windowShadow,
         0.92,
         [
           [half, offset - 0.05, z + size / 2],
@@ -1080,7 +1090,7 @@ function drawPitchedRoof(
   // Far plane first — painter's order, the ridge occludes it.
   fillFace(
     baker,
-    shade(palette.roof, -20),
+    palette.roofShadow,
     1,
     [
       [-eave, -eave, top],
@@ -1094,7 +1104,7 @@ function drawPitchedRoof(
   // Near plane, catching the light.
   fillFace(
     baker,
-    palette.roof,
+    palette.roofLight,
     1,
     [
       [-eave, 0, ridge],
@@ -1108,7 +1118,7 @@ function drawPitchedRoof(
   // Gable on the visible +u side.
   fillFace(
     baker,
-    shade(palette.wall, -8),
+    palette.wallShadow,
     1,
     [
       [eave, -eave, top],
@@ -1161,7 +1171,7 @@ function drawTownhouse(
   // Parapet.
   fillFace(
     baker,
-    shade(palette.roof, 12),
+    palette.roofLight,
     1,
     diamond(half * 0.86, body + 8),
     HALF_W,
@@ -1177,7 +1187,7 @@ function drawOffice(
   palette: BuildingPalette,
 ): void {
   const half = FOOTPRINT;
-  drawBox(baker, originY, half, 0, body, palette, shade(palette.roof, -10));
+  drawBox(baker, originY, half, 0, body, palette, palette.roofShadow);
   drawWindows(baker, originY, half, 8, body - 6, palette, 3 + tier, 3);
 
   // Rooftop plant.
@@ -1214,7 +1224,7 @@ function drawTower(
   const setback = half * 0.62;
   const shoulder = body * 0.72;
 
-  drawBox(baker, originY, half, 0, shoulder, palette, shade(palette.roof, -12));
+  drawBox(baker, originY, half, 0, shoulder, palette, palette.roofShadow);
   drawWindows(baker, originY, half, 10, shoulder - 6, palette, 5, 3);
 
   drawBox(baker, originY, setback, shoulder, body, palette, palette.roof);
@@ -1261,14 +1271,14 @@ function drawUtility(
 ): void {
   const half = FOOTPRINT;
   // Low warehouse shed.
-  drawBox(baker, originY, half, 0, body * 0.6, palette, shade(palette.roof, -6));
+  drawBox(baker, originY, half, 0, body * 0.6, palette, palette.roofShadow);
 
   // Storage tank alongside it.
   const tankBase = body * 0.6;
   const tankTop = body + 18;
   fillFace(
     baker,
-    palette.roof,
+    palette.roofLight,
     1,
     [
       [-half * 0.5, half * 0.5, tankTop],
@@ -1281,7 +1291,7 @@ function drawUtility(
   );
   fillFace(
     baker,
-    shade(palette.roof, -20),
+    palette.roofShadow,
     1,
     [
       [half * 0.1, half * 0.5, tankTop],

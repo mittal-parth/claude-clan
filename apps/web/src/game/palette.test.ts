@@ -10,22 +10,45 @@ import {
 
 /** Mirrors the language table in packages/worldgen/src/index.ts. */
 const SCANNED_LANGUAGES = [
+  "Assembly",
+  "Astro",
+  "Batch",
   "C",
+  "C#",
   "C++",
   "CSS",
+  "Dart",
+  "Elixir",
+  "F#",
   "Go",
+  "GraphQL",
+  "Haskell",
   "HTML",
   "Java",
   "JavaScript",
   "JSON",
+  "Kotlin",
+  "Lua",
   "Markdown",
+  "Objective-C",
+  "PHP",
+  "PowerShell",
+  "Protocol Buffers",
   "Python",
+  "R",
+  "Ruby",
   "Rust",
   "SCSS",
+  "Scala",
   "Shell",
   "SQL",
+  "Svelte",
+  "Swift",
+  "Terraform",
+  "TOML",
   "TypeScript",
   "Vue",
+  "XML",
   "YAML",
 ];
 
@@ -66,7 +89,32 @@ describe("language palette", () => {
       expect(colorToCss(palette.accent)).toMatch(/^#[0-9a-f]{6}$/u);
     }
   });
-
+  it("derives distinct highlight and shadow tones for each language", () => {
+    for (const language of SCANNED_LANGUAGES) {
+      const palette = paletteFor(language);
+      const tones = [
+        palette.wall,
+        palette.wallLight,
+        palette.wallShadow,
+        palette.roof,
+        palette.roofLight,
+        palette.roofShadow,
+        palette.window,
+        palette.windowGlow,
+        palette.windowShadow,
+      ];
+      for (const tone of tones) {
+        expect(tone).toBeGreaterThanOrEqual(0);
+        expect(tone).toBeLessThanOrEqual(0xffffff);
+      }
+      expect(palette.wallLight).not.toBe(palette.wall);
+      expect(palette.wallShadow).not.toBe(palette.wall);
+      expect(palette.roofLight).not.toBe(palette.roof);
+      expect(palette.roofShadow).not.toBe(palette.roof);
+      expect(palette.windowGlow).not.toBe(palette.window);
+      expect(palette.windowShadow).not.toBe(palette.window);
+    }
+  });
 
   it("falls back rather than throwing on an unknown language", () => {
     expect(hasPalette("Brainfuck")).toBe(false);

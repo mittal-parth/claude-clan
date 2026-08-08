@@ -19,7 +19,7 @@ export type BuildingMaterial =
   | "painted"
   | "wood";
 
-export interface BuildingPalette {
+interface PaletteSeed {
   /** Main body of the building, in full sun. */
   wall: number;
   /** Roof plane — the dominant colour when looking down the isometric axis. */
@@ -40,6 +40,21 @@ export interface BuildingPalette {
   glyph: readonly string[];
   /** Material treatment that gives related file types different silhouettes/details. */
   material: BuildingMaterial;
+}
+
+export interface BuildingPalette extends PaletteSeed {
+  /** Lighter wall tone for sun-facing edges and facade highlights. */
+  wallLight: number;
+  /** Dedicated wall shadow instead of deriving every shade from one base tone. */
+  wallShadow: number;
+  /** Lighter roof tone for panel catches and roof badges. */
+  roofLight: number;
+  /** Dedicated roof shadow for stronger isometric separation. */
+  roofShadow: number;
+  /** Bright window glint used on the lit face. */
+  windowGlow: number;
+  /** Deep window tone for the shaded face. */
+  windowShadow: number;
 }
 
 export const TERRAIN_COLORS = {
@@ -71,7 +86,7 @@ export const PROP_COLORS = {
   fountainWater: 0x54b7ea,
 } as const;
 
-const FALLBACK: BuildingPalette = {
+const FALLBACK: PaletteSeed = {
   wall: 0xe6e2d6,
   roof: 0x9aa5b1,
   trim: 0x6f7a86,
@@ -84,7 +99,7 @@ const FALLBACK: BuildingPalette = {
   material: "concrete",
 };
 
-const PALETTES: Record<string, BuildingPalette> = {
+const PALETTES: Record<string, PaletteSeed> = {
   C: {
     wall: 0xe9e6df,
     roof: 0x6b7b99,
@@ -289,10 +304,315 @@ const PALETTES: Record<string, BuildingPalette> = {
     glyph: ["101", "010", "010"],
     material: "paper",
   },
+  Assembly: {
+    wall: 0xdce8d5,
+    roof: 0x5f8f52,
+    trim: 0x315b32,
+    window: 0xb7e5ae,
+    accent: 0x8fbd69,
+    accentDark: 0x315b32,
+    ink: 0x102611,
+    mark: "ASM",
+    glyph: ["111", "101", "111"],
+    material: "metal",
+  },
+  Astro: {
+    wall: 0xf3e9ff,
+    roof: 0xff5d01,
+    trim: 0xb83700,
+    window: 0xffc4a8,
+    accent: 0xff9b60,
+    accentDark: 0x7c2600,
+    ink: 0x301000,
+    mark: "A",
+    glyph: ["111", "101", "101"],
+    material: "neon",
+  },
+  Batch: {
+    wall: 0xf1e8dc,
+    roof: 0x7a4f2f,
+    trim: 0x4d2e1d,
+    window: 0xffd2a8,
+    accent: 0xb17a4c,
+    accentDark: 0x4d2e1d,
+    ink: 0x24150d,
+    mark: "BAT",
+    glyph: ["111", "100", "111"],
+    material: "painted",
+  },
+  "C#": {
+    wall: 0xf0e9ff,
+    roof: 0x68217a,
+    trim: 0x40145e,
+    window: 0xdcc7ff,
+    accent: 0xa26bd8,
+    accentDark: 0x40145e,
+    ink: 0x250c35,
+    mark: "C#",
+    glyph: ["111", "100", "111", "001", "111"],
+    material: "neon",
+  },
+  Dart: {
+    wall: 0xe0f3ff,
+    roof: 0x0175c2,
+    trim: 0x005a99,
+    window: 0xa9ddff,
+    accent: 0x3a9de2,
+    accentDark: 0x005a99,
+    ink: 0x062a43,
+    mark: "D",
+    glyph: ["110", "101", "110"],
+    material: "glass",
+  },
+  Elixir: {
+    wall: 0xf4e7fb,
+    roof: 0x4b275f,
+    trim: 0x2f173c,
+    window: 0xd9b6ef,
+    accent: 0xa66bd6,
+    accentDark: 0x4b275f,
+    ink: 0x1f0e2a,
+    mark: "EX",
+    glyph: ["111", "100", "111"],
+    material: "painted",
+  },
+  "F#": {
+    wall: 0xeaf1ff,
+    roof: 0x378bba,
+    trim: 0x255d80,
+    window: 0xb9e4ff,
+    accent: 0x6cc2e9,
+    accentDark: 0x255d80,
+    ink: 0x0b2430,
+    mark: "F#",
+    glyph: ["111", "100", "111", "100", "100"],
+    material: "glass",
+  },
+  GraphQL: {
+    wall: 0xfbe7f5,
+    roof: 0xe10098,
+    trim: 0x9b0068,
+    window: 0xffc4ea,
+    accent: 0xf35abb,
+    accentDark: 0x9b0068,
+    ink: 0x3d062c,
+    mark: "GQL",
+    glyph: ["101", "010", "101"],
+    material: "neon",
+  },
+  Haskell: {
+    wall: 0xf0e6fb,
+    roof: 0x5e5086,
+    trim: 0x3c315f,
+    window: 0xd3c9ff,
+    accent: 0x9d8df1,
+    accentDark: 0x3c315f,
+    ink: 0x1e1635,
+    mark: "HS",
+    glyph: ["111", "100", "111"],
+    material: "paper",
+  },
+  Kotlin: {
+    wall: 0xf9e6f2,
+    roof: 0x7f52ff,
+    trim: 0x5a2aa8,
+    window: 0xf8c1e9,
+    accent: 0xc26dff,
+    accentDark: 0x5a2aa8,
+    ink: 0x2c0d48,
+    mark: "KT",
+    glyph: ["101", "110", "101"],
+    material: "neon",
+  },
+  Lua: {
+    wall: 0xe6f4ff,
+    roof: 0x000080,
+    trim: 0x000052,
+    window: 0xb4ddff,
+    accent: 0x4c9cff,
+    accentDark: 0x000052,
+    ink: 0x07102f,
+    mark: "LUA",
+    glyph: ["100", "010", "001"],
+    material: "glass",
+  },
+  "Objective-C": {
+    wall: 0xf0e8e5,
+    roof: 0x6b4f48,
+    trim: 0x432e2a,
+    window: 0xffc8bf,
+    accent: 0xc06c5b,
+    accentDark: 0x432e2a,
+    ink: 0x2d1511,
+    mark: "OBJ",
+    glyph: ["111", "101", "111"],
+    material: "concrete",
+  },
+  PHP: {
+    wall: 0xe9eafa,
+    roof: 0x777bb4,
+    trim: 0x4f527d,
+    window: 0xc5c9ff,
+    accent: 0xa6a9e8,
+    accentDark: 0x4f527d,
+    ink: 0x20223d,
+    mark: "PHP",
+    glyph: ["111", "101", "111"],
+    material: "painted",
+  },
+  PowerShell: {
+    wall: 0xe3f2f9,
+    roof: 0x012456,
+    trim: 0x0067a8,
+    window: 0xb4e7ff,
+    accent: 0x2a9ed0,
+    accentDark: 0x012456,
+    ink: 0x071b36,
+    mark: "PS",
+    glyph: ["110", "101", "011"],
+    material: "metal",
+  },
+  "Protocol Buffers": {
+    wall: 0xe7f8ee,
+    roof: 0x4c9bd6,
+    trim: 0x27658e,
+    window: 0xbbe8d0,
+    accent: 0x62c794,
+    accentDark: 0x27658e,
+    ink: 0x0b3020,
+    mark: "PB",
+    glyph: ["111", "010", "111"],
+    material: "concrete",
+  },
+  R: {
+    wall: 0xe6f0fb,
+    roof: 0x276dc3,
+    trim: 0x1d4f8a,
+    window: 0xb7d8ff,
+    accent: 0x68a0e0,
+    accentDark: 0x1d4f8a,
+    ink: 0x0b2442,
+    mark: "R",
+    glyph: ["111", "101", "110"],
+    material: "glass",
+  },
+  Ruby: {
+    wall: 0xf9e5e6,
+    roof: 0xcc342d,
+    trim: 0x8c1f1a,
+    window: 0xffc4c2,
+    accent: 0xf0645b,
+    accentDark: 0x8c1f1a,
+    ink: 0x3c0c0a,
+    mark: "RB",
+    glyph: ["111", "101", "111"],
+    material: "brick",
+  },
+  Scala: {
+    wall: 0xf8e6e9,
+    roof: 0xdc322f,
+    trim: 0x8f1817,
+    window: 0xffc0bf,
+    accent: 0xf26a65,
+    accentDark: 0x8f1817,
+    ink: 0x3c0d0c,
+    mark: "SC",
+    glyph: ["111", "100", "111"],
+    material: "concrete",
+  },
+  Svelte: {
+    wall: 0xffede5,
+    roof: 0xff3e00,
+    trim: 0xb82b00,
+    window: 0xffc2a8,
+    accent: 0xff7951,
+    accentDark: 0xb82b00,
+    ink: 0x3b1004,
+    mark: "SV",
+    glyph: ["111", "100", "111"],
+    material: "neon",
+  },
+  Swift: {
+    wall: 0xfff0df,
+    roof: 0xf05138,
+    trim: 0xb52d1f,
+    window: 0xffd1b4,
+    accent: 0xff855e,
+    accentDark: 0xb52d1f,
+    ink: 0x42140d,
+    mark: "SW",
+    glyph: ["111", "100", "111"],
+    material: "painted",
+  },
+  Terraform: {
+    wall: 0xf1eafa,
+    roof: 0x7b42bc,
+    trim: 0x50247a,
+    window: 0xd8b9f4,
+    accent: 0xa879dc,
+    accentDark: 0x50247a,
+    ink: 0x24103b,
+    mark: "TF",
+    glyph: ["111", "010", "010"],
+    material: "concrete",
+  },
+  TOML: {
+    wall: 0xf0f5f7,
+    roof: 0x9c4221,
+    trim: 0x642614,
+    window: 0xcce4ea,
+    accent: 0xd2794b,
+    accentDark: 0x642614,
+    ink: 0x2c1209,
+    mark: "TM",
+    glyph: ["111", "010", "111"],
+    material: "paper",
+  },
+  XML: {
+    wall: 0xe3f6f4,
+    roof: 0x006f6b,
+    trim: 0x004541,
+    window: 0xb5e6e4,
+    accent: 0x36aaa4,
+    accentDark: 0x004541,
+    ink: 0x062b2a,
+    mark: "XML",
+    glyph: ["1001", "0110", "1001"],
+    material: "metal",
+  },
 };
 
+function mixColor(color: number, target: number, amount: number): number {
+  const red = (color >> 16) & 0xff;
+  const green = (color >> 8) & 0xff;
+  const blue = color & 0xff;
+  const targetRed = (target >> 16) & 0xff;
+  const targetGreen = (target >> 8) & 0xff;
+  const targetBlue = target & 0xff;
+  const mix = (from: number, to: number): number =>
+    Math.round(from + (to - from) * amount);
+
+  return (
+    (mix(red, targetRed) << 16) |
+    (mix(green, targetGreen) << 8) |
+    mix(blue, targetBlue)
+  );
+}
+
+function derivePalette(seed: PaletteSeed): BuildingPalette {
+  return {
+    ...seed,
+    wallLight: mixColor(seed.wall, 0xffffff, 0.18),
+    wallShadow: mixColor(seed.wall, 0x000000, 0.22),
+    roofLight: mixColor(seed.roof, 0xffffff, 0.2),
+    roofShadow: mixColor(seed.roof, 0x000000, 0.28),
+    windowGlow: mixColor(seed.window, 0xffffff, 0.2),
+    windowShadow: mixColor(seed.window, 0x000000, 0.28),
+  };
+}
+
 export function paletteFor(language: string): BuildingPalette {
-  return PALETTES[language] ?? FALLBACK;
+  return derivePalette(PALETTES[language] ?? FALLBACK);
 }
 
 export function hasPalette(language: string): boolean {
