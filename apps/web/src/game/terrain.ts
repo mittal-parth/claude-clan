@@ -17,11 +17,13 @@ export const OCEAN_RING = 12;
 export const OUTER_RING = COUNTRYSIDE_RING + COAST_RING + OCEAN_RING;
 
 /**
- * Roads every 4 lanes. Free lanes inside a district sit at even offsets and
- * buildings at odd ones, so a stride of 4 lays a street, leaves two building
- * columns and the park lane between them, and can never collide with a plot.
+ * Streets every 6 lanes. Free lanes inside a district sit at even offsets and
+ * buildings at odd ones, so an even stride always lands on a free lane and can
+ * never collide with a plot. Six leaves a five-wide block — three building
+ * columns and the greenery between them — where four made the city read as
+ * mostly road.
  */
-export const BLOCK_STRIDE = 4;
+export const BLOCK_STRIDE = 6;
 
 export type TerrainKind = "water" | "sand" | "grass" | "ground" | "road" | "park";
 

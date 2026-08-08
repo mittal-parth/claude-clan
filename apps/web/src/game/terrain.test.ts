@@ -108,22 +108,33 @@ describe("terrain bounds", () => {
 });
 
 describe("street grid", () => {
-  it("puts a street on every fourth lane from the district origin", () => {
-    const district = { path: "src", x: 0, y: 0, width: 8, height: 16, weight: 1 };
+  it("puts a street on every BLOCK_STRIDE-th lane from the district origin", () => {
+    const district = { path: "src", x: 0, y: 0, width: 24, height: 24, weight: 1 };
 
-    expect(isRoadLane(district, 0, 5)).toBe(true);
-    expect(isRoadLane(district, 4, 5)).toBe(true);
-    expect(isRoadLane(district, 5, 4)).toBe(true);
-    expect(isRoadLane(district, 5, 5)).toBe(false);
-    expect(isRoadLane(district, 6, 6)).toBe(false);
+    expect(isRoadLane(district, 0, 1)).toBe(true);
+    expect(isRoadLane(district, BLOCK_STRIDE, 1)).toBe(true);
+    expect(isRoadLane(district, 1, BLOCK_STRIDE)).toBe(true);
+    expect(isRoadLane(district, 1, 1)).toBe(false);
+    expect(isRoadLane(district, BLOCK_STRIDE - 1, BLOCK_STRIDE - 1)).toBe(false);
   });
 
   it("offsets the lane grid to each district's own origin", () => {
-    const district = { path: "test", x: 8, y: 0, width: 8, height: 16, weight: 1 };
+    const district = { path: "test", x: 8, y: 0, width: 24, height: 24, weight: 1 };
 
     expect(isRoadLane(district, 8, 1)).toBe(true);
-    expect(isRoadLane(district, 12, 1)).toBe(true);
+    expect(isRoadLane(district, 8 + BLOCK_STRIDE, 1)).toBe(true);
     expect(isRoadLane(district, 9, 1)).toBe(false);
+  });
+
+  it("never puts a street on an odd lane, where plots live", () => {
+    const district = { path: "src", x: 0, y: 0, width: 24, height: 24, weight: 1 };
+
+    // findPlotInDistrict starts at ceil(x)+1 and steps 2, so plots are odd.
+    for (let x = 1; x < 24; x += 2) {
+      for (let y = 1; y < 24; y += 2) {
+        expect(isRoadLane(district, x, y)).toBe(false);
+      }
+    }
   });
 
   it("never places a street on an occupied plot", () => {
@@ -153,9 +164,10 @@ describe("street grid", () => {
 
   it("meets at a crossroads where two streets intersect", () => {
     const grid = buildTerrain(snapshot());
+    const junction = grid.cellAt(BLOCK_STRIDE, BLOCK_STRIDE);
 
-    expect(grid.cellAt(4, 4)?.kind).toBe("road");
-    expect(grid.cellAt(4, 4)?.roadMask).toBe(
+    expect(junction?.kind).toBe("road");
+    expect(junction?.roadMask).toBe(
       ROAD_NORTH | ROAD_EAST | ROAD_SOUTH | ROAD_WEST,
     );
   });
