@@ -1,6 +1,6 @@
 import type { SourceFile, WorldMap } from "@sudo-city/protocol";
 import { describe, expect, it } from "vitest";
-import { layoutWorld } from "../src/index.js";
+import { fieldSizeFor, layoutWorld } from "../src/index.js";
 
 const baseFile: Omit<SourceFile, "path" | "directory" | "loc"> = {
   language: "TypeScript",
@@ -66,13 +66,19 @@ describe("snapshot geometry", () => {
   ]);
 
   it("publishes the world size the plots were allocated against", () => {
-    expect(layoutWorld(map).snapshot.size).toEqual({ width: 64, height: 64 });
+    const side = fieldSizeFor(map.files.length);
+
+    expect(layoutWorld(map).snapshot.size).toEqual({
+      width: side,
+      height: side,
+    });
     expect(
       layoutWorld(map, { width: 32, height: 24 }).snapshot.size,
     ).toEqual({ width: 32, height: 24 });
   });
 
   it("publishes one district per directory, covering the field exactly", () => {
+    const side = fieldSizeFor(map.files.length);
     const { districts } = layoutWorld(map).snapshot;
 
     expect(districts.map((district) => district.path).sort()).toEqual([
@@ -85,10 +91,10 @@ describe("snapshot geometry", () => {
         (total, district) => total + district.width * district.height,
         0,
       ),
-    ).toBeCloseTo(64 * 64, 6);
+    ).toBeCloseTo(side * side, 6);
     for (const district of districts) {
-      expect(district.x + district.width).toBeLessThanOrEqual(64 + 1e-9);
-      expect(district.y + district.height).toBeLessThanOrEqual(64 + 1e-9);
+      expect(district.x + district.width).toBeLessThanOrEqual(side + 1e-9);
+      expect(district.y + district.height).toBeLessThanOrEqual(side + 1e-9);
     }
   });
 
@@ -114,6 +120,57 @@ describe("snapshot geometry", () => {
       expect(building.plot.y).toBeLessThanOrEqual(
         Math.ceil(district.y + district.height),
       );
+    }
+  });
+
+  it("keeps every plot inside the published field", () => {
+    const { size, buildings } = layoutWorld(map).snapshot;
+
+    for (const building of buildings) {
+      expect(building.plot.x).toBeLessThan(size.width);
+      expect(building.plot.y).toBeLessThan(size.height);
+    }
+  });
+
+  it("keeps plots inside the field when many small districts fragment it", () => {
+    // The shape that broke it: lots of directories, each holding a few files,
+    // so districts are too small to seat their own files and overflow.
+    const files: SourceFile[] = [];
+    for (let directory = 0; directory < 30; directory += 1) {
+      for (let index = 0; index < 3; index += 1) {
+        files.push(
+          file(`pkg${directory}/file${index}.ts`, `pkg${directory}`, 20 + index),
+        );
+      }
+    }
+    const { size, buildings } = layoutWorld(world("fragmented", files)).snapshot;
+
+    expect(buildings).toHaveLength(90);
+    const escaped = buildings.filter(
+      (building) =>
+        building.plot.x >= size.width || building.plot.y >= size.height,
+    );
+    expect(escaped).toEqual([]);
+  });
+
+  it("reallocates persisted plots that fall outside a shrunken field", () => {
+    const stranded = layoutWorld(map, {
+      previousPlots: { "src/index.ts": { x: 500, y: 500 } },
+    });
+
+    expect(stranded.plots["src/index.ts"]).not.toEqual({ x: 500, y: 500 });
+    expect(stranded.plots["src/index.ts"]?.x).toBeLessThan(
+      stranded.snapshot.size.width,
+    );
+  });
+
+  it("scales the field to the repository", () => {
+    expect(fieldSizeFor(1)).toBe(12);
+    expect(fieldSizeFor(85)).toBeLessThan(32);
+    expect(fieldSizeFor(2_000)).toBeGreaterThan(fieldSizeFor(200));
+    // Even sizes keep district origins aligned with the odd-lane plot grid.
+    for (const count of [1, 9, 85, 400, 2_000]) {
+      expect(fieldSizeFor(count) % 2).toBe(0);
     }
   });
 

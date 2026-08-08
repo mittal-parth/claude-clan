@@ -27,14 +27,30 @@ interface WeightedDistrict {
   weight: number;
 }
 
-const DEFAULT_SIZE = 64;
+const MIN_SIZE = 12;
+
+/**
+ * Plots sit on odd lanes with a stride of 2, so a file needs about four cells.
+ * The multiplier is well above 2 because every district loses its border lanes
+ * to the inset in findPlotInDistrict, and a repository with many small
+ * directories fragments the field badly.
+ *
+ * Sizing to the repository keeps a small project from rattling around inside an
+ * empty grid, and a large one from overflowing it.
+ */
+export function fieldSizeFor(fileCount: number): number {
+  const side = Math.ceil(Math.sqrt(Math.max(fileCount, 1)) * 3.2);
+  // Even sizes keep district origins aligned with the odd-lane plot grid.
+  return Math.max(MIN_SIZE, side + (side % 2));
+}
 
 export function layoutWorld(
   world: WorldMap,
   options: LayoutOptions = {},
 ): LayoutResult {
-  const width = options.width ?? DEFAULT_SIZE;
-  const height = options.height ?? DEFAULT_SIZE;
+  const size = fieldSizeFor(world.files.length);
+  const width = options.width ?? size;
+  const height = options.height ?? size;
   const districts = squarify(
     districtWeights(world),
     { path: "", x: 0, y: 0, width, height, weight: width * height },
@@ -44,7 +60,14 @@ export function layoutWorld(
 
   for (const file of world.files) {
     const persisted = options.previousPlots?.[file.path];
-    if (persisted && !occupied.has(plotKey(persisted))) {
+    // A plot from a larger field would sit outside the city; reallocate it
+    // rather than leaving a building stranded off the ground plane.
+    if (
+      persisted &&
+      persisted.x < width &&
+      persisted.y < height &&
+      !occupied.has(plotKey(persisted))
+    ) {
       plots[file.path] = persisted;
       occupied.add(plotKey(persisted));
     }
@@ -61,8 +84,8 @@ export function layoutWorld(
     }
     const district = districtByPath.get(file.directory);
     const plot =
-      (district && findPlotInDistrict(district, occupied)) ??
-      findGlobalPlot(occupied);
+      (district && findPlotInDistrict(district, occupied, width, height)) ??
+      findGlobalPlot(occupied, width, height);
     plots[file.path] = plot;
     occupied.add(plotKey(plot));
   }
@@ -212,14 +235,29 @@ function placeRow(
       };
 }
 
+/**
+ * Plots sit one lane inside the district edge and step 2, leaving the even
+ * lanes free for the renderer's street grid. A district too thin to hold a lane
+ * yields nothing and the caller falls back to the field-wide search — clamping
+ * here rather than widening the range is what keeps slivers from placing a
+ * building outside the world.
+ */
 function findPlotInDistrict(
   district: DistrictRect,
   occupied: Set<string>,
+  width: number,
+  height: number,
 ): Plot | undefined {
   const startX = Math.max(0, Math.ceil(district.x) + 1);
   const startY = Math.max(0, Math.ceil(district.y) + 1);
-  const endX = Math.max(startX, Math.floor(district.x + district.width) - 1);
-  const endY = Math.max(startY, Math.floor(district.y + district.height) - 1);
+  const endX = Math.min(
+    width - 1,
+    Math.floor(district.x + district.width) - 1,
+  );
+  const endY = Math.min(
+    height - 1,
+    Math.floor(district.y + district.height) - 1,
+  );
 
   for (let y = startY; y <= endY; y += 2) {
     for (let x = startX; x <= endX; x += 2) {
@@ -232,10 +270,28 @@ function findPlotInDistrict(
   return undefined;
 }
 
-function findGlobalPlot(occupied: Set<string>): Plot {
+/**
+ * Overflow allocation for a file whose district is full. Stays inside the field
+ * so the building lands on city ground rather than floating out in the
+ * countryside; only a genuinely full field spills past the edge.
+ */
+function findGlobalPlot(
+  occupied: Set<string>,
+  width: number,
+  height: number,
+): Plot {
+  for (let y = 1; y < height; y += 2) {
+    for (let x = 1; x < width; x += 2) {
+      const plot = { x, y };
+      if (!occupied.has(plotKey(plot))) {
+        return plot;
+      }
+    }
+  }
+
   for (let radius = 0; radius < 10_000; radius += 1) {
     for (let x = 0; x <= radius; x += 1) {
-      const plot = { x: x * 2, y: (radius - x) * 2 };
+      const plot = { x: x * 2 + 1, y: (radius - x) * 2 + 1 };
       if (!occupied.has(plotKey(plot))) {
         return plot;
       }
