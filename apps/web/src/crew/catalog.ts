@@ -1,6 +1,6 @@
 import type { EffortLevel } from "@sudo-city/protocol";
 
-export type CrewId = "opus" | "sonnet";
+export type CrewId = "opus" | "sonnet" | "haiku";
 
 export interface CrewMember {
   id: CrewId;
@@ -8,7 +8,6 @@ export interface CrewMember {
   name: string;
   title: string;
   description: string;
-  spriteFolder: "architect" | "worker";
 }
 
 export const EFFORT_LEVELS = [
@@ -30,7 +29,6 @@ export const CREW_MEMBERS: readonly CrewMember[] = [
     title: "Master planner",
     description:
       "Deep reasoning for complex refactors, architecture, and long-horizon builds.",
-    spriteFolder: "architect",
   },
   {
     id: "sonnet",
@@ -39,7 +37,14 @@ export const CREW_MEMBERS: readonly CrewMember[] = [
     title: "Site foreman",
     description:
       "Balanced crew for everyday edits, fixes, and steady construction.",
-    spriteFolder: "worker",
+  },
+  {
+    id: "haiku",
+    model: "haiku",
+    name: "Runner",
+    title: "Quick hands",
+    description:
+      "Fast passes for small edits, renames, and errands around the city.",
   },
 ] as const;
 
@@ -51,12 +56,19 @@ export function getCrewMember(id: CrewId): CrewMember {
   return member;
 }
 
+/**
+ * Public URL of a crew portrait, keyed by model family and effort.
+ *
+ * The files are named for the family rather than the character's job title so
+ * the artwork stays matched to the model the session actually reports — the
+ * catalog is free to rename the Architect without the file moving.
+ */
 export function crewSpriteUrl(
   crewId: CrewId,
   effort: EffortLevel = DEFAULT_EFFORT,
 ): string {
   const member = getCrewMember(crewId);
-  return `/crew/${member.spriteFolder}/${effort}.png`;
+  return `/crew/${member.id}-${effort}.png`;
 }
 
 export function effortLabel(effort: EffortLevel): string {

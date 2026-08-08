@@ -737,6 +737,7 @@ export default function App() {
                 world={world}
                 fileChange={fileChange}
                 buildingPaths={buildingPaths}
+                crewSprite={crewAvatarSrc}
                 onSelectBuilding={setSelected}
                 onBuildingDragStart={handleBuildingDragStart}
                 onBuildingDragMove={handleBuildingDragMove}

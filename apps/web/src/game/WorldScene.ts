@@ -78,6 +78,8 @@ export class WorldScene extends Phaser.Scene {
   private buildingPaths: string[] = [];
   /** Paths that already have a site, so only genuinely new ones grab the camera. */
   private sitedPaths = new Set<string>();
+  /** Public URL of the crew portrait currently on shift, loaded or loading. */
+  private crewUrl?: string;
   private lastCameraInputAt = Number.NEGATIVE_INFINITY;
 
   private highlight?: Phaser.GameObjects.Sprite;
@@ -125,6 +127,8 @@ export class WorldScene extends Phaser.Scene {
       sky: SKY_DEPTH,
     });
     this.construction = new ConstructionSites(this, prefersReducedMotion());
+    // A portrait asked for before the scene booted has been waiting for this.
+    this.loadCrewSprite(this.crewUrl);
     this.bindCamera();
     this.events.once("shutdown", () => this.clearDragPreview());
   }
@@ -140,6 +144,52 @@ export class WorldScene extends Phaser.Scene {
   setBuildingPaths(paths: string[]): void {
     this.buildingPaths = paths;
     this.syncConstruction();
+  }
+
+  /**
+   * The crew portrait to stand on every site, by public URL.
+   *
+   * Loaded on demand rather than in preload: which portrait is wanted depends
+   * on the crew and effort picked for a session that has not started when the
+   * scene boots, and only one of them is ever needed.
+   */
+  setCrewSprite(url?: string): void {
+    if (url === this.crewUrl) {
+      return;
+    }
+
+    this.crewUrl = url;
+
+    // React hands the portrait over as soon as the canvas mounts, which is
+    // before Phaser has booted the scene — at that point `load`, `textures`
+    // and `scene` itself are all still undefined. `construction` is built in
+    // create(), so it doubles as the "are we up yet" flag; create() reads the
+    // url back once there is a loader to service it.
+    if (this.construction) {
+      this.loadCrewSprite(url);
+    }
+  }
+
+  private loadCrewSprite(url?: string): void {
+    if (!url) {
+      this.construction?.setCrewTexture(undefined);
+      return;
+    }
+
+    const key = `crew:${url}`;
+    if (this.textures.exists(key)) {
+      this.construction?.setCrewTexture(key);
+      return;
+    }
+
+    this.load.image(key, url);
+    this.load.once(Phaser.Loader.Events.COMPLETE, () => {
+      // A second portrait may have been asked for while this one loaded.
+      if (this.crewUrl === url && this.textures.exists(key)) {
+        this.construction?.setCrewTexture(key);
+      }
+    });
+    this.load.start();
   }
 
   private syncConstruction(): void {
