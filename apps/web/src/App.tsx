@@ -72,6 +72,43 @@ const maxBudgetUsd = Number(import.meta.env.VITE_MAX_BUDGET_USD ?? 1);
  */
 const RESCAN_DEBOUNCE_MS = 1_200;
 
+/** Basename of a repo path → title case words (claude-clan → Claude Clan). */
+function titleFromRepoPath(repoPath: string): string {
+  const base =
+    repoPath.split(/[/\\]/).filter(Boolean).at(-1)?.replace(/[-_]+/g, " ").trim() ??
+    "";
+  if (!base) {
+    return "City";
+  }
+  return base.replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+/** Header brand: `{Repo Name} City`, without doubling a trailing City. */
+function cityNameFromRepo(repoPath: string | undefined): string {
+  if (!repoPath) {
+    return "City";
+  }
+  const titled = titleFromRepoPath(repoPath);
+  if (/\bcity$/i.test(titled)) {
+    return titled;
+  }
+  return `${titled} City`;
+}
+
+function markFromCityName(cityName: string): string {
+  const words = cityName
+    .replace(/\s+City$/i, "")
+    .split(/\s+/)
+    .filter(Boolean);
+  if (words.length === 0) {
+    return "??";
+  }
+  if (words.length === 1) {
+    return words[0].slice(0, 2).toUpperCase();
+  }
+  return `${words[0][0] ?? ""}${words[1][0] ?? ""}`.toUpperCase();
+}
+
 /**
  * How long a site stands after the work on it actually finishes.
  *
@@ -559,6 +596,8 @@ export default function App() {
       dragPosition &&
       pointIsInside(orderFormRef.current, dragPosition),
   );
+  const cityName = cityNameFromRepo(world?.repoPath);
+  const cityMark = markFromCityName(cityName);
 
   useEffect(() => {
     const socket = new WebSocket(websocketUrl);
@@ -725,10 +764,10 @@ export default function App() {
       <header className="flex items-center justify-between border-b-4 border-foreground px-4 py-3 dark:border-ring">
         <div className="flex min-w-0 items-center gap-3">
           <span className="retro flex size-9 shrink-0 items-center justify-center border-2 border-foreground bg-primary text-xs text-primary-foreground dark:border-ring">
-            SC
+            {cityMark}
           </span>
           <div className="min-w-0">
-            <h1 className="retro truncate text-sm md:text-base">Sudo City</h1>
+            <h1 className="retro truncate text-sm md:text-base">{cityName}</h1>
             <p className="retro text-[10px] text-muted-foreground">
               Local repository · mayor console
             </p>
