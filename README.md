@@ -1,4 +1,4 @@
-# sudo-city
+# Claude City
 
 Turn a codebase into an isometric city, then run it as the mayor: type a
 command, a Claude agent crew picks it up, and the city reacts live — cranes
@@ -10,6 +10,48 @@ tracks what the crew is doing.
 - **Streets and traffic** are derived from import edges between files.
 - **The crew** is one or more Claude Agent SDK sessions, driven by mayor
   commands typed in the HUD.
+
+![The city, with the mayor console, city scan and mayor's order floating over it](docs/screenshots/city.png)
+
+## In the city
+
+The world fills the viewport and every panel is a floating HUD window you can
+collapse; the layout is remembered between sessions.
+
+- **Mayor's order** — type what the crew should build, then `DISPATCH` (or
+  `HALT` to interrupt). Permissions are per order: `ASK MAYOR` pauses on every
+  tool call for your approval, `DON'T DISTURB` lets the crew work unattended.
+  Buildings can be dragged into the order as context paths.
+- **Mayor console** — the crew on duty, a context stamina meter, the treasury
+  against the session budget, permits waiting for a `STAMP` or `DENY`, and the
+  transmissions log of the crew's transcript.
+- **City scan** — how many structures are mapped, broken down by language.
+- **Command palette** (`⌘K` / `Ctrl+K`) — fuzzy-search files; picking one flies
+  the camera to its building.
+- **Inspector** — click a building for the file behind it: path, line count and
+  type.
+
+While the crew works, construction sites raise cranes over the files being
+edited and the crew sprite stands on site; the camera flies to the work.
+
+### Choosing a crew
+
+Pick a specialist and how hard they should think before dispatching. Each of the
+three has its own portrait per thinking level.
+
+![The crew picker, with Architect, Worker and Runner and a thinking level selector](docs/screenshots/crew-picker.png)
+
+| Crew | Model | Good for |
+| --- | --- | --- |
+| Architect | Opus | Complex refactors, architecture, long-horizon builds. |
+| Worker | Sonnet | Everyday edits, fixes, steady construction. |
+| Runner | Haiku | Small edits, renames, errands around the city. |
+
+Thinking level runs `LOW` → `MEDIUM` → `HIGH` → `EXTRA HIGH` → `MAX`.
+
+### Inspecting a building
+
+![A building selected up close, with the inspector showing its path, line count and type](docs/screenshots/inspector.png)
 
 ## How it works
 
@@ -45,10 +87,17 @@ pnpm --filter @sudo-city/cli start -- ../some-other-repo
 ```
 
 The web app defaults to `http://127.0.0.1:5173` and connects to the server's
-WebSocket at `ws://127.0.0.1:4100/ws` (override with `VITE_WS_URL`). The
-server listens on `HOST`/`PORT` (defaults `127.0.0.1:4100`) and reads the
-target repository from `SUDO_CITY_REPO` (defaults to the current working
-directory).
+WebSocket at `ws://127.0.0.1:4100/ws` (override with `VITE_WS_URL`).
+
+| Env var | Default | What it does |
+| --- | --- | --- |
+| `HOST` / `PORT` | `127.0.0.1` / `4100` | Server bind address. |
+| `SUDO_CITY_REPO` | current working directory | Repository to turn into a city. |
+| `SUDO_CITY_MAX_BUDGET_USD` | `1` | Spend ceiling for a session. |
+| `ANTHROPIC_API_KEY` | — | Falls back to a local Claude Code login if unset. |
+| `VITE_WS_URL` | `ws://127.0.0.1:4100/ws` | WebSocket the web app connects to. |
+
+World state is persisted to `.sudocity/world.db` inside the target repository.
 
 ## Development
 
