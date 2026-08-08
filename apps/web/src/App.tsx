@@ -1,5 +1,6 @@
 import {
   ServerMessageSchema,
+  type Building,
   type GameEvent,
   type MayorCommand,
   type WorldSnapshot,
@@ -30,13 +31,22 @@ import {
   ResizablePanel,
   ResizablePanelGroup,
 } from "@/components/ui/8bit/resizable";
-import { GameCanvas } from "./components/GameCanvas";
+import {
+  GameCanvas,
+  type CanvasFileChange,
+} from "./components/GameCanvas";
 
 type ConnectionState = "connecting" | "online" | "offline";
 
 const websocketUrl =
   import.meta.env.VITE_WS_URL ?? "ws://127.0.0.1:4100/ws";
 const maxBudgetUsd = Number(import.meta.env.VITE_MAX_BUDGET_USD ?? 1);
+
+/**
+ * How long to wait for an edit burst to settle before asking the server to
+ * rescan. The agent usually writes several files in a row.
+ */
+const RESCAN_DEBOUNCE_MS = 1_200;
 
 function statusLabel(status: ConnectionState): string {
   switch (status) {
@@ -383,6 +393,8 @@ export default function App() {
   const [prompt, setPrompt] = useState("");
   const [commandOpen, setCommandOpen] = useState(false);
   const [world, setWorld] = useState<WorldSnapshot>();
+  const [fileChange, setFileChange] = useState<CanvasFileChange>();
+  const [selected, setSelected] = useState<Building>();
   const pendingPermit = findPendingPermit(events);
   const usage = events
     .slice()
@@ -406,6 +418,20 @@ export default function App() {
   useEffect(() => {
     const socket = new WebSocket(websocketUrl);
     socketRef.current = socket;
+    let rescanTimer: ReturnType<typeof setTimeout> | undefined;
+
+    // The agent edits in bursts; one rescan after the burst settles is enough,
+    // and the scene diffs the result so standing buildings do not flicker.
+    const scheduleRescan = (): void => {
+      clearTimeout(rescanTimer);
+      rescanTimer = setTimeout(() => {
+        if (socket.readyState === WebSocket.OPEN) {
+          socket.send(
+            JSON.stringify({ type: "world.request" } satisfies MayorCommand),
+          );
+        }
+      }, RESCAN_DEBOUNCE_MS);
+    };
 
     socket.addEventListener("open", () => setConnection("online"));
     socket.addEventListener("close", () => setConnection("offline"));
@@ -423,9 +449,18 @@ export default function App() {
       if (event.type === "world.ready") {
         setWorld(event.snapshot);
       }
+      if (event.type === "file.changed") {
+        setFileChange({
+          id: event.id,
+          path: event.path,
+          change: event.change,
+        });
+        scheduleRescan();
+      }
     });
 
     return () => {
+      clearTimeout(rescanTimer);
       socket.close();
       socketRef.current = null;
     };
@@ -484,7 +519,11 @@ export default function App() {
         <ResizablePanel defaultSize={72} minSize={45}>
           <div className="flex h-full min-h-0 flex-col">
             <section className="relative min-h-0 flex-1 overflow-hidden">
-              <GameCanvas world={world} />
+              <GameCanvas
+                world={world}
+                fileChange={fileChange}
+                onSelectBuilding={setSelected}
+              />
               <div className="pointer-events-none absolute left-4 top-4 border-2 border-foreground bg-card px-3 py-2 dark:border-ring">
                 <span className="retro block text-[10px] text-primary">
                   District survey
@@ -493,9 +532,41 @@ export default function App() {
                   {world?.buildings.length ?? 0} structures mapped
                 </strong>
               </div>
+
+              {selected ? (
+                <div className="absolute bottom-4 left-4 max-w-[min(22rem,calc(100%-2rem))] border-2 border-foreground bg-card px-3 py-2 dark:border-ring">
+                  <div className="flex items-start justify-between gap-3">
+                    <span className="retro block text-[10px] text-primary">
+                      {selected.district}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setSelected(undefined)}
+                      aria-label="Close structure details"
+                      className="retro shrink-0 text-[10px] text-muted-foreground hover:text-foreground"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                  <p className="retro mt-1 break-all text-xs">{selected.path}</p>
+                  <dl className="retro mt-2 flex gap-4 text-[10px] text-muted-foreground">
+                    <div>
+                      <dt className="inline">Language </dt>
+                      <dd className="inline text-foreground">
+                        {selected.language}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt className="inline">Lines </dt>
+                      <dd className="inline text-foreground">{selected.loc}</dd>
+                    </div>
+                  </dl>
+                </div>
+              ) : null}
+
               <div className="pointer-events-none absolute bottom-4 right-4 border border-border bg-card/90 px-2 py-1">
                 <span className="retro text-[8px] text-muted-foreground">
-                  Drag to pan · Scroll to zoom
+                  Drag to pan · Scroll to zoom · Click a building
                 </span>
               </div>
             </section>

@@ -13,6 +13,22 @@ export const BuildingSchema = z.object({
   plot: PlotSchema,
 });
 
+// Treemap output: root-level files live in a district whose path is "", and
+// squarify divides the field by area so the rectangles are fractional.
+export const DistrictRectSchema = z.object({
+  path: z.string(),
+  x: z.number().nonnegative(),
+  y: z.number().nonnegative(),
+  width: z.number().nonnegative(),
+  height: z.number().nonnegative(),
+  weight: z.number().nonnegative(),
+});
+
+export const WorldSizeSchema = z.object({
+  width: z.number().int().positive(),
+  height: z.number().int().positive(),
+});
+
 export const SourceFileSchema = z.object({
   path: z.string().min(1),
   directory: z.string(),
@@ -49,6 +65,8 @@ export const WorldSnapshotSchema = z.object({
   repoPath: z.string().min(1),
   revision: z.string().min(1),
   generatedAt: z.string().datetime(),
+  size: WorldSizeSchema,
+  districts: z.array(DistrictRectSchema),
   buildings: z.array(BuildingSchema),
 });
 
@@ -158,6 +176,7 @@ export const ServerMessageSchema = z.discriminatedUnion("kind", [
 ]);
 
 export type Building = z.infer<typeof BuildingSchema>;
+export type DistrictRect = z.infer<typeof DistrictRectSchema>;
 export type ExternalDependency = z.infer<typeof ExternalDependencySchema>;
 export type GameEvent = z.infer<typeof GameEventSchema>;
 export type ImportEdge = z.infer<typeof ImportEdgeSchema>;
@@ -166,4 +185,5 @@ export type Plot = z.infer<typeof PlotSchema>;
 export type ServerMessage = z.infer<typeof ServerMessageSchema>;
 export type SourceFile = z.infer<typeof SourceFileSchema>;
 export type WorldMap = z.infer<typeof WorldMapSchema>;
+export type WorldSize = z.infer<typeof WorldSizeSchema>;
 export type WorldSnapshot = z.infer<typeof WorldSnapshotSchema>;

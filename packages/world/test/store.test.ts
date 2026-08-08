@@ -36,14 +36,35 @@ describe("SQLiteWorldStore", () => {
       repoPath: "/tmp/repo",
       revision: "one",
       generatedAt: "2026-08-08T00:00:00.000Z",
-      buildings: [],
+      size: { width: 12, height: 12 },
+      districts: [
+        { path: "", x: 0, y: 0, width: 5.5, height: 12, weight: 40 },
+        { path: "src", x: 5.5, y: 0, width: 6.5, height: 12, weight: 60 },
+      ],
+      buildings: [
+        {
+          path: "src/index.ts",
+          district: "src",
+          language: "TypeScript",
+          loc: 60,
+          plot: { x: 7, y: 1 },
+        },
+      ],
     };
 
     store.appendEvent(event);
     store.saveSnapshot(snapshot);
 
     expect(store.readEvents("session_1")).toEqual([event]);
-    expect(store.loadLatestSnapshot()).toEqual(snapshot);
+
+    const loaded = store.loadLatestSnapshot();
+    expect(loaded).toEqual(snapshot);
+    // Geometry travels through SQLite intact, fractional rects and all.
+    expect(loaded?.size).toEqual({ width: 12, height: 12 });
+    expect(loaded?.districts).toHaveLength(2);
+    expect(loaded?.districts[0]?.path).toBe("");
+    expect(loaded?.districts[1]?.width).toBeCloseTo(6.5, 10);
+    expect(loaded?.buildings[0]?.plot).toEqual({ x: 7, y: 1 });
     store.close();
   });
 
