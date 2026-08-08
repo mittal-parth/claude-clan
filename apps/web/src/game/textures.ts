@@ -148,6 +148,10 @@ export function propTextureKey(prop: PropKind): string {
 
 export const HIGHLIGHT_KEY = "tile:highlight";
 export const SELECT_KEY = "tile:select";
+/** Ring marking a building added by the PR city's diff. */
+export const ADDED_MARKER_KEY = "fx:added";
+/** Stands in for a building deleted by the PR, at its plot in main. */
+export const RUBBLE_KEY = "fx:rubble";
 export const CLOUD_KEY = "fx:cloud";
 export const SMOKE_KEY = "fx:smoke";
 export const SPARKLE_KEY = "fx:sparkle";
@@ -160,6 +164,9 @@ export const SCAFFOLD_KEY = "fx:scaffold";
 
 /** Height of the baked scaffold, which is scaled to the building it wraps. */
 export const SCAFFOLD_HEIGHT = 120;
+
+/** The harbor marker for a PR city, moored offshore of the main island. */
+export const SHIP_KEY = "fx:ship";
 
 const GRASS_VARIANTS = TERRAIN_COLORS.grass.length;
 const PARK_VARIANTS = 2;
@@ -184,8 +191,20 @@ export const TERRAIN_VARIANT_COUNTS: Record<TerrainKind, number> = {
 export const TERRAIN_ATLAS_KEY = "terrain-atlas";
 const ATLAS_COLUMNS = 8;
 
-/** Bakes every terrain tile, prop and effect sprite. Call once, in create(). */
+/**
+ * Bakes every terrain tile, prop and effect sprite. Call once, in create().
+ *
+ * Textures live on the Game's TextureManager, not the Scene, so they are
+ * shared across every scene in the game -- baking is genuinely a one-time
+ * cost. Without this guard, a second scene's create() would remove and
+ * regenerate the same texture keys out from under the first scene's still-
+ * live sprites, which reference their Texture by key.
+ */
 export function bakeTerrainTextures(scene: Phaser.Scene): void {
+  if (scene.textures.exists(TERRAIN_ATLAS_KEY)) {
+    return;
+  }
+
   const baker = createBaker(scene);
 
   bakeTerrainAtlas(scene, baker);
@@ -193,6 +212,8 @@ export function bakeTerrainTextures(scene: Phaser.Scene): void {
 
   bakeHighlight(baker, HIGHLIGHT_KEY, 0xffffff, 0.28);
   bakeHighlight(baker, SELECT_KEY, 0xffd166, 0.5);
+  bakeHighlight(baker, ADDED_MARKER_KEY, 0xffb454, 0.65);
+  bakeRubble(baker);
 
   bakeTree(baker);
   bakePine(baker);
@@ -204,6 +225,7 @@ export function bakeTerrainTextures(scene: Phaser.Scene): void {
   bakeSmoke(baker);
   bakeSparkle(baker);
   CAR_KEYS.forEach((key, index) => bakeCar(baker, key, index));
+  bakeShip(baker);
 
   bakeCrane(baker);
   bakeHook(baker);
@@ -497,6 +519,33 @@ function bakeRock(baker: Baker): void {
   baker.finish(propTextureKey("rock"), TILE_WIDTH, PROP_HEIGHT);
 }
 
+function bakeRubble(baker: Baker): void {
+  propShadow(baker, 0.22);
+  const base = baker.at([0, 0, 0], HALF_W, PROP_ORIGIN_Y);
+  baker.graphics.fillStyle(0x8a7c6a, 1);
+  baker.graphics.fillTriangle(
+    base.x - 13,
+    base.y,
+    base.x + 5,
+    base.y,
+    base.x - 5,
+    base.y - 11,
+  );
+  baker.graphics.fillStyle(0x6f6455, 1);
+  baker.graphics.fillTriangle(
+    base.x - 3,
+    base.y,
+    base.x + 15,
+    base.y,
+    base.x + 7,
+    base.y - 9,
+  );
+  baker.graphics.fillStyle(0xa89a86, 1);
+  baker.graphics.fillRect(base.x - 9, base.y - 5, 6, 5);
+
+  baker.finish(RUBBLE_KEY, TILE_WIDTH, PROP_HEIGHT);
+}
+
 function bakeFountain(baker: Baker): void {
   propShadow(baker, 0.24);
   fillFace(
@@ -588,6 +637,71 @@ function bakeCar(baker: Baker, key: string, index: number): void {
   ], HALF_W, originY);
 
   baker.finish(key, TILE_WIDTH, CAR_TEXTURE_HEIGHT);
+}
+
+const SHIP_HEIGHT = 88;
+/** Tile-anchored the same way as every prop: origin (0.5, 1) at the tile's bottom corner. */
+const SHIP_ORIGIN_Y = SHIP_HEIGHT - TILE_ANCHOR_Y;
+
+function bakeShip(baker: Baker): void {
+  const base = baker.at([0, 0, 0], HALF_W, SHIP_ORIGIN_Y);
+
+  baker.graphics.fillStyle(0xffffff, 0.3);
+  baker.graphics.fillEllipse(base.x, base.y + 3, 44, 10);
+
+  baker.graphics.fillStyle(0x8a5a34, 1);
+  baker.graphics.fillTriangle(
+    base.x - 22,
+    base.y - 6,
+    base.x + 22,
+    base.y - 6,
+    base.x + 15,
+    base.y + 5,
+  );
+  baker.graphics.fillTriangle(
+    base.x - 22,
+    base.y - 6,
+    base.x - 15,
+    base.y + 5,
+    base.x + 15,
+    base.y + 5,
+  );
+  baker.graphics.fillStyle(shade(0x8a5a34, -18), 1);
+  baker.graphics.fillRect(base.x - 22, base.y - 10, 44, 5);
+
+  baker.graphics.fillStyle(0x4a3220, 1);
+  baker.graphics.fillRect(base.x - 1, base.y - 48, 2, 40);
+
+  baker.graphics.fillStyle(0xf3ead8, 1);
+  baker.graphics.fillTriangle(
+    base.x,
+    base.y - 46,
+    base.x,
+    base.y - 9,
+    base.x + 20,
+    base.y - 11,
+  );
+  baker.graphics.fillStyle(shade(0xf3ead8, -12), 1);
+  baker.graphics.fillTriangle(
+    base.x,
+    base.y - 46,
+    base.x,
+    base.y - 9,
+    base.x - 15,
+    base.y - 13,
+  );
+
+  baker.graphics.fillStyle(0xd94f4f, 1);
+  baker.graphics.fillTriangle(
+    base.x,
+    base.y - 48,
+    base.x,
+    base.y - 42,
+    base.x + 9,
+    base.y - 45,
+  );
+
+  baker.finish(SHIP_KEY, TILE_WIDTH, SHIP_HEIGHT);
 }
 
 // ---------------------------------------------------------------------------

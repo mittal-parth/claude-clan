@@ -14,8 +14,11 @@ import type {
   PermissionMode as MayorPermissionMode,
 } from "@sudo-city/protocol";
 
+// cityId is stamped by the server, which owns the CityRegistry -- an
+// AgentSessionManager doesn't know which city it belongs to any more than
+// it knows its own sequence number.
 type AgentEvent<Event extends GameEvent = GameEvent> = Event extends GameEvent
-  ? Omit<Event, "id" | "sessionId" | "sequence" | "timestamp">
+  ? Omit<Event, "id" | "cityId" | "sessionId" | "sequence" | "timestamp">
   : never;
 
 interface PendingPermit {
@@ -31,6 +34,15 @@ export interface AgentSessionOptions {
   model?: string;
   effort?: EffortLevel;
   safeTools?: readonly string[];
+  /**
+   * Removed from the model's context entirely -- unlike safeTools/canUseTool,
+   * a disallowed tool can't be reached even through a permit prompt. A PR
+   * city passes ["Write", "Edit", "NotebookEdit"] here: the review agent can
+   * read anything but never touch the worktree.
+   */
+  disallowedTools?: readonly string[];
+  /** Appended to the default system prompt -- e.g. review framing for a PR city. */
+  systemPromptAppend?: string;
 }
 
 export interface AgentStartOptions {
@@ -42,9 +54,13 @@ export interface AgentStartOptions {
 export class AgentSessionManager {
   private readonly cwd: string;
   private readonly emit: (event: AgentEvent) => void;
-  private readonly maxBudgetUsd: number;
+  /** Mutable so a global budget ledger across concurrent cities can ration
+   *  the remaining balance into each session as it starts. */
+  private maxBudgetUsd: number;
   private readonly maxTurns: number;
   private readonly safeTools: Set<string>;
+  private readonly disallowedTools?: readonly string[];
+  private readonly systemPromptAppend?: string;
   private model: string;
   private effort: EffortLevel;
   private activeQuery?: Query;
@@ -59,6 +75,13 @@ export class AgentSessionManager {
     this.model = options.model ?? "sonnet";
     this.effort = options.effort ?? "high";
     this.safeTools = new Set(options.safeTools ?? ["Read", "Glob", "Grep"]);
+    this.disallowedTools = options.disallowedTools;
+    this.systemPromptAppend = options.systemPromptAppend;
+  }
+
+  /** Rations a shared budget across cities: called with the remaining balance before each start(). */
+  setMaxBudgetUsd(maxBudgetUsd: number): void {
+    this.maxBudgetUsd = maxBudgetUsd;
   }
 
   async start(
@@ -89,12 +112,22 @@ export class AgentSessionManager {
         abortController,
         canUseTool: this.canUseTool,
         cwd: this.cwd,
+        disallowedTools: this.disallowedTools
+          ? [...this.disallowedTools]
+          : undefined,
         effort: this.effort,
         hooks: this.createHooks(),
         maxBudgetUsd: this.maxBudgetUsd,
         maxTurns: this.maxTurns,
         model: this.model,
         permissionMode,
+        systemPrompt: this.systemPromptAppend
+          ? {
+              type: "preset",
+              preset: "claude_code",
+              append: this.systemPromptAppend,
+            }
+          : undefined,
       },
     });
     this.activeQuery = activeQuery;

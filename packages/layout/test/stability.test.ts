@@ -184,3 +184,71 @@ describe("snapshot geometry", () => {
     expect(second.snapshot.districts).toEqual(first.snapshot.districts);
   });
 });
+
+describe("PR-city geometry pinning", () => {
+  const main = world("main-sha", [
+    file("src/index.ts", "src", 10),
+    file("src/math.ts", "src", 6),
+    file("test/math.test.ts", "test", 8),
+  ]);
+
+  it("reshuffles districts when weights change and geometry isn't pinned", () => {
+    // The flaw this option exists to prevent: squarify reweights every
+    // rectangle from LOC, so one file growing a lot can reorder districts
+    // entirely, even though only one file changed.
+    const before = layoutWorld(main);
+    const grown = world("pr-sha", [
+      ...main.files.filter((source) => source.path !== "src/index.ts"),
+      file("src/index.ts", "src", 2_000),
+    ]);
+    const after = layoutWorld(grown);
+
+    expect(after.snapshot.districts).not.toEqual(before.snapshot.districts);
+  });
+
+  it("keeps districts and field size identical to main when pinned, even though a file's LOC changed", () => {
+    const baseline = layoutWorld(main, {
+      generatedAt: "2026-08-08T00:00:00.000Z",
+    });
+    const grown = world("pr-sha", [
+      ...main.files.filter((source) => source.path !== "src/index.ts"),
+      file("src/index.ts", "src", 2_000),
+    ]);
+
+    const pr = layoutWorld(grown, {
+      generatedAt: "2026-08-09T00:00:00.000Z",
+      width: baseline.snapshot.size.width,
+      height: baseline.snapshot.size.height,
+      districts: baseline.snapshot.districts,
+      previousPlots: baseline.plots,
+    });
+
+    expect(pr.snapshot.districts).toEqual(baseline.snapshot.districts);
+    expect(pr.snapshot.size).toEqual(baseline.snapshot.size);
+    // The unchanged file keeps its exact coordinates from main.
+    expect(pr.plots["src/math.ts"]).toEqual(baseline.plots["src/math.ts"]);
+    expect(pr.plots["test/math.test.ts"]).toEqual(
+      baseline.plots["test/math.test.ts"],
+    );
+  });
+
+  it("still places a file whose directory doesn't exist in the pinned districts", () => {
+    const baseline = layoutWorld(main);
+    const withNewDirectory = world("pr-sha", [
+      ...main.files,
+      file("docs/new.md", "docs", 4),
+    ]);
+
+    const pr = layoutWorld(withNewDirectory, {
+      width: baseline.snapshot.size.width,
+      height: baseline.snapshot.size.height,
+      districts: baseline.snapshot.districts,
+      previousPlots: baseline.plots,
+    });
+
+    const plot = pr.plots["docs/new.md"];
+    expect(plot).toBeDefined();
+    expect(plot?.x).toBeLessThan(pr.snapshot.size.width);
+    expect(plot?.y).toBeLessThan(pr.snapshot.size.height);
+  });
+});

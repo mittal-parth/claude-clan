@@ -1,12 +1,15 @@
 import { describe, expect, it } from "vitest";
 import {
+  CityIdSchema,
   GameEventSchema,
   MayorCommandSchema,
+  PullRequestOverlaySchema,
   ServerMessageSchema,
 } from "../src/index.js";
 
 const base = {
   id: "evt_1",
+  cityId: "main",
   sessionId: "session_1",
   sequence: 0,
   timestamp: "2026-08-08T05:38:00.000Z",
@@ -102,6 +105,7 @@ describe("protocol contracts", () => {
   it("carries permission mode on an individual order", () => {
     const command = MayorCommandSchema.parse({
       type: "session.prompt",
+      cityId: "main",
       prompt: "add an endpoint",
       permissionMode: "auto",
       contextPaths: ["src/index.ts", "packages/protocol/src/index.ts"],
@@ -109,6 +113,7 @@ describe("protocol contracts", () => {
 
     expect(command).toEqual({
       type: "session.prompt",
+      cityId: "main",
       prompt: "add an endpoint",
       permissionMode: "auto",
       contextPaths: ["src/index.ts", "packages/protocol/src/index.ts"],
@@ -141,6 +146,7 @@ describe("protocol contracts", () => {
   it("accepts model and effort on session.prompt", () => {
     const command = MayorCommandSchema.parse({
       type: "session.prompt",
+      cityId: "main",
       prompt: "refactor the district",
       model: "opus",
       effort: "max",
@@ -148,6 +154,7 @@ describe("protocol contracts", () => {
 
     expect(command).toEqual({
       type: "session.prompt",
+      cityId: "main",
       prompt: "refactor the district",
       model: "opus",
       effort: "max",
@@ -157,12 +164,82 @@ describe("protocol contracts", () => {
   it("trims and validates mayor prompts", () => {
     const command = MayorCommandSchema.parse({
       type: "session.prompt",
+      cityId: "main",
       prompt: "  add an endpoint  ",
     });
 
     expect(command).toEqual({
       type: "session.prompt",
+      cityId: "main",
       prompt: "add an endpoint",
     });
+  });
+
+  it("accepts main and pr-<n> city ids, rejects anything else", () => {
+    expect(CityIdSchema.parse("main")).toBe("main");
+    expect(CityIdSchema.parse("pr-42")).toBe("pr-42");
+    expect(() => CityIdSchema.parse("pr-")).toThrow();
+    expect(() => CityIdSchema.parse("staging")).toThrow();
+    expect(() => CityIdSchema.parse("")).toThrow();
+  });
+
+  it("routes a city travel command", () => {
+    const command = MayorCommandSchema.parse({
+      type: "city.travel",
+      cityId: "pr-42",
+    });
+
+    expect(command).toEqual({ type: "city.travel", cityId: "pr-42" });
+  });
+
+  it("parses a city roster message", () => {
+    const message = ServerMessageSchema.parse({
+      kind: "cities",
+      cities: [
+        {
+          id: "main",
+          kind: "main",
+          title: "main",
+          ref: "main",
+          status: "ready",
+        },
+        {
+          id: "pr-42",
+          kind: "pull-request",
+          title: "#42 Fix the thing",
+          ref: "feat/fix-thing",
+          number: 42,
+          author: "octocat",
+          url: "https://github.com/example/example/pull/42",
+          status: "building",
+        },
+      ],
+    });
+
+    if (message.kind !== "cities") {
+      throw new Error("expected a cities message");
+    }
+    expect(message.cities).toHaveLength(2);
+    expect(message.cities[1]?.number).toBe(42);
+  });
+
+  it("parses a pull request overlay with a deleted file's original plot", () => {
+    const overlay = PullRequestOverlaySchema.parse({
+      cityId: "pr-42",
+      baseRef: "main",
+      headSha: "abc123",
+      files: [
+        { path: "src/new.ts", change: "added", additions: 10, deletions: 0 },
+        {
+          path: "src/gone.ts",
+          change: "deleted",
+          additions: 0,
+          deletions: 20,
+          plot: { x: 3, y: 5 },
+        },
+      ],
+    });
+
+    expect(overlay.files[1]?.plot).toEqual({ x: 3, y: 5 });
   });
 });

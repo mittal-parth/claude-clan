@@ -80,8 +80,46 @@ export const EffortLevelSchema = z.enum([
   "max",
 ]);
 
+// "main" is the primary checkout; "pr-<n>" is a replica city built from an
+// open PR's worktree.
+export const CityIdSchema = z
+  .string()
+  .regex(/^(main|pr-\d+)$/u, 'cityId must be "main" or "pr-<number>"');
+
+export const CitySummarySchema = z.object({
+  id: CityIdSchema,
+  kind: z.enum(["main", "pull-request"]),
+  title: z.string().min(1),
+  ref: z.string().min(1),
+  number: z.number().int().positive().optional(),
+  author: z.string().optional(),
+  url: z.string().url().optional(),
+  status: z.enum(["idle", "building", "ready", "failed"]),
+  detail: z.string().optional(),
+});
+
+export const FileChangeKindSchema = z.enum(["added", "modified", "deleted"]);
+
+// Deleted files are absent from the PR worktree, so they carry main's plot
+// so the renderer can drop rubble where the building used to stand.
+export const ChangedFileSchema = z.object({
+  path: z.string().min(1),
+  change: FileChangeKindSchema,
+  additions: z.number().int().nonnegative(),
+  deletions: z.number().int().nonnegative(),
+  plot: PlotSchema.optional(),
+});
+
+export const PullRequestOverlaySchema = z.object({
+  cityId: CityIdSchema,
+  baseRef: z.string().min(1),
+  headSha: z.string().min(1),
+  files: z.array(ChangedFileSchema),
+});
+
 const EventBaseSchema = z.object({
   id: z.string().min(1),
+  cityId: CityIdSchema,
   sessionId: z.string().min(1),
   sequence: z.number().int().nonnegative(),
   timestamp: z.string().datetime(),
@@ -159,6 +197,7 @@ export const GameEventSchema = z.discriminatedUnion("type", [
 export const MayorCommandSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("session.prompt"),
+    cityId: CityIdSchema,
     prompt: z.string().trim().min(1).max(20_000),
     permissionMode: PermissionModeSchema.optional(),
     contextPaths: z
@@ -170,6 +209,7 @@ export const MayorCommandSchema = z.discriminatedUnion("type", [
   }),
   z.object({
     type: z.literal("session.interrupt"),
+    cityId: CityIdSchema,
   }),
   z.object({
     type: z.literal("permit.resolve"),
@@ -178,6 +218,19 @@ export const MayorCommandSchema = z.discriminatedUnion("type", [
   }),
   z.object({
     type: z.literal("world.request"),
+    cityId: CityIdSchema,
+  }),
+  z.object({
+    type: z.literal("city.travel"),
+    cityId: CityIdSchema,
+  }),
+  z.object({
+    type: z.literal("city.refresh"),
+  }),
+  z.object({
+    type: z.literal("diff.request"),
+    cityId: CityIdSchema,
+    path: z.string().min(1),
   }),
 ]);
 
@@ -185,6 +238,20 @@ export const ServerMessageSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("event"),
     event: GameEventSchema,
+  }),
+  z.object({
+    kind: z.literal("cities"),
+    cities: z.array(CitySummarySchema),
+  }),
+  z.object({
+    kind: z.literal("overlay"),
+    overlay: PullRequestOverlaySchema,
+  }),
+  z.object({
+    kind: z.literal("diff"),
+    cityId: CityIdSchema,
+    path: z.string().min(1),
+    patch: z.string(),
   }),
   z.object({
     kind: z.literal("error"),
@@ -195,13 +262,18 @@ export const ServerMessageSchema = z.discriminatedUnion("kind", [
 
 export type EffortLevel = z.infer<typeof EffortLevelSchema>;
 export type Building = z.infer<typeof BuildingSchema>;
+export type ChangedFile = z.infer<typeof ChangedFileSchema>;
+export type CityId = z.infer<typeof CityIdSchema>;
+export type CitySummary = z.infer<typeof CitySummarySchema>;
 export type DistrictRect = z.infer<typeof DistrictRectSchema>;
 export type ExternalDependency = z.infer<typeof ExternalDependencySchema>;
+export type FileChangeKind = z.infer<typeof FileChangeKindSchema>;
 export type GameEvent = z.infer<typeof GameEventSchema>;
 export type ImportEdge = z.infer<typeof ImportEdgeSchema>;
 export type MayorCommand = z.infer<typeof MayorCommandSchema>;
 export type PermissionMode = z.infer<typeof PermissionModeSchema>;
 export type Plot = z.infer<typeof PlotSchema>;
+export type PullRequestOverlay = z.infer<typeof PullRequestOverlaySchema>;
 export type ServerMessage = z.infer<typeof ServerMessageSchema>;
 export type SourceFile = z.infer<typeof SourceFileSchema>;
 export type WorldMap = z.infer<typeof WorldMapSchema>;

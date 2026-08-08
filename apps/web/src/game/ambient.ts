@@ -56,10 +56,21 @@ export function prefersReducedMotion(): boolean {
 
 export class AmbientLife {
   private cars: Car[] = [];
+  private carTimers: Phaser.Time.TimerEvent[] = [];
   private traffic?: Phaser.GameObjects.Container;
   private clouds: Phaser.GameObjects.Sprite[] = [];
   private sparkles: Phaser.GameObjects.Sprite[] = [];
-  private emitters: Phaser.GameObjects.Particles.ParticleEmitter[] = [];
+  /**
+   * Keyed by the building sprite a plume belongs to, so a demolished
+   * building's smoke can be released individually via releaseSmoke rather
+   * than only all-at-once in clear()/rebuild() -- without this, a demolished
+   * building's plume hung in mid-air over the empty plot, and once
+   * MAX_SMOKE_EMITTERS was hit no new building ever got smoke again.
+   */
+  private readonly smokeBySprite = new Map<
+    Phaser.GameObjects.Sprite,
+    Phaser.GameObjects.Particles.ParticleEmitter
+  >();
   private terrain?: TerrainGrid;
   private enabled = false;
   private readonly reducedMotion = prefersReducedMotion();
@@ -90,7 +101,11 @@ export class AmbientLife {
     sprite: Phaser.GameObjects.Sprite,
     anchor?: { x: number; y: number },
   ): void {
-    if (!anchor || !this.enabled || this.emitters.length >= MAX_SMOKE_EMITTERS) {
+    if (
+      !anchor ||
+      !this.enabled ||
+      this.smokeBySprite.size >= MAX_SMOKE_EMITTERS
+    ) {
       return;
     }
 
@@ -109,7 +124,22 @@ export class AmbientLife {
       },
     );
     emitter.setDepth(sprite.depth + 1);
-    this.emitters.push(emitter);
+    this.smokeBySprite.set(sprite, emitter);
+  }
+
+  /**
+   * Releases one building's smoke plume. Call this whenever its sprite is
+   * destroyed -- demolished by the player's edits or cleared by a city
+   * switch -- so the plume never outlives the building and the budget frees
+   * up for new construction.
+   */
+  releaseSmoke(sprite: Phaser.GameObjects.Sprite): void {
+    const emitter = this.smokeBySprite.get(sprite);
+    if (!emitter) {
+      return;
+    }
+    emitter.destroy();
+    this.smokeBySprite.delete(sprite);
   }
 
   clear(): void {
@@ -118,6 +148,9 @@ export class AmbientLife {
       car.sprite.destroy();
     }
     this.traffic?.removeAll(true);
+    for (const timer of this.carTimers) {
+      timer.remove();
+    }
     for (const cloud of this.clouds) {
       this.scene.tweens.killTweensOf(cloud);
       cloud.destroy();
@@ -126,13 +159,14 @@ export class AmbientLife {
       this.scene.tweens.killTweensOf(sparkle);
       sparkle.destroy();
     }
-    for (const emitter of this.emitters) {
+    for (const emitter of this.smokeBySprite.values()) {
       emitter.destroy();
     }
     this.cars = [];
+    this.carTimers = [];
     this.clouds = [];
     this.sparkles = [];
-    this.emitters = [];
+    this.smokeBySprite.clear();
   }
 
   // -------------------------------------------------------------------------
@@ -179,7 +213,9 @@ export class AmbientLife {
       const car: Car = { sprite, cell };
       this.cars.push(car);
       // Stagger departures so they do not all move in lockstep.
-      this.scene.time.delayedCall(index * 180, () => this.driveOn(car));
+      this.carTimers.push(
+        this.scene.time.delayedCall(index * 180, () => this.driveOn(car)),
+      );
     }
   }
 

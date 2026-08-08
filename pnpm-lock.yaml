@@ -39,6 +39,9 @@ importers:
       '@sudo-city/agent':
         specifier: workspace:*
         version: link:../../packages/agent
+      '@sudo-city/cities':
+        specifier: workspace:*
+        version: link:../../packages/cities
       '@sudo-city/layout':
         specifier: workspace:*
         version: link:../../packages/layout
@@ -164,6 +167,22 @@ importers:
       '@anthropic-ai/claude-agent-sdk':
         specifier: ^0.3.224
         version: 0.3.224(@anthropic-ai/sdk@0.115.0(zod@4.4.3))(@modelcontextprotocol/sdk@1.30.0(zod@4.4.3))(zod@4.4.3)
+      '@sudo-city/protocol':
+        specifier: workspace:*
+        version: link:../protocol
+    devDependencies:
+      '@types/node':
+        specifier: ^24.0.0
+        version: 24.13.3
+      typescript:
+        specifier: ^5.9.0
+        version: 5.9.3
+      vitest:
+        specifier: ^3.2.0
+        version: 3.2.7(@types/debug@4.1.13)(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.33.0)(tsx@4.23.10)
+
+  packages/cities:
+    dependencies:
       '@sudo-city/protocol':
         specifier: workspace:*
         version: link:../protocol

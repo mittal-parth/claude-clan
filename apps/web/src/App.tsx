@@ -2,15 +2,18 @@ import {
   GameEventSchema,
   ServerMessageSchema,
   type Building,
+  type CitySummary,
   type EffortLevel,
   type GameEvent,
   type MayorCommand,
   type PermissionMode,
+  type PullRequestOverlay,
   type WorldSnapshot,
 } from "@sudo-city/protocol";
 import { FormEvent, useEffect, useRef, useState } from "react";
 import { Command, ShieldAlert, Volume2, VolumeX, X } from "lucide-react";
 import { useAudio } from "@/components/audio-provider";
+import { Markdown } from "@/components/markdown";
 import { ConstructionTracker } from "@/lib/construction-tracker";
 import { cn } from "@/lib/utils";
 import HudWindow from "@/components/hud/HudWindow";
@@ -46,6 +49,7 @@ import {
   type CanvasPointerPosition,
   type GameCanvasHandle,
 } from "./components/GameCanvas";
+import type { ShipHoverInfo } from "./game/WorldScene";
 import CrewSelectDialog, {
   type CrewSelection,
 } from "./components/CrewSelectDialog";
@@ -69,6 +73,10 @@ const maxBudgetUsd = Number(import.meta.env.VITE_MAX_BUDGET_USD ?? 1);
  * rescan. The agent usually writes several files in a row.
  */
 const RESCAN_DEBOUNCE_MS = 1_200;
+
+const EVENTS_STORAGE_PREFIX = "sudo-city:events:";
+/** The full quest log for a city; generous since each city keeps its own. */
+const EVENTS_PER_CITY_CAP = 200;
 
 /** Basename of a repo path → title case words (claude-clan → Claude Clan). */
 function titleFromRepoPath(repoPath: string): string {
@@ -136,11 +144,11 @@ function colorWithAlpha(color: number, alpha: number): string {
     .padStart(2, "0")}`;
 }
 
-const EVENTS_STORAGE_KEY = "sudo-city:events";
 
-function loadStoredEvents(): GameEvent[] {
+
+function loadStoredEvents(cityId: string): GameEvent[] {
   try {
-    const raw = localStorage.getItem(EVENTS_STORAGE_KEY);
+    const raw = localStorage.getItem(EVENTS_STORAGE_PREFIX + cityId);
     if (!raw) return [];
     const parsed = JSON.parse(raw) as unknown[];
     return parsed.filter(
@@ -149,6 +157,10 @@ function loadStoredEvents(): GameEvent[] {
   } catch {
     return [];
   }
+}
+
+function cityLabel(city: CitySummary): string {
+  return city.kind === "main" ? "main" : city.title;
 }
 
 function statusLabel(status: ConnectionState): string {
@@ -522,7 +534,24 @@ export default function App() {
   const orderFormRef = useRef<HTMLFormElement>(null);
   const [connection, setConnection] =
     useState<ConnectionState>("connecting");
-  const [events, setEvents] = useState<GameEvent[]>(loadStoredEvents);
+  const [cities, setCities] = useState<CitySummary[]>([]);
+  const [activeCityId, setActiveCityId] = useState("main");
+  const [eventsByCity, setEventsByCity] = useState<
+    Record<string, GameEvent[]>
+  >(() => ({ main: loadStoredEvents("main") }));
+  const [worldByCity, setWorldByCity] = useState<
+    Record<string, WorldSnapshot>
+  >({});
+  const [overlayByCity, setOverlayByCity] = useState<
+    Record<string, PullRequestOverlay>
+  >({});
+  const [diff, setDiff] = useState<{
+    cityId: string;
+    path: string;
+    patch: string;
+  }>();
+  const [prompt, setPrompt] = useState("");
+  const [commandOpen, setCommandOpen] = useState(false);
   const [draggingBuilding, setDraggingBuilding] = useState<Building>();
   const [dragPreview, setDragPreview] = useState<CanvasDragPreview>();
   const [dragPosition, setDragPosition] =
@@ -535,13 +564,21 @@ export default function App() {
     effort: DEFAULT_EFFORT,
   });
   const [crewDialogOpen, setCrewDialogOpen] = useState(false);
-  const [prompt, setPrompt] = useState("");
-  const [commandOpen, setCommandOpen] = useState(false);
   const [hud, setHud] = useState(readHudState);
-  const [world, setWorld] = useState<WorldSnapshot>();
   const [fileChange, setFileChange] = useState<CanvasFileChange>();
   const [buildingPaths, setBuildingPaths] = useState<string[]>([]);
   const [selected, setSelected] = useState<Building>();
+  const [shipHover, setShipHover] = useState<ShipHoverInfo>();
+  const [shipTravelTargetId, setShipTravelTargetId] = useState<string>();
+  const [shipTransitioning, setShipTransitioning] = useState(false);
+
+  const events = eventsByCity[activeCityId] ?? [];
+  const world = worldByCity[activeCityId];
+  const overlay = overlayByCity[activeCityId];
+  const activeCity = cities.find((city) => city.id === activeCityId);
+  const selectedChange = selected
+    ? overlay?.files.find((file) => file.path === selected.path)
+    : undefined;
   const languageSummary = world ? summarizeLanguages(world.buildings) : [];
   const selectedPalette = paletteFor(selected?.language ?? "unknown");
   const draggingPalette = paletteFor(draggingBuilding?.language ?? "unknown");
@@ -585,12 +622,28 @@ export default function App() {
       dragPosition &&
       pointIsInside(orderFormRef.current, dragPosition),
   );
-  const cityName = cityNameFromRepo(world?.repoPath);
+  // A PR city is checked out under .sudocity/worktrees/pr-<n>, so deriving its
+  // name from the repo path would brand the console "Pr 10 City". Only main is
+  // named after the repo; a PR city is named after its pull request.
+  const cityName =
+    activeCity && activeCity.kind === "pull-request"
+      ? cityLabel(activeCity)
+      : cityNameFromRepo(world?.repoPath);
+  const cityStatusLine =
+    activeCity?.status === "building"
+      ? "constructing…"
+      : activeCity && activeCity.kind === "pull-request"
+        ? activeCity.ref
+        : world?.repoPath
+          ? fileBasename(world.repoPath)
+          : "linking";
 
   useEffect(() => {
     const socket = new WebSocket(websocketUrl);
     socketRef.current = socket;
-    let rescanTimer: ReturnType<typeof setTimeout> | undefined;
+    // Every city rescans on its own schedule -- an edit burst in one city
+    // must not delay or coalesce with another city's rescan.
+    const rescanTimers: Record<string, ReturnType<typeof setTimeout>> = {};
     const sites = new ConstructionTracker({
       graceMs: CONSTRUCTION_GRACE_MS,
       onChange: setBuildingPaths,
@@ -598,16 +651,32 @@ export default function App() {
 
     // The agent edits in bursts; one rescan after the burst settles is enough,
     // and the scene diffs the result so standing buildings do not flicker.
-    const scheduleRescan = (): void => {
-      clearTimeout(rescanTimer);
-      rescanTimer = setTimeout(() => {
+    const scheduleRescan = (cityId: string): void => {
+      clearTimeout(rescanTimers[cityId]);
+      rescanTimers[cityId] = setTimeout(() => {
         if (socket.readyState === WebSocket.OPEN) {
           socket.send(
-            JSON.stringify({ type: "world.request" } satisfies MayorCommand),
+            JSON.stringify({
+              type: "world.request",
+              cityId,
+            } satisfies MayorCommand),
           );
         }
       }, RESCAN_DEBOUNCE_MS);
     };
+
+    function appendEvent(cityId: string, event: GameEvent): void {
+      setEventsByCity((current) => {
+        const bucket = current[cityId] ?? [];
+        return {
+          ...current,
+          [cityId]: [
+            ...bucket.slice(-(EVENTS_PER_CITY_CAP - 1)),
+            event,
+          ],
+        };
+      });
+    }
 
     socket.addEventListener("open", () => setConnection("online"));
     socket.addEventListener("close", () => setConnection("offline"));
@@ -616,25 +685,52 @@ export default function App() {
       const decoded = ServerMessageSchema.safeParse(
         JSON.parse(String(message.data)) as unknown,
       );
-      if (!decoded.success || decoded.data.kind === "error") {
+      if (!decoded.success) {
+        return;
+      }
+
+      if (decoded.data.kind === "cities") {
+        setCities(decoded.data.cities);
+        return;
+      }
+
+      if (decoded.data.kind === "overlay") {
+        const overlay = decoded.data.overlay;
+        setOverlayByCity((current) => ({
+          ...current,
+          [overlay.cityId]: overlay,
+        }));
+        return;
+      }
+
+      if (decoded.data.kind === "diff") {
+        setDiff(decoded.data);
+        return;
+      }
+
+      if (decoded.data.kind !== "event") {
         return;
       }
 
       const event = decoded.data.event;
-      setEvents((current) => [...current.slice(-19), event]);
+      appendEvent(event.cityId, event);
       if (event.type === "world.ready") {
-        setWorld(event.snapshot);
+        setWorldByCity((current) => ({
+          ...current,
+          [event.cityId]: event.snapshot,
+        }));
       }
       if (event.type === "file.changed") {
         setFileChange({
           id: event.id,
+          cityId: event.cityId,
           path: event.path,
           change: event.change,
         });
         // Covers a change with no tool behind it; a tool-driven one is
         // already held open by its own hold.
         sites.start(event.path);
-        scheduleRescan();
+        scheduleRescan(event.cityId);
       }
       // A tool's target is the earliest signal that work has started — the
       // crane goes up before the file is written, and stays up while the tool
@@ -649,7 +745,9 @@ export default function App() {
     });
 
     return () => {
-      clearTimeout(rescanTimer);
+      for (const timer of Object.values(rescanTimers)) {
+        clearTimeout(timer);
+      }
       sites.dispose();
       socket.close();
       socketRef.current = null;
@@ -657,8 +755,13 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    localStorage.setItem(EVENTS_STORAGE_KEY, JSON.stringify(events));
-  }, [events]);
+    for (const [cityId, bucket] of Object.entries(eventsByCity)) {
+      localStorage.setItem(
+        EVENTS_STORAGE_PREFIX + cityId,
+        JSON.stringify(bucket),
+      );
+    }
+  }, [eventsByCity]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
@@ -682,6 +785,45 @@ export default function App() {
   function send(command: MayorCommand): void {
     if (socketRef.current?.readyState === WebSocket.OPEN) {
       socketRef.current.send(JSON.stringify(command));
+    }
+  }
+
+  function travelTo(cityId: string): void {
+    setActiveCityId(cityId);
+    setSelected(undefined);
+    setDiff(undefined);
+    setEventsByCity((current) =>
+      cityId in current ? current : { ...current, [cityId]: loadStoredEvents(cityId) },
+    );
+    send({ type: "city.travel", cityId });
+  }
+
+  function requestShipTravel(cityId: string): void {
+    // Keep activeCityId on the departing city until the canvas has covered it
+    // in clouds. This prevents a cached PR snapshot from replacing the ship
+    // before its departure animation can be seen.
+    setShipTravelTargetId(cityId);
+    setSelected(undefined);
+    setDiff(undefined);
+    setEventsByCity((current) =>
+      cityId in current ? current : { ...current, [cityId]: loadStoredEvents(cityId) },
+    );
+    send({ type: "city.travel", cityId });
+  }
+
+  function completeShipTravel(cityId: string): void {
+    setActiveCityId(cityId);
+    setShipTravelTargetId(undefined);
+  }
+
+  function selectBuilding(building?: Building): void {
+    setSelected(building);
+    setDiff(undefined);
+    const change = building
+      ? overlay?.files.find((file) => file.path === building.path)
+      : undefined;
+    if (building && change && change.change !== "deleted") {
+      send({ type: "diff.request", cityId: activeCityId, path: building.path });
     }
   }
 
@@ -726,6 +868,7 @@ export default function App() {
     }
     send({
       type: "session.prompt",
+      cityId: activeCityId,
       prompt: nextPrompt,
       permissionMode: orderPermissionMode,
       model: getCrewMember(crewSelection.crewId).model,
@@ -736,7 +879,6 @@ export default function App() {
     setContextPaths([]);
     setOrderPermissionMode("default");
   }
-
   return (
     <div className="hud-root">
       {showDragPreview && dragPreview && dragPosition ? (
@@ -759,19 +901,45 @@ export default function App() {
       ) : null}
       <GameCanvas
         ref={canvasRef}
+        cityId={activeCityId}
         world={world}
+        overlay={overlay}
+        travelCityId={shipTravelTargetId}
+        travelWorld={
+          shipTravelTargetId ? worldByCity[shipTravelTargetId] : undefined
+        }
+        travelOverlay={
+          shipTravelTargetId ? overlayByCity[shipTravelTargetId] : undefined
+        }
         fileChange={fileChange}
+        cities={cities}
         buildingPaths={buildingPaths}
         crewSprite={crewAvatarSrc}
-        onSelectBuilding={setSelected}
+        onTravelRequest={requestShipTravel}
+        onTravelComplete={completeShipTravel}
+        onTravelTransitionChange={setShipTransitioning}
+        onShipHover={setShipHover}
+        onSelectBuilding={selectBuilding}
         onBuildingDragStart={handleBuildingDragStart}
         onBuildingDragMove={handleBuildingDragMove}
         onBuildingDragEnd={handleBuildingDrop}
       />
 
+      {shipHover ? (
+        <div
+          className="retro pointer-events-none absolute z-30 -translate-x-1/2 -translate-y-full whitespace-nowrap border-2 border-foreground bg-card px-2 py-1 text-[10px] text-foreground dark:border-ring"
+          style={{ left: shipHover.screenX, top: shipHover.screenY - 12 }}
+        >
+          {shipHover.action}
+        </div>
+      ) : null}
+
       <div aria-hidden="true" className="hud-vignette" />
 
-      <div className="hud-layer">
+      {/* The canvas whiteout owns the screen while a ship is sailing; the
+          HUD would otherwise float over clouds describing the city being
+          left behind. */}
+      <div className="hud-layer" hidden={shipTransitioning}>
         <div className="hud-column hud-column--main">
           <HudWindow
             id="hud-scan"
@@ -861,7 +1029,7 @@ export default function App() {
                   className="hud-icon-button"
                   aria-label="Close structure details"
                   title="Close"
-                  onClick={() => setSelected(undefined)}
+                  onClick={() => selectBuilding(undefined)}
                 >
                   <X className="size-3" aria-hidden="true" />
                 </button>
@@ -891,7 +1059,32 @@ export default function App() {
                       {selected.language}
                     </dd>
                   </div>
+                  {selectedChange ? (
+                    <div className="border border-border/60 bg-background/30 px-1.5 py-1">
+                      <dt className="inline text-[7px] text-muted-foreground">
+                        IN THIS PR{" "}
+                      </dt>
+                      <dd className="inline text-foreground">
+                        {selectedChange.change}
+                      </dd>
+                    </div>
+                  ) : null}
                 </dl>
+                {selectedChange && selectedChange.change !== "deleted" ? (
+                  <div className="max-h-64 overflow-auto border-t border-border/50 pt-2">
+                    {diff &&
+                    diff.cityId === activeCityId &&
+                    diff.path === selected.path ? (
+                      <Markdown className="retro text-[9px]">
+                        {`\`\`\`diff\n${diff.patch}\n\`\`\``}
+                      </Markdown>
+                    ) : (
+                      <p className="retro text-[9px] text-muted-foreground">
+                        Loading diff…
+                      </p>
+                    )}
+                  </div>
+                ) : null}
               </div>
             </HudWindow>
           ) : (
@@ -951,7 +1144,12 @@ export default function App() {
                       type="button"
                       size="sm"
                       variant="outline"
-                      onClick={() => send({ type: "session.interrupt" })}
+                      onClick={() =>
+                        send({
+                          type: "session.interrupt",
+                          cityId: activeCityId,
+                        })
+                      }
                       disabled={connection !== "online"}
                     >
                       Halt
@@ -1169,8 +1367,7 @@ export default function App() {
               <div className="min-w-0">
                 <h1 className="hud-masthead__name retro">{cityName}</h1>
                 <p className="hud-masthead__sub retro">
-                  {world?.repoPath ? fileBasename(world.repoPath) : "linking"} ·
-                  mayor console
+                  {cityStatusLine} · mayor console
                 </p>
               </div>
             </div>
@@ -1289,7 +1486,7 @@ export default function App() {
                   value={building.path}
                   onSelect={() => {
                     canvasRef.current?.focusBuilding(building.path);
-                    setSelected(building);
+                    selectBuilding(building);
                     setCommandOpen(false);
                   }}
                 >
@@ -1304,7 +1501,7 @@ export default function App() {
           <CommandGroup heading="Mayor">
             <CommandItem
               onSelect={() => {
-                send({ type: "world.request" });
+                send({ type: "world.request", cityId: activeCityId });
                 setCommandOpen(false);
               }}
             >
@@ -1312,12 +1509,37 @@ export default function App() {
             </CommandItem>
             <CommandItem
               onSelect={() => {
-                send({ type: "session.interrupt" });
+                send({ type: "session.interrupt", cityId: activeCityId });
                 setCommandOpen(false);
               }}
             >
               Halt construction
             </CommandItem>
+            <CommandItem
+              onSelect={() => {
+                send({ type: "city.refresh" });
+                setCommandOpen(false);
+              }}
+            >
+              Refresh open pull requests
+            </CommandItem>
+          </CommandGroup>
+          <CommandGroup heading="Travel">
+            {cities.map((city) => (
+              <CommandItem
+                key={city.id}
+                disabled={city.id === activeCityId}
+                onSelect={() => {
+                  travelTo(city.id);
+                  setCommandOpen(false);
+                }}
+              >
+                {cityLabel(city)}
+                {city.id === activeCityId ? " (current)" : ""}
+                {city.status === "building" ? " · building…" : ""}
+                {city.status === "failed" ? " · failed" : ""}
+              </CommandItem>
+            ))}
           </CommandGroup>
         </CommandList>
       </CommandDialog>

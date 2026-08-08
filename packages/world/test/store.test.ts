@@ -24,6 +24,7 @@ describe("SQLiteWorldStore", () => {
     const store = createStore();
     const event: GameEvent = {
       id: "evt_1",
+      cityId: "main",
       sessionId: "session_1",
       sequence: 1,
       timestamp: "2026-08-08T00:00:00.000Z",
@@ -53,11 +54,11 @@ describe("SQLiteWorldStore", () => {
     };
 
     store.appendEvent(event);
-    store.saveSnapshot(snapshot);
+    store.saveSnapshot("main", snapshot);
 
     expect(store.readEvents("session_1")).toEqual([event]);
 
-    const loaded = store.loadLatestSnapshot();
+    const loaded = store.loadLatestSnapshot("main");
     expect(loaded).toEqual(snapshot);
     // Geometry travels through SQLite intact, fractional rects and all.
     expect(loaded?.size).toEqual({ width: 12, height: 12 });
@@ -70,12 +71,51 @@ describe("SQLiteWorldStore", () => {
 
   it("keeps existing plot coordinates immutable", () => {
     const store = createStore();
-    store.savePlots({ "src/index.ts": { x: 2, y: 4 } });
-    store.savePlots({ "src/index.ts": { x: 8, y: 9 } });
+    store.savePlots("main", { "src/index.ts": { x: 2, y: 4 } });
+    store.savePlots("main", { "src/index.ts": { x: 8, y: 9 } });
 
-    expect(store.loadPlots()).toEqual({
+    expect(store.loadPlots("main")).toEqual({
       "src/index.ts": { x: 2, y: 4 },
     });
+    store.close();
+  });
+
+  it("keeps plots and snapshots isolated between worlds", () => {
+    const store = createStore();
+
+    store.savePlots("main", { "src/index.ts": { x: 2, y: 4 } });
+    store.savePlots("pr-42", { "src/index.ts": { x: 9, y: 9 } });
+
+    expect(store.loadPlots("main")).toEqual({
+      "src/index.ts": { x: 2, y: 4 },
+    });
+    expect(store.loadPlots("pr-42")).toEqual({
+      "src/index.ts": { x: 9, y: 9 },
+    });
+
+    const mainSnapshot: WorldSnapshot = {
+      id: "world:same-sha",
+      repoPath: "/tmp/repo",
+      revision: "same-sha",
+      generatedAt: "2026-08-08T00:00:00.000Z",
+      size: { width: 12, height: 12 },
+      districts: [],
+      buildings: [],
+    };
+    const prSnapshot: WorldSnapshot = {
+      ...mainSnapshot,
+      repoPath: "/tmp/repo-pr-42",
+    };
+
+    // Two branches at the same sha share a snapshot id -- world_id is what
+    // keeps INSERT OR REPLACE from letting one city clobber the other.
+    store.saveSnapshot("main", mainSnapshot);
+    store.saveSnapshot("pr-42", prSnapshot);
+
+    expect(store.loadLatestSnapshot("main")).toEqual(mainSnapshot);
+    expect(store.loadLatestSnapshot("pr-42")).toEqual(prSnapshot);
+    expect(store.loadLatestSnapshot("pr-99")).toBeUndefined();
+
     store.close();
   });
 });
