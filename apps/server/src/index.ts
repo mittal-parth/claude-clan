@@ -69,6 +69,8 @@ interface City {
   snapshot: WorldSnapshot;
   /** A PR city's diff against main; absent for "main" itself. */
   overlay?: PullRequestOverlay;
+  /** This city's own share of the global budget spent so far -- session.usage's costUsd is cumulative per session, so this is a replace, not an add. */
+  spentUsd: number;
   /** Guards against a burst of file.changed events queueing parallel scans. */
   pendingScan?: Promise<WorldSnapshot>;
 }
@@ -280,14 +282,36 @@ function emitAgentEvent(cityId: CityId, event: AgentEvent): void {
   if (!city) {
     return;
   }
+  if (event.type === "session.usage") {
+    // total_cost_usd from the SDK is cumulative for that session, not a
+    // per-turn delta -- replacing rather than summing is what keeps N
+    // cities' concurrent spend from being double-counted.
+    city.spentUsd = event.costUsd;
+  }
   broadcastEvent(cityId, createEvent(city, event));
+}
+
+/**
+ * One budget shared across every city's agent, not one per agent -- N
+ * concurrent PR review sessions must not silently multiply the ceiling by N.
+ * Each city's manager is rationed the remaining balance right before it
+ * starts a query (see setMaxBudgetUsd below), so an already-expensive main
+ * session leaves less for a PR city that travels in afterward, and vice versa.
+ */
+const GLOBAL_MAX_BUDGET_USD = Number(process.env.SUDO_CITY_MAX_BUDGET_USD ?? 1);
+
+function remainingBudget(): number {
+  const spent = registry
+    .list()
+    .reduce((total, city) => total + city.spentUsd, 0);
+  return Math.max(0, GLOBAL_MAX_BUDGET_USD - spent);
 }
 
 const mainSessionId = `local-${randomUUID()}`;
 const mainAgent = new AgentSessionManager({
   cwd: targetRepo,
   emit: (event) => emitAgentEvent("main", event),
-  maxBudgetUsd: Number(process.env.SUDO_CITY_MAX_BUDGET_USD ?? 1),
+  maxBudgetUsd: remainingBudget(),
 });
 
 registry.add({
@@ -297,6 +321,7 @@ registry.add({
   sessionId: mainSessionId,
   sequence: 0,
   snapshot: await generateWorld("main", targetRepo),
+  spentUsd: 0,
 });
 
 function sendWorld(socket: WebSocket, city: City): void {
@@ -376,6 +401,34 @@ async function refreshRoster(): Promise<void> {
  * travel, never eagerly for every open PR -- startup cost stays flat
  * regardless of how many PRs are open.
  */
+/**
+ * Read-only Write/Edit/NotebookEdit are removed from the model's context
+ * entirely (disallowedTools), not merely gated behind a permit -- a PR city
+ * is for reviewing, not fixing in place. Publishing a review still goes
+ * through Bash, which isn't a safe tool, so `gh pr review` naturally hits
+ * the normal permit prompt and needs an explicit mayor stamp before it runs.
+ */
+const REVIEW_DISALLOWED_TOOLS = ["Write", "Edit", "NotebookEdit"] as const;
+
+function reviewSystemPrompt(
+  pr: PullRequestRef,
+  overlay: PullRequestOverlay | undefined,
+): string {
+  const files = overlay?.files.length
+    ? overlay.files
+        .map((file) => `- ${file.change}: ${file.path}`)
+        .join("\n")
+    : "(the changed-file list could not be computed)";
+  return [
+    `You are reviewing GitHub pull request #${pr.number}, "${pr.title}", opened by @${pr.author}.`,
+    `This city's working directory is a worktree checked out at the PR's head commit (${pr.headSha}), diffed against ${pr.baseRef}.`,
+    "Write, Edit, and NotebookEdit are disabled here -- this city is read-only. Read and search freely; do not attempt to fix anything in place.",
+    "Changed files:",
+    files,
+    `To publish your review, run \`gh pr review ${pr.number} --approve\`, \`--request-changes\`, or \`--comment\`, each with \`--body "..."\`, via Bash. That call will pause for the mayor's permit before it executes -- never assume a review has been posted until it's been stamped.`,
+  ].join("\n");
+}
+
 async function buildPrCity(cityId: CityId, pr: PullRequestRef): Promise<City> {
   const worktree = await ensureWorktree(targetRepo, pr);
   const snapshot = await generateWorld(cityId, worktree);
@@ -389,7 +442,9 @@ async function buildPrCity(cityId: CityId, pr: PullRequestRef): Promise<City> {
   const agent = new AgentSessionManager({
     cwd: worktree,
     emit: (event) => emitAgentEvent(cityId, event),
-    maxBudgetUsd: Number(process.env.SUDO_CITY_MAX_BUDGET_USD ?? 1),
+    maxBudgetUsd: remainingBudget(),
+    disallowedTools: REVIEW_DISALLOWED_TOOLS,
+    systemPromptAppend: reviewSystemPrompt(pr, overlay),
   });
   return {
     id: cityId,
@@ -399,6 +454,7 @@ async function buildPrCity(cityId: CityId, pr: PullRequestRef): Promise<City> {
     sequence: 0,
     snapshot,
     overlay,
+    spentUsd: 0,
   };
 }
 
@@ -537,6 +593,9 @@ app.get("/ws", { websocket: true }, (socket) => {
             text: data.prompt,
           }),
         );
+        // Rationed from the shared ledger right before the query starts, so
+        // whatever another city has already spent narrows this session's cap.
+        city.agent.setMaxBudgetUsd(remainingBudget());
         void city.agent.start(data.prompt).catch((error: unknown) => {
           emitAgentEvent(city.id, {
             type: "session.message",

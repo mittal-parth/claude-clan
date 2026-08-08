@@ -29,14 +29,27 @@ export interface AgentSessionOptions {
   maxTurns?: number;
   model?: string;
   safeTools?: readonly string[];
+  /**
+   * Removed from the model's context entirely -- unlike safeTools/canUseTool,
+   * a disallowed tool can't be reached even through a permit prompt. A PR
+   * city passes ["Write", "Edit", "NotebookEdit"] here: the review agent can
+   * read anything but never touch the worktree.
+   */
+  disallowedTools?: readonly string[];
+  /** Appended to the default system prompt -- e.g. review framing for a PR city. */
+  systemPromptAppend?: string;
 }
 
 export class AgentSessionManager {
   private readonly cwd: string;
   private readonly emit: (event: AgentEvent) => void;
-  private readonly maxBudgetUsd: number;
+  /** Mutable so a global budget ledger across concurrent cities can ration
+   *  the remaining balance into each session as it starts. */
+  private maxBudgetUsd: number;
   private readonly maxTurns: number;
   private readonly safeTools: Set<string>;
+  private readonly disallowedTools?: readonly string[];
+  private readonly systemPromptAppend?: string;
   private model: string;
   private activeQuery?: Query;
   private abortController?: AbortController;
@@ -49,6 +62,13 @@ export class AgentSessionManager {
     this.maxTurns = options.maxTurns ?? 12;
     this.model = options.model ?? "sonnet";
     this.safeTools = new Set(options.safeTools ?? ["Read", "Glob", "Grep"]);
+    this.disallowedTools = options.disallowedTools;
+    this.systemPromptAppend = options.systemPromptAppend;
+  }
+
+  /** Rations a shared budget across cities: called with the remaining balance before each start(). */
+  setMaxBudgetUsd(maxBudgetUsd: number): void {
+    this.maxBudgetUsd = maxBudgetUsd;
   }
 
   async start(prompt: string): Promise<void> {
@@ -63,11 +83,21 @@ export class AgentSessionManager {
         abortController,
         canUseTool: this.canUseTool,
         cwd: this.cwd,
+        disallowedTools: this.disallowedTools
+          ? [...this.disallowedTools]
+          : undefined,
         hooks: this.createHooks(),
         maxBudgetUsd: this.maxBudgetUsd,
         maxTurns: this.maxTurns,
         model: this.model,
         permissionMode: "default",
+        systemPrompt: this.systemPromptAppend
+          ? {
+              type: "preset",
+              preset: "claude_code",
+              append: this.systemPromptAppend,
+            }
+          : undefined,
       },
     });
     this.activeQuery = activeQuery;
