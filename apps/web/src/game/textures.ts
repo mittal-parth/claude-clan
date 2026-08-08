@@ -645,6 +645,14 @@ export function bakeBuilding(
     }
   }
 
+  drawLanguageBadge(
+    baker,
+    originY,
+    archetype,
+    body,
+    palette,
+  );
+
   baker.finish(key, TILE_WIDTH, height);
   baker.destroy();
 
@@ -673,6 +681,78 @@ function crownHeightFor(archetype: Archetype, tier: number): number {
       return 30;
     default:
       return 0;
+  }
+}
+
+function badgeHeightFor(archetype: Archetype, body: number): number {
+  switch (archetype) {
+    case "house":
+      return body + 20;
+    case "townhouse":
+      return body + 8;
+    case "office":
+      return body + 10;
+    case "tower":
+      return body + 5;
+    case "utility":
+      return body + 18;
+    default: {
+      const exhaustive: never = archetype;
+      return body + exhaustive;
+    }
+  }
+}
+
+/** A small, front-facing pixel badge makes a colour-readable building identifiable when zoomed out. */
+function drawLanguageBadge(
+  baker: Baker,
+  originY: number,
+  archetype: Archetype,
+  body: number,
+  palette: BuildingPalette,
+): void {
+  const badgeZ = badgeHeightFor(archetype, body);
+  const half = archetype === "tower" ? 0.14 : 0.16;
+  const outlineHalf = half + 0.045;
+
+  fillFace(
+    baker,
+    palette.accentDark,
+    1,
+    diamond(outlineHalf, badgeZ),
+    HALF_W,
+    originY,
+  );
+  fillFace(
+    baker,
+    palette.accent,
+    1,
+    diamond(half, badgeZ + 1),
+    HALF_W,
+    originY,
+  );
+
+  const rows = palette.glyph.length;
+  const columns = Math.max(
+    1,
+    ...palette.glyph.map((row) => row.length),
+  );
+  const pixelSize = 2;
+  const center = baker.at([0, 0, badgeZ + 3], HALF_W, originY);
+  baker.graphics.fillStyle(palette.ink, 1);
+  for (let row = 0; row < rows; row += 1) {
+    const glyphRow = palette.glyph[row] ?? "";
+    for (let column = 0; column < columns; column += 1) {
+      if (glyphRow[column] !== "1") {
+        continue;
+      }
+      baker.graphics.fillRect(
+        Math.round(center.x - (columns * pixelSize) / 2 + column * pixelSize),
+        Math.round(center.y - (rows * pixelSize) / 2 + row * pixelSize),
+        pixelSize,
+        pixelSize,
+      );
+    }
   }
 }
 
@@ -730,6 +810,8 @@ function drawBox(
     HALF_W,
     originY,
   );
+  drawFacadeDetails(baker, originY, half, base, top, palette);
+
   fillFace(baker, roofColor, 1, diamond(half, top), HALF_W, originY);
   strokeFace(
     baker,
@@ -740,6 +822,182 @@ function drawBox(
     HALF_W,
     originY,
   );
+  drawRoofMaterialDetails(baker, originY, half, top, palette);
+}
+
+function wallStrip(
+  baker: Baker,
+  originY: number,
+  half: number,
+  z: number,
+  height: number,
+  color: number,
+  alpha: number,
+  side: "lit" | "shade",
+  from = -half,
+  to = half,
+): void {
+  const points: Point3[] =
+    side === "lit"
+      ? [
+          [from, half, z + height],
+          [to, half, z + height],
+          [to, half, z],
+          [from, half, z],
+        ]
+      : [
+          [half, from, z + height],
+          [half, to, z + height],
+          [half, to, z],
+          [half, from, z],
+        ];
+  fillFace(baker, color, alpha, points, HALF_W, originY);
+}
+
+/** The saturated rail and material marks are the visual fingerprint of a file type. */
+function drawFacadeDetails(
+  baker: Baker,
+  originY: number,
+  half: number,
+  base: number,
+  top: number,
+  palette: BuildingPalette,
+): void {
+  const span = Math.max(1, top - base);
+  const railBase = base + Math.min(8, Math.max(3, span * 0.18));
+  const railHeight = Math.min(4, Math.max(2, span * 0.08));
+  wallStrip(baker, originY, half, railBase, railHeight, palette.accent, 0.96, "lit");
+  wallStrip(
+    baker,
+    originY,
+    half,
+    railBase,
+    railHeight,
+    palette.accentDark,
+    0.96,
+    "shade",
+  );
+
+  switch (palette.material) {
+    case "brick":
+    case "wood":
+      for (let row = 1; row <= 2; row += 1) {
+        wallStrip(
+          baker,
+          originY,
+          half,
+          base + (span * row) / 3,
+          1,
+          shade(palette.wall, -18),
+          0.4,
+          "lit",
+        );
+        wallStrip(
+          baker,
+          originY,
+          half,
+          base + (span * row) / 3,
+          1,
+          shade(palette.wall, -28),
+          0.4,
+          "shade",
+        );
+      }
+      break;
+    case "glass":
+      for (const offset of [-half * 0.45, 0, half * 0.45]) {
+        wallStrip(
+          baker,
+          originY,
+          half,
+          base + span * 0.3,
+          span * 0.52,
+          palette.accent,
+          0.22,
+          "lit",
+          offset - 0.025,
+          offset + 0.025,
+        );
+      }
+      break;
+    case "metal":
+      for (const offset of [-half * 0.48, half * 0.48]) {
+        wallStrip(
+          baker,
+          originY,
+          half,
+          base + span * 0.22,
+          span * 0.62,
+          palette.trim,
+          0.3,
+          "shade",
+          offset - 0.025,
+          offset + 0.025,
+        );
+      }
+      break;
+    case "neon":
+      wallStrip(
+        baker,
+        originY,
+        half,
+        top - Math.min(7, span * 0.18),
+        2,
+        palette.accent,
+        0.8,
+        "lit",
+      );
+      break;
+    case "concrete":
+    case "paper":
+    case "painted":
+      wallStrip(
+        baker,
+        originY,
+        half,
+        base + span * 0.72,
+        1,
+        palette.trim,
+        0.24,
+        "lit",
+      );
+      break;
+    default: {
+      const exhaustive: never = palette.material;
+      throw new Error(`Unhandled building material: ${exhaustive}`);
+    }
+  }
+}
+
+function drawRoofMaterialDetails(
+  baker: Baker,
+  originY: number,
+  half: number,
+  top: number,
+  palette: BuildingPalette,
+): void {
+  switch (palette.material) {
+    case "glass":
+      strokeFace(baker, palette.accent, 0.55, 1, diamond(half * 0.72, top + 1), HALF_W, originY);
+      break;
+    case "metal":
+      strokeFace(baker, palette.trim, 0.55, 1, diamond(half * 0.78, top + 1), HALF_W, originY);
+      break;
+    case "neon":
+      strokeFace(baker, palette.accent, 0.95, 2, diamond(half * 0.88, top + 1), HALF_W, originY);
+      break;
+    case "brick":
+    case "concrete":
+    case "paper":
+    case "painted":
+    case "wood":
+      fillFace(baker, palette.accent, 0.2, diamond(half * 0.62, top + 1), HALF_W, originY);
+      break;
+    default: {
+      const exhaustive: never = palette.material;
+      throw new Error(`Unhandled building material: ${exhaustive}`);
+    }
+  }
 }
 
 /** Rows of lit glazing on both visible walls. */
