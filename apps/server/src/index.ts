@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { loadEnvFile } from "node:process";
-import { join } from "node:path";
+import { join, relative, resolve, sep } from "node:path";
 import {
   AgentSessionManager,
   type AgentEvent,
@@ -40,6 +40,50 @@ await app.register(websocket);
 
 const targetRepo =
   process.env.SUDO_CITY_REPO ?? process.env.INIT_CWD ?? process.cwd();
+const repositoryRoot = resolve(targetRepo);
+const MAX_CONTEXT_FILES = 20;
+
+function sanitizeContextPaths(paths: readonly string[] | undefined): string[] {
+  const safePaths = new Set<string>();
+
+  for (const rawPath of paths ?? []) {
+    const candidate = rawPath.trim().replaceAll("\\", "/");
+    if (!candidate || candidate.startsWith("/") || candidate.includes("\0")) {
+      continue;
+    }
+
+    const absolutePath = resolve(repositoryRoot, candidate);
+    const repositoryPath = relative(repositoryRoot, absolutePath);
+    if (
+      !repositoryPath ||
+      repositoryPath === ".." ||
+      repositoryPath.startsWith(`..${sep}`)
+    ) {
+      continue;
+    }
+
+    safePaths.add(sep === "/" ? repositoryPath : repositoryPath.split(sep).join("/"));
+    if (safePaths.size >= MAX_CONTEXT_FILES) {
+      break;
+    }
+  }
+
+  return [...safePaths];
+}
+
+function mayorMessage(prompt: string, contextPaths: readonly string[]): string {
+  if (contextPaths.length === 0) {
+    return prompt;
+  }
+
+  return [
+    prompt,
+    "",
+    "Attached context files:",
+    ...contextPaths.map((path) => `- ${path}`),
+  ].join("\n");
+}
+
 if (!process.env.ANTHROPIC_API_KEY) {
   try {
     loadEnvFile(join(targetRepo, ".env"));
@@ -585,27 +629,34 @@ app.get("/ws", { websocket: true }, (socket) => {
         if (!city) {
           break;
         }
+        const contextPaths = sanitizeContextPaths(data.contextPaths);
         broadcastEvent(
           city.id,
           createEvent(city, {
             type: "session.message",
             role: "mayor",
-            text: data.prompt,
+            text: mayorMessage(data.prompt, contextPaths),
           }),
         );
         // Rationed from the shared ledger right before the query starts, so
         // whatever another city has already spent narrows this session's cap.
         city.agent.setMaxBudgetUsd(remainingBudget());
-        void city.agent.start(data.prompt).catch((error: unknown) => {
-          emitAgentEvent(city.id, {
-            type: "session.message",
-            role: "system",
-            text:
-              error instanceof Error
-                ? `Agent stopped: ${error.message}`
-                : "Agent stopped unexpectedly.",
+        void city.agent
+          .start(data.prompt, data.permissionMode ?? "default", {
+            model: data.model,
+            effort: data.effort,
+            contextPaths,
+          })
+          .catch((error: unknown) => {
+            emitAgentEvent(city.id, {
+              type: "session.message",
+              role: "system",
+              text:
+                error instanceof Error
+                  ? `Agent stopped: ${error.message}`
+                  : "Agent stopped unexpectedly.",
+            });
           });
-        });
         break;
       }
       case "session.interrupt": {

@@ -5,26 +5,50 @@ import {
   hasPalette,
   paletteFor,
   tierFor,
+  colorToCss,
 } from "./palette";
 
 /** Mirrors the language table in packages/worldgen/src/index.ts. */
 const SCANNED_LANGUAGES = [
+  "Assembly",
+  "Astro",
+  "Batch",
   "C",
+  "C#",
   "C++",
   "CSS",
+  "Dart",
+  "Elixir",
+  "F#",
   "Go",
+  "GraphQL",
+  "Haskell",
   "HTML",
   "Java",
   "JavaScript",
   "JSON",
+  "Kotlin",
+  "Lua",
   "Markdown",
+  "Objective-C",
+  "PHP",
+  "PowerShell",
+  "Protocol Buffers",
   "Python",
+  "R",
+  "Ruby",
   "Rust",
   "SCSS",
+  "Scala",
   "Shell",
   "SQL",
+  "Svelte",
+  "Swift",
+  "Terraform",
+  "TOML",
   "TypeScript",
   "Vue",
+  "XML",
   "YAML",
 ];
 
@@ -49,6 +73,47 @@ describe("language palette", () => {
   it("gives most languages a distinct roof so districts read apart", () => {
     const roofs = SCANNED_LANGUAGES.map((language) => paletteFor(language).roof);
     expect(new Set(roofs).size).toBe(SCANNED_LANGUAGES.length);
+  });
+
+  it("gives every language a sprite and HUD signature", () => {
+    for (const language of SCANNED_LANGUAGES) {
+      const palette = paletteFor(language);
+      expect(palette.accent).toBeGreaterThanOrEqual(0);
+      expect(palette.accentDark).toBeGreaterThanOrEqual(0);
+      expect(palette.mark.length).toBeGreaterThan(0);
+      expect(palette.glyph.length).toBeGreaterThan(0);
+      expect(palette.glyph.every((row) => /^[01]+$/u.test(row))).toBe(true);
+      expect(palette.material).toMatch(
+        /^(brick|concrete|glass|metal|neon|paper|painted|wood)$/u,
+      );
+      expect(colorToCss(palette.accent)).toMatch(/^#[0-9a-f]{6}$/u);
+    }
+  });
+  it("derives distinct highlight and shadow tones for each language", () => {
+    for (const language of SCANNED_LANGUAGES) {
+      const palette = paletteFor(language);
+      const tones = [
+        palette.wall,
+        palette.wallLight,
+        palette.wallShadow,
+        palette.roof,
+        palette.roofLight,
+        palette.roofShadow,
+        palette.window,
+        palette.windowGlow,
+        palette.windowShadow,
+      ];
+      for (const tone of tones) {
+        expect(tone).toBeGreaterThanOrEqual(0);
+        expect(tone).toBeLessThanOrEqual(0xffffff);
+      }
+      expect(palette.wallLight).not.toBe(palette.wall);
+      expect(palette.wallShadow).not.toBe(palette.wall);
+      expect(palette.roofLight).not.toBe(palette.roof);
+      expect(palette.roofShadow).not.toBe(palette.roof);
+      expect(palette.windowGlow).not.toBe(palette.window);
+      expect(palette.windowShadow).not.toBe(palette.window);
+    }
   });
 
   it("falls back rather than throwing on an unknown language", () => {

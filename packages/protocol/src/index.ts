@@ -70,6 +70,16 @@ export const WorldSnapshotSchema = z.object({
   buildings: z.array(BuildingSchema),
 });
 
+export const PermissionModeSchema = z.enum(["default", "auto"]);
+
+export const EffortLevelSchema = z.enum([
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+]);
+
 // "main" is the primary checkout; "pr-<n>" is a replica city built from an
 // open PR's worktree.
 export const CityIdSchema = z
@@ -123,6 +133,8 @@ export const GameEventSchema = z.discriminatedUnion("type", [
   EventBaseSchema.extend({
     type: z.literal("session.started"),
     model: z.string().min(1),
+    effort: EffortLevelSchema.default("high"),
+    permissionMode: PermissionModeSchema.default("default"),
   }),
   EventBaseSchema.extend({
     type: z.literal("session.message"),
@@ -187,7 +199,13 @@ export const MayorCommandSchema = z.discriminatedUnion("type", [
     type: z.literal("session.prompt"),
     cityId: CityIdSchema,
     prompt: z.string().trim().min(1).max(20_000),
+    permissionMode: PermissionModeSchema.optional(),
+    contextPaths: z
+      .array(z.string().trim().min(1).max(500))
+      .max(20)
+      .optional(),
     model: z.string().min(1).optional(),
+    effort: EffortLevelSchema.optional(),
   }),
   z.object({
     type: z.literal("session.interrupt"),
@@ -242,6 +260,7 @@ export const ServerMessageSchema = z.discriminatedUnion("kind", [
   }),
 ]);
 
+export type EffortLevel = z.infer<typeof EffortLevelSchema>;
 export type Building = z.infer<typeof BuildingSchema>;
 export type ChangedFile = z.infer<typeof ChangedFileSchema>;
 export type CityId = z.infer<typeof CityIdSchema>;
@@ -252,6 +271,7 @@ export type FileChangeKind = z.infer<typeof FileChangeKindSchema>;
 export type GameEvent = z.infer<typeof GameEventSchema>;
 export type ImportEdge = z.infer<typeof ImportEdgeSchema>;
 export type MayorCommand = z.infer<typeof MayorCommandSchema>;
+export type PermissionMode = z.infer<typeof PermissionModeSchema>;
 export type Plot = z.infer<typeof PlotSchema>;
 export type PullRequestOverlay = z.infer<typeof PullRequestOverlaySchema>;
 export type ServerMessage = z.infer<typeof ServerMessageSchema>;

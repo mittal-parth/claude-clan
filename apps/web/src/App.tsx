@@ -3,8 +3,10 @@ import {
   ServerMessageSchema,
   type Building,
   type CitySummary,
+  type EffortLevel,
   type GameEvent,
   type MayorCommand,
+  type PermissionMode,
   type PullRequestOverlay,
   type WorldSnapshot,
 } from "@sudo-city/protocol";
@@ -12,6 +14,7 @@ import { FormEvent, useEffect, useRef, useState } from "react";
 import { Volume2, VolumeX } from "lucide-react";
 import { useAudio } from "@/components/audio-provider";
 import { Markdown } from "@/components/markdown";
+import { ConstructionTracker } from "@/lib/construction-tracker";
 import Dialogue from "@/components/ui/8bit/blocks/dialogue";
 import QuestLog, {
   type Quest,
@@ -38,10 +41,28 @@ import {
   ResizablePanelGroup,
 } from "@/components/ui/8bit/resizable";
 import {
+  colorToCss,
+  paletteFor,
+} from "./game/palette";
+import {
   GameCanvas,
+  type CanvasDragPreview,
   type CanvasFileChange,
+  type CanvasPointerPosition,
+  type GameCanvasHandle,
 } from "./components/GameCanvas";
 import type { ShipHoverInfo } from "./game/WorldScene";
+import CrewSelectDialog, {
+  type CrewSelection,
+} from "./components/CrewSelectDialog";
+import {
+  DEFAULT_CREW_ID,
+  DEFAULT_EFFORT,
+  crewSpriteUrl,
+  effortLabel,
+  findCrewByModel,
+  getCrewMember,
+} from "./crew/catalog";
 
 type ConnectionState = "connecting" | "online" | "offline";
 
@@ -58,6 +79,51 @@ const RESCAN_DEBOUNCE_MS = 1_200;
 const EVENTS_STORAGE_PREFIX = "sudo-city:events:";
 /** The full quest log for a city; generous since each city keeps its own. */
 const EVENTS_PER_CITY_CAP = 200;
+
+/**
+ * How long a site stands after the work on it actually finishes.
+ *
+ * The site's lifetime is the work's lifetime: it opens when a tool starts on a
+ * file and is held open until that tool completes, so a slow edit keeps its
+ * crane for as long as it runs. This is only the tail on the end, so a write
+ * that takes 40ms still leaves something up long enough to notice.
+ */
+const CONSTRUCTION_GRACE_MS = 6_000;
+
+function fileBasename(path: string): string {
+  const slash = path.lastIndexOf("/");
+  return slash >= 0 ? path.slice(slash + 1) : path;
+}
+
+function fileDirname(path: string): string {
+  const slash = path.lastIndexOf("/");
+  return slash >= 0 ? path.slice(0, slash) : ".";
+}
+
+interface LanguageSummary {
+  language: string;
+  count: number;
+}
+
+function summarizeLanguages(buildings: Building[]): LanguageSummary[] {
+  const counts = new Map<string, number>();
+  for (const building of buildings) {
+    counts.set(building.language, (counts.get(building.language) ?? 0) + 1);
+  }
+  return [...counts.entries()]
+    .map(([language, count]) => ({ language, count }))
+    .sort((left, right) =>
+      right.count - left.count || left.language.localeCompare(right.language),
+    );
+}
+
+function colorWithAlpha(color: number, alpha: number): string {
+  return `${colorToCss(color)}${Math.round(alpha * 255)
+    .toString(16)
+    .padStart(2, "0")}`;
+}
+
+
 
 function loadStoredEvents(cityId: string): GameEvent[] {
   try {
@@ -91,12 +157,22 @@ function statusLabel(status: ConnectionState): string {
   }
 }
 
+function permissionModeLabel(mode: PermissionMode): string {
+  return mode === "auto" ? "Don’t Disturb Mayor" : "Mayor approval";
+}
+
+function sessionCrewLabel(model: string, effort: EffortLevel): string {
+  const crew = findCrewByModel(model);
+  const name = crew?.name ?? model;
+  return `${name} · ${effortLabel(effort)} effort`;
+}
+
 function eventLabel(event: GameEvent): string {
   switch (event.type) {
     case "world.ready":
       return `${event.snapshot.buildings.length} structures surveyed`;
     case "session.started":
-      return `${event.model} crew dispatched`;
+      return `${sessionCrewLabel(event.model, event.effort)} · ${permissionModeLabel(event.permissionMode)}`;
     case "session.message":
       return `${event.role}: ${event.text}`;
     case "session.usage":
@@ -155,7 +231,7 @@ function timelineContentForEvent(
       };
     case "session.started":
       return {
-        label: `${event.model} crew dispatched`,
+        label: `${sessionCrewLabel(event.model, event.effort)} · ${permissionModeLabel(event.permissionMode)}`,
       };
     case "subagent.changed":
       return {
@@ -413,9 +489,28 @@ function findPendingPermit(
   return undefined;
 }
 
+function pointIsInside(
+  element: HTMLElement | null,
+  position: CanvasPointerPosition,
+): boolean {
+  if (!element) {
+    return false;
+  }
+
+  const bounds = element.getBoundingClientRect();
+  return (
+    position.clientX >= bounds.left &&
+    position.clientX <= bounds.right &&
+    position.clientY >= bounds.top &&
+    position.clientY <= bounds.bottom
+  );
+}
+
 export default function App() {
   const { sfxEnabled, toggleSfx } = useAudio();
   const socketRef = useRef<WebSocket>(null);
+  const canvasRef = useRef<GameCanvasHandle>(null);
+  const orderFormRef = useRef<HTMLFormElement>(null);
   const [connection, setConnection] =
     useState<ConnectionState>("connecting");
   const [cities, setCities] = useState<CitySummary[]>([]);
@@ -436,7 +531,21 @@ export default function App() {
   }>();
   const [prompt, setPrompt] = useState("");
   const [commandOpen, setCommandOpen] = useState(false);
+  const [draggingBuilding, setDraggingBuilding] = useState<Building>();
+  const [dragPreview, setDragPreview] = useState<CanvasDragPreview>();
+  const [dragPosition, setDragPosition] =
+    useState<CanvasPointerPosition>();
+  const [contextPaths, setContextPaths] = useState<string[]>([]);
+  const [orderPermissionMode, setOrderPermissionMode] =
+    useState<PermissionMode>("default");
+  const [crewSelection, setCrewSelection] = useState<CrewSelection>({
+    crewId: DEFAULT_CREW_ID,
+    effort: DEFAULT_EFFORT,
+  });
+  const [crewDialogOpen, setCrewDialogOpen] = useState(false);
+  const [cityScanOpen, setCityScanOpen] = useState(true);
   const [fileChange, setFileChange] = useState<CanvasFileChange>();
+  const [buildingPaths, setBuildingPaths] = useState<string[]>([]);
   const [selected, setSelected] = useState<Building>();
   const [shipHover, setShipHover] = useState<ShipHoverInfo>();
   const [shipTravelTargetId, setShipTravelTargetId] = useState<string>();
@@ -449,6 +558,9 @@ export default function App() {
   const selectedChange = selected
     ? overlay?.files.find((file) => file.path === selected.path)
     : undefined;
+  const languageSummary = world ? summarizeLanguages(world.buildings) : [];
+  const selectedPalette = paletteFor(selected?.language ?? "unknown");
+  const draggingPalette = paletteFor(draggingBuilding?.language ?? "unknown");
   const pendingPermit = findPendingPermit(events);
   const usage = events
     .slice()
@@ -464,10 +576,26 @@ export default function App() {
     .slice()
     .reverse()
     .find((event) => event.type === "session.started");
-  const agentModel =
+  const selectedCrew = getCrewMember(crewSelection.crewId);
+  const activeCrew =
     startedSession?.type === "session.started"
-      ? startedSession.model
-      : "Engineer";
+      ? (findCrewByModel(startedSession.model) ?? selectedCrew)
+      : selectedCrew;
+  const activeEffort =
+    startedSession?.type === "session.started"
+      ? startedSession.effort
+      : crewSelection.effort;
+  const crewAvatarSrc = crewSpriteUrl(activeCrew.id, activeEffort);
+  const crewDialogueTitle = activeCrew.name;
+  const crewDialogueDescription = pendingPermit
+    ? "Awaiting permit stamp"
+    : `${effortLabel(activeEffort)} effort · ${activeCrew.title}`;
+  const showDragPreview = Boolean(
+    draggingBuilding &&
+      dragPreview?.src &&
+      dragPosition &&
+      pointIsInside(orderFormRef.current, dragPosition),
+  );
 
   useEffect(() => {
     const socket = new WebSocket(websocketUrl);
@@ -475,6 +603,10 @@ export default function App() {
     // Every city rescans on its own schedule -- an edit burst in one city
     // must not delay or coalesce with another city's rescan.
     const rescanTimers: Record<string, ReturnType<typeof setTimeout>> = {};
+    const sites = new ConstructionTracker({
+      graceMs: CONSTRUCTION_GRACE_MS,
+      onChange: setBuildingPaths,
+    });
 
     // The agent edits in bursts; one rescan after the burst settles is enough,
     // and the scene diffs the result so standing buildings do not flicker.
@@ -554,7 +686,20 @@ export default function App() {
           path: event.path,
           change: event.change,
         });
+        // Covers a change with no tool behind it; a tool-driven one is
+        // already held open by its own hold.
+        sites.start(event.path);
         scheduleRescan(event.cityId);
+      }
+      // A tool's target is the earliest signal that work has started — the
+      // crane goes up before the file is written, and stays up while the tool
+      // runs. Targets that are not a building path (a shell command, say)
+      // simply match no building.
+      if (event.type === "tool.started" && event.target) {
+        sites.start(event.target, event.toolCallId);
+      }
+      if (event.type === "tool.completed") {
+        sites.finish(event.toolCallId);
       }
     });
 
@@ -562,6 +707,7 @@ export default function App() {
       for (const timer of Object.values(rescanTimers)) {
         clearTimeout(timer);
       }
+      sites.dispose();
       socket.close();
       socketRef.current = null;
     };
@@ -632,21 +778,82 @@ export default function App() {
     }
   }
 
+  function handleBuildingDragStart(
+    building: Building,
+    preview?: CanvasDragPreview,
+  ): void {
+    setDraggingBuilding(building);
+    setDragPreview(preview);
+    setDragPosition(undefined);
+  }
+
+  function handleBuildingDragMove(position: CanvasPointerPosition): void {
+    setDragPosition(position);
+  }
+
+  function handleBuildingDrop(
+    building: Building,
+    position: CanvasPointerPosition,
+  ): void {
+    setDraggingBuilding(undefined);
+    setDragPreview(undefined);
+    setDragPosition(undefined);
+    if (!pointIsInside(orderFormRef.current, position)) {
+      return;
+    }
+
+    setContextPaths((current) =>
+      current.includes(building.path) ? current : [...current, building.path],
+    );
+  }
+
+  function removeContextPath(path: string): void {
+    setContextPaths((current) => current.filter((item) => item !== path));
+  }
+
   function submitPrompt(event: FormEvent<HTMLFormElement>): void {
     event.preventDefault();
     const nextPrompt = prompt.trim();
     if (!nextPrompt) {
       return;
     }
-    send({ type: "session.prompt", cityId: activeCityId, prompt: nextPrompt });
+    send({
+      type: "session.prompt",
+      cityId: activeCityId,
+      prompt: nextPrompt,
+      permissionMode: orderPermissionMode,
+      model: getCrewMember(crewSelection.crewId).model,
+      effort: crewSelection.effort,
+      contextPaths,
+    });
     setPrompt("");
+    setContextPaths([]);
+    setOrderPermissionMode("default");
   }
 
   return (
     <div className="flex h-dvh min-h-[36rem] flex-col bg-background">
+      {showDragPreview && dragPreview && dragPosition ? (
+        <img
+          src={dragPreview.src}
+          alt=""
+          aria-hidden="true"
+          draggable={false}
+          className="pointer-events-none fixed z-[100] select-none"
+          style={{
+            left: dragPosition.clientX,
+            top: dragPosition.clientY,
+            transform: "translate(-50%, -100%)",
+            opacity: 0.48,
+            width: 32,
+            height: "auto",
+            imageRendering: "pixelated",
+          }}
+        />
+      ) : null}
       <header className="flex items-center justify-between border-b-4 border-foreground px-4 py-3 dark:border-ring">
         <div className="flex min-w-0 items-center gap-3">
-          <span className="retro flex size-9 shrink-0 items-center justify-center border-2 border-foreground bg-primary text-xs font-black text-primary-foreground dark:border-ring">
+          <span className="retro flex size-9 shrink-0 items-center justify-center border-2 border-foreground bg-primary text-xs text-primary-foreground dark:border-ring">
             SC
           </span>
           <div className="min-w-0">
@@ -686,8 +893,9 @@ export default function App() {
       <ResizablePanelGroup orientation="horizontal" className="min-h-0 flex-1">
         <ResizablePanel defaultSize={72} minSize={45}>
           <div className="flex h-full min-h-0 flex-col">
-            <section className="relative min-h-0 flex-1 overflow-hidden">
+            <section className="city-stage relative min-h-0 flex-1 overflow-hidden">
               <GameCanvas
+                ref={canvasRef}
                 cityId={activeCityId}
                 world={world}
                 overlay={overlay}
@@ -704,21 +912,96 @@ export default function App() {
                 }
                 fileChange={fileChange}
                 cities={cities}
+                buildingPaths={buildingPaths}
+                crewSprite={crewAvatarSrc}
                 onTravelRequest={requestShipTravel}
                 onTravelComplete={completeShipTravel}
                 onTravelTransitionChange={setShipTransitioning}
                 onShipHover={setShipHover}
                 onSelectBuilding={selectBuilding}
+                onBuildingDragStart={handleBuildingDragStart}
+                onBuildingDragMove={handleBuildingDragMove}
+                onBuildingDragEnd={handleBuildingDrop}
               />
               {!shipTransitioning ? (
                 <>
-              <div className="pointer-events-none absolute left-4 top-4 border-2 border-foreground bg-card px-3 py-2 dark:border-ring">
-                <span className="retro block text-[10px] text-primary">
-                  District survey
-                </span>
-                <strong className="retro block text-xs">
-                  {world?.buildings.length ?? 0} structures mapped
-                </strong>
+              <div
+                id="city-scan-panel"
+                className={`city-panel city-scan-panel pointer-events-auto absolute left-4 top-4 z-20 ${
+                  cityScanOpen
+                    ? "w-[min(26rem,calc(100%-2rem))] px-3 py-3"
+                    : "w-auto px-1.5 py-1.5"
+                }`}
+              >
+                <div
+                  className={`flex ${
+                    cityScanOpen ? "items-start gap-3" : "items-center gap-2"
+                  }`}
+                >
+                  <button
+                    type="button"
+                    aria-controls="city-scan-panel"
+                    aria-expanded={cityScanOpen}
+                    aria-label={
+                      cityScanOpen
+                        ? "Collapse City Scan panel"
+                        : "Expand City Scan panel"
+                    }
+                    title={cityScanOpen ? "Collapse City Scan" : "Expand City Scan"}
+                    onClick={() => setCityScanOpen((open) => !open)}
+                    className="retro flex size-6 shrink-0 items-center justify-center border border-primary/60 bg-primary/10 text-sm leading-none text-primary transition-colors hover:bg-primary hover:text-primary-foreground"
+                  >
+                    <span aria-hidden="true">{cityScanOpen ? "‹" : "›"}</span>
+                  </button>
+                  {cityScanOpen ? (
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="retro text-[9px] tracking-[0.16em] text-primary">
+                          CITY SCAN // LIVE
+                        </span>
+                        <span className="retro border border-primary/50 px-1.5 py-0.5 text-[8px] text-primary">
+                          {world ? "SYNCED" : "LINKING"}
+                        </span>
+                      </div>
+                      <div className="mt-2 flex items-end justify-between gap-4">
+                        <strong className="retro text-sm text-foreground">
+                          {world?.buildings.length ?? 0}
+                        </strong>
+                        <span className="retro mb-0.5 flex-1 text-[9px] text-muted-foreground">
+                          file structures mapped
+                        </span>
+                        <span className="retro text-[8px] text-muted-foreground">
+                          {languageSummary.length} types
+                        </span>
+                      </div>
+                      {languageSummary.length > 0 ? (
+                        <div className="mt-3 flex flex-wrap gap-1.5">
+                          {languageSummary.slice(0, 6).map(({ language, count }) => {
+                            const palette = paletteFor(language);
+                            return (
+                              <span
+                                key={language}
+                                className="retro inline-flex items-center gap-1 border px-1.5 py-1 text-[8px]"
+                                style={{
+                                  backgroundColor: colorWithAlpha(palette.accent, 0.16),
+                                  borderColor: colorWithAlpha(palette.accent, 0.72),
+                                  color: colorToCss(palette.accent),
+                                }}
+                              >
+                                <span className="font-black">{palette.mark}</span>
+                                <span className="text-foreground/80">{count}</span>
+                              </span>
+                            );
+                          })}
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : (
+                    <span className="retro text-[8px] tracking-[0.16em] text-primary">
+                      SCAN
+                    </span>
+                  )}
+                </div>
               </div>
 
               {shipHover ? (
@@ -734,60 +1017,93 @@ export default function App() {
               ) : null}
 
               {selected ? (
-                <div className="absolute bottom-4 left-4 max-w-[min(28rem,calc(100%-2rem))] border-2 border-foreground bg-card px-3 py-2 dark:border-ring">
-                  <div className="flex items-start justify-between gap-3">
-                    <span className="retro block text-[10px] text-primary">
-                      {selected.district}
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => selectBuilding(undefined)}
-                      aria-label="Close structure details"
-                      className="retro shrink-0 text-[10px] text-muted-foreground hover:text-foreground"
-                    >
-                      ✕
-                    </button>
-                  </div>
-                  <p className="retro mt-1 break-all text-xs">{selected.path}</p>
-                  <dl className="retro mt-2 flex gap-4 text-[10px] text-muted-foreground">
-                    <div>
-                      <dt className="inline">Language </dt>
-                      <dd className="inline text-foreground">
-                        {selected.language}
-                      </dd>
+                <div className="city-panel absolute bottom-4 left-4 w-max max-w-[calc(100%-2rem)] overflow-x-auto overflow-y-hidden">
+                  <div
+                    className="h-1"
+                    style={{ backgroundColor: colorToCss(selectedPalette.accent) }}
+                  />
+                  <div className="shrink-0 p-3">
+                    <div className="flex items-start justify-between gap-3 whitespace-nowrap">
+                      <div className="flex shrink-0 items-center gap-2">
+                        <span
+                          className="retro flex size-8 shrink-0 items-center justify-center border text-[9px] font-black"
+                          style={{
+                            backgroundColor: colorToCss(selectedPalette.accent),
+                            borderColor: colorToCss(selectedPalette.accentDark),
+                            color: colorToCss(selectedPalette.ink),
+                          }}
+                        >
+                          {selectedPalette.mark}
+                        </span>
+                        <div className="shrink-0">
+                          <span className="retro block whitespace-nowrap text-[10px] text-primary">
+                            {selected.language} structure
+                          </span>
+                          <span className="retro block whitespace-nowrap text-[8px] text-muted-foreground">
+                            {selected.path}
+                          </span>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => selectBuilding(undefined)}
+                        aria-label="Close structure details"
+                        className="retro shrink-0 text-[10px] text-muted-foreground transition-colors hover:text-foreground"
+                      >
+                        ✕
+                      </button>
                     </div>
-                    <div>
-                      <dt className="inline">Lines </dt>
-                      <dd className="inline text-foreground">{selected.loc}</dd>
-                    </div>
-                    {selectedChange ? (
-                      <div>
-                        <dt className="inline">PR </dt>
+                    <dl className="retro mt-3 flex gap-2 whitespace-nowrap text-[9px]">
+                      <div className="border border-border/70 bg-background/30 px-2 py-1.5">
+                        <dt className="inline text-[7px] text-muted-foreground">
+                          LINES OF CODE{" "}
+                        </dt>
                         <dd className="inline text-foreground">
-                          {selectedChange.change}
+                          {selected.loc.toLocaleString()}
                         </dd>
                       </div>
+                      <div className="border border-border/70 bg-background/30 px-2 py-1.5">
+                        <dt className="inline text-[7px] text-muted-foreground">
+                          FILE TYPE{" "}
+                        </dt>
+                        <dd
+                          className="inline"
+                          style={{ color: colorToCss(selectedPalette.accent) }}
+                        >
+                          {selected.language}
+                        </dd>
+                      </div>
+                      {selectedChange ? (
+                        <div className="border border-border/70 bg-background/30 px-2 py-1.5">
+                          <dt className="inline text-[7px] text-muted-foreground">
+                            IN THIS PR{" "}
+                          </dt>
+                          <dd className="inline text-foreground">
+                            {selectedChange.change}
+                          </dd>
+                        </div>
+                      ) : null}
+                    </dl>
+                    {selectedChange && selectedChange.change !== "deleted" ? (
+                      <div className="mt-3 max-h-64 overflow-auto">
+                        {diff &&
+                        diff.cityId === activeCityId &&
+                        diff.path === selected.path ? (
+                          <Markdown className="retro text-[10px]">
+                            {`\`\`\`diff\n${diff.patch}\n\`\`\``}
+                          </Markdown>
+                        ) : (
+                          <p className="retro text-[10px] text-muted-foreground">
+                            Loading diff…
+                          </p>
+                        )}
+                      </div>
                     ) : null}
-                  </dl>
-                  {selectedChange && selectedChange.change !== "deleted" ? (
-                    <div className="mt-2 max-h-64 overflow-auto">
-                      {diff &&
-                      diff.cityId === activeCityId &&
-                      diff.path === selected.path ? (
-                        <Markdown className="retro text-[10px]">
-                          {`\`\`\`diff\n${diff.patch}\n\`\`\``}
-                        </Markdown>
-                      ) : (
-                        <p className="retro text-[10px] text-muted-foreground">
-                          Loading diff…
-                        </p>
-                      )}
-                    </div>
-                  ) : null}
+                  </div>
                 </div>
               ) : null}
 
-              <div className="pointer-events-none absolute bottom-4 right-4 border border-border bg-card/90 px-2 py-1">
+              <div className="city-panel pointer-events-none absolute bottom-4 right-4 px-2 py-1.5">
                 <span className="retro text-[8px] text-muted-foreground">
                   Drag to pan · Scroll to zoom · Click a building
                 </span>
@@ -797,7 +1113,10 @@ export default function App() {
             </section>
 
             <form
-              className="border-t-4 border-foreground p-4 dark:border-ring"
+              ref={orderFormRef}
+              className={`city-order-form border-t-4 border-foreground p-4 dark:border-ring ${
+                draggingBuilding ? "is-drop-target ring-2 ring-inset ring-primary" : ""
+              }`}
               onSubmit={submitPrompt}
             >
               <label
@@ -806,6 +1125,146 @@ export default function App() {
               >
                 Mayor&apos;s order
               </label>
+              {draggingBuilding ? (
+                <div
+                  className="mb-3 flex items-center gap-2 border px-2 py-2"
+                  style={{
+                    backgroundColor: colorWithAlpha(draggingPalette.accent, 0.14),
+                    borderColor: colorWithAlpha(draggingPalette.accent, 0.72),
+                  }}
+                >
+                  <span
+                    className="retro flex size-6 shrink-0 items-center justify-center border text-[8px] font-black"
+                    style={{
+                      backgroundColor: colorToCss(draggingPalette.accent),
+                      borderColor: colorToCss(draggingPalette.accentDark),
+                      color: colorToCss(draggingPalette.ink),
+                    }}
+                  >
+                    {draggingPalette.mark}
+                  </span>
+                  <div className="min-w-0">
+                    <span className="retro block text-[8px] text-primary">
+                      Drop to attach {draggingBuilding.language} context
+                    </span>
+                    <code className="block truncate text-[9px] text-foreground">
+                      {draggingBuilding.path}
+                    </code>
+                  </div>
+                </div>
+              ) : null}
+              {contextPaths.length > 0 ? (
+                <div className="mb-3 flex flex-wrap items-center gap-1.5">
+                  <span className="retro mr-1 text-[8px] text-muted-foreground">
+                    Context queue
+                  </span>
+                  {contextPaths.map((path) => {
+                    const contextBuilding = world?.buildings.find(
+                      (building) => building.path === path,
+                    );
+                    const palette = paletteFor(
+                      contextBuilding?.language ?? "unknown",
+                    );
+                    return (
+                      <button
+                        key={path}
+                        type="button"
+                        title={`Remove ${path} from context`}
+                        onClick={() => removeContextPath(path)}
+                        className="retro inline-flex max-w-full items-center gap-1.5 border px-2 py-1.5 text-left text-[8px] transition-colors hover:text-primary-foreground"
+                        style={{
+                          backgroundColor: colorWithAlpha(palette.accent, 0.12),
+                          borderColor: colorWithAlpha(palette.accent, 0.72),
+                        }}
+                      >
+                        <span
+                          className="flex size-4 shrink-0 items-center justify-center border text-[7px] font-black"
+                          style={{
+                            backgroundColor: colorToCss(palette.accent),
+                            borderColor: colorToCss(palette.accentDark),
+                            color: colorToCss(palette.ink),
+                          }}
+                        >
+                          {palette.mark}
+                        </span>
+                        <span className="max-w-[16rem] truncate text-foreground">
+                          {path}
+                        </span>
+                        <span aria-hidden="true" className="text-muted-foreground">
+                          ×
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : null}
+              <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                <span className="retro text-[9px] text-muted-foreground">
+                  Crew for this order
+                </span>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  disabled={connection !== "online"}
+                  onClick={() => setCrewDialogOpen(true)}
+                  className="retro h-auto justify-start gap-2 px-2 py-1.5 text-left"
+                >
+                  <img
+                    src={crewSpriteUrl(crewSelection.crewId, crewSelection.effort)}
+                    alt=""
+                    className="size-8 object-contain [image-rendering:pixelated]"
+                  />
+                  <span className="min-w-0">
+                    <span className="block text-[8px] text-primary">
+                      {getCrewMember(crewSelection.crewId).name}
+                    </span>
+                    <span className="block text-[8px] text-muted-foreground">
+                      {effortLabel(crewSelection.effort)} effort
+                    </span>
+                  </span>
+                </Button>
+              </div>
+              <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                <span className="retro text-[9px] text-muted-foreground">
+                  Permission&apos;s for this order
+                </span>
+                <div
+                  className="grid grid-cols-2 gap-1"
+                  role="group"
+                  aria-label="Permission mode for this order"
+                >
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant={
+                      orderPermissionMode === "default" ? "default" : "outline"
+                    }
+                    aria-pressed={orderPermissionMode === "default"}
+                    onClick={() => setOrderPermissionMode("default")}
+                    disabled={connection !== "online"}
+                  >
+                    Ask Mayor
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant={
+                      orderPermissionMode === "auto" ? "default" : "outline"
+                    }
+                    aria-pressed={orderPermissionMode === "auto"}
+                    onClick={() => setOrderPermissionMode("auto")}
+                    disabled={connection !== "online"}
+                  >
+                    Don&apos;t Disturb
+                  </Button>
+                </div>
+              </div>
+              <p className="retro mb-2 text-[8px] text-muted-foreground">
+                {orderPermissionMode === "auto"
+                  ? "Auto mode applies only to this order."
+                  : "Default mode pauses for your approval."}
+              </p>
               <div className="flex flex-col gap-2 sm:flex-row">
                 <Input
                   id="mayor-prompt"
@@ -853,13 +1312,10 @@ export default function App() {
             <div className="flex min-h-0 flex-1 flex-col gap-4 p-4">
               <div className="shrink-0 space-y-4">
                 <Dialogue
-                  avatarFallback={agentModel.slice(0, 1).toUpperCase()}
-                  title={agentModel}
-                  description={
-                    pendingPermit
-                      ? "Awaiting permit stamp"
-                      : "Awaiting orders"
-                  }
+                  avatarSrc={crewAvatarSrc}
+                  avatarFallback={activeCrew.name.slice(0, 1)}
+                  title={crewDialogueTitle}
+                  description={crewDialogueDescription}
                 />
 
                 <div className="space-y-3">
@@ -928,10 +1384,37 @@ export default function App() {
         </ResizablePanel>
       </ResizablePanelGroup>
 
+      <CrewSelectDialog
+        open={crewDialogOpen}
+        onOpenChange={setCrewDialogOpen}
+        value={crewSelection}
+        onConfirm={setCrewSelection}
+      />
+
       <CommandDialog open={commandOpen} onOpenChange={setCommandOpen}>
-        <CommandInput placeholder="Type a mayor command..." />
+        <CommandInput placeholder="Search files or mayor commands..." />
         <CommandList>
-          <CommandEmpty>No command found.</CommandEmpty>
+          <CommandEmpty>No file or command found.</CommandEmpty>
+          {world?.buildings.length ? (
+            <CommandGroup heading="Files">
+              {world.buildings.map((building) => (
+                <CommandItem
+                  key={building.path}
+                  value={building.path}
+                  onSelect={() => {
+                    canvasRef.current?.focusBuilding(building.path);
+                    setSelected(building);
+                    setCommandOpen(false);
+                  }}
+                >
+                  <span className="truncate">{fileBasename(building.path)}</span>
+                  <span className="text-muted-foreground ml-2 truncate text-xs">
+                    {fileDirname(building.path)}
+                  </span>
+                </CommandItem>
+              ))}
+            </CommandGroup>
+          ) : null}
           <CommandGroup heading="Mayor">
             <CommandItem
               onSelect={() => {
