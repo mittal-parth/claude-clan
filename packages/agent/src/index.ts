@@ -1,4 +1,4 @@
-import { relative, sep } from "node:path";
+import { isAbsolute, relative, sep } from "node:path";
 import {
   query,
   type HookCallback,
@@ -202,7 +202,7 @@ export class AgentSessionManager {
         type: "tool.started",
         toolCallId: input.tool_use_id,
         tool: input.tool_name,
-        target: toolTarget(input.tool_input),
+        target: toolTarget(input.tool_input, this.cwd),
       });
     }
     return {};
@@ -334,11 +334,23 @@ function assistantText(message: SDKAssistantMessage): string {
     .join("\n");
 }
 
-function toolTarget(input: unknown): string | undefined {
+/**
+ * A tool's headline argument. File paths arrive absolute from the SDK, and are
+ * made repo-relative to match the paths on file.changed and on the world
+ * snapshot's buildings — the renderer looks a target up by building path, so an
+ * absolute one silently matched nothing.
+ */
+function toolTarget(input: unknown, cwd: string): string | undefined {
   if (!isRecord(input)) {
     return undefined;
   }
-  for (const key of ["file_path", "path", "command", "pattern"]) {
+  for (const key of ["file_path", "path"]) {
+    const value = input[key];
+    if (typeof value === "string") {
+      return normalizePath(isAbsolute(value) ? relative(cwd, value) : value);
+    }
+  }
+  for (const key of ["command", "pattern"]) {
     const value = input[key];
     if (typeof value === "string") {
       return value;

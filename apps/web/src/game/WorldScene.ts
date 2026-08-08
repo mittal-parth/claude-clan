@@ -1,16 +1,19 @@
 import type { Building, WorldSnapshot } from "@sudo-city/protocol";
 import Phaser from "phaser";
-import { AmbientLife } from "./ambient";
+import { AmbientLife, prefersReducedMotion } from "./ambient";
+import { ConstructionSites, type ConstructionTarget } from "./construction";
 import { playUiClickSound } from "@/lib/play-ui-click";
 import { hashCoords, hashText, pickIndex, unitFloat } from "./hash";
 import { createIsoProjection } from "./iso";
 import { archetypeFor, tierFor } from "./palette";
+import { shouldRevealSite } from "./reveal";
 import {
   buildTerrain,
   type TerrainCell,
   type TerrainGrid,
 } from "./terrain";
 import {
+  CRANE_HEIGHT,
   HIGHLIGHT_KEY,
   SELECT_KEY,
   TERRAIN_ATLAS_KEY,
@@ -41,8 +44,15 @@ const MIN_ZOOM = 0.2;
 const MAX_ZOOM = 2;
 const FOCUS_ZOOM = 1.25;
 const FOCUS_DURATION_MS = 450;
+/**
+ * Zoom below which a crane is too small to notice. The world opens fitted to
+ * the whole city, which on a large repo is far below this.
+ */
+const CONSTRUCTION_LEGIBLE_ZOOM = 0.75;
 /** Pointer travel, in screen pixels, above which a press is a drag not a click. */
 const CLICK_SLOP = 5;
+/** After the player moves the camera, leave it alone this long. */
+const CAMERA_YIELD_MS = 8_000;
 /** Most trees, bushes and fountains the world will place, at any size. */
 const PROP_BUDGET = 2_000;
 /** Rings of real water tiles at the coast; past this the background takes over. */
@@ -63,6 +73,14 @@ export class WorldScene extends Phaser.Scene {
   private propSprites: Phaser.GameObjects.Sprite[] = [];
   private views = new Map<string, BuildingView>();
   private ambient?: AmbientLife;
+  private construction?: ConstructionSites;
+  /** Paths the crew is currently working on, newest last. */
+  private buildingPaths: string[] = [];
+  /** Paths that already have a site, so only genuinely new ones grab the camera. */
+  private sitedPaths = new Set<string>();
+  /** Public URL of the crew portrait currently on shift, loaded or loading. */
+  private crewUrl?: string;
+  private lastCameraInputAt = Number.NEGATIVE_INFINITY;
 
   private highlight?: Phaser.GameObjects.Sprite;
   private selectionMarker?: Phaser.GameObjects.Sprite;
@@ -108,12 +126,141 @@ export class WorldScene extends Phaser.Scene {
       traffic: TRAFFIC_DEPTH,
       sky: SKY_DEPTH,
     });
+    this.construction = new ConstructionSites(this, prefersReducedMotion());
+    // A portrait asked for before the scene booted has been waiting for this.
+    this.loadCrewSprite(this.crewUrl);
     this.bindCamera();
     this.events.once("shutdown", () => this.clearDragPreview());
   }
 
   setSelectionListener(listener: (building?: Building) => void): void {
     this.selectionListener = listener;
+  }
+
+  /**
+   * The files the crew is working on right now. Each one that already has a
+   * building gets a crane, scaffolding and dust until it drops off the list.
+   */
+  setBuildingPaths(paths: string[]): void {
+    this.buildingPaths = paths;
+    this.syncConstruction();
+  }
+
+  /**
+   * The crew portrait to stand on every site, by public URL.
+   *
+   * Loaded on demand rather than in preload: which portrait is wanted depends
+   * on the crew and effort picked for a session that has not started when the
+   * scene boots, and only one of them is ever needed.
+   */
+  setCrewSprite(url?: string): void {
+    if (url === this.crewUrl) {
+      return;
+    }
+
+    this.crewUrl = url;
+
+    // React hands the portrait over as soon as the canvas mounts, which is
+    // before Phaser has booted the scene — at that point `load`, `textures`
+    // and `scene` itself are all still undefined. `construction` is built in
+    // create(), so it doubles as the "are we up yet" flag; create() reads the
+    // url back once there is a loader to service it.
+    if (this.construction) {
+      this.loadCrewSprite(url);
+    }
+  }
+
+  private loadCrewSprite(url?: string): void {
+    if (!url) {
+      this.construction?.setCrewTexture(undefined);
+      return;
+    }
+
+    const key = `crew:${url}`;
+    if (this.textures.exists(key)) {
+      this.construction?.setCrewTexture(key);
+      return;
+    }
+
+    this.load.image(key, url);
+    this.load.once(Phaser.Loader.Events.COMPLETE, () => {
+      // A second portrait may have been asked for while this one loaded.
+      if (this.crewUrl === url && this.textures.exists(key)) {
+        this.construction?.setCrewTexture(key);
+      }
+    });
+    this.load.start();
+  }
+
+  private syncConstruction(): void {
+    if (!this.construction) {
+      return;
+    }
+
+    const targets: ConstructionTarget[] = [];
+    for (const path of this.buildingPaths) {
+      const view = this.views.get(path);
+      // A brand new file has no plot until the rescan lands; it picks up its
+      // crane on the next sync, once the building exists.
+      if (!view) {
+        continue;
+      }
+      targets.push({
+        path,
+        x: view.sprite.x,
+        y: view.sprite.y,
+        depth: view.sprite.depth,
+        height: view.sprite.height,
+      });
+    }
+
+    const opened = targets.find((target) => !this.sitedPaths.has(target.path));
+    this.sitedPaths = new Set(targets.map((target) => target.path));
+
+    this.construction.sync(targets);
+
+    if (opened) {
+      this.revealConstruction(opened);
+    }
+  }
+
+  /**
+   * Brings a new site into view. A crane is only about sixty pixels tall at the
+   * zoom the world opens at, so work happening off-screen — or just elsewhere
+   * in a large city — went unnoticed entirely.
+   *
+   * Uses the same pan-and-zoom as clicking a search result, so the building
+   * being worked on ends up as legible as one you went looking for. It stays
+   * quieter than search though: no click sound, and it does not steal the
+   * selection, because nobody asked for this move.
+   */
+  private revealConstruction(target: ConstructionTarget): void {
+    const camera = this.cameras.main;
+
+    const move = shouldRevealSite(
+      target,
+      {
+        x: camera.worldView.x,
+        y: camera.worldView.y,
+        right: camera.worldView.right,
+        bottom: camera.worldView.bottom,
+        zoom: camera.zoom,
+      },
+      {
+        margin: CRANE_HEIGHT,
+        legibleZoom: CONSTRUCTION_LEGIBLE_ZOOM,
+        now: this.time.now,
+        lastCameraInputAt: this.lastCameraInputAt,
+        yieldMs: CAMERA_YIELD_MS,
+      },
+    );
+    if (!move) {
+      return;
+    }
+
+    // Framed on the crane rather than the roof: the mast stands well above the
+    // building it is working on.
+    this.moveCameraTo(target.x, target.y - CRANE_HEIGHT / 2, FOCUS_ZOOM);
   }
 
   setBuildingDragListener(listener: (building: Building) => void): void {
@@ -199,17 +346,38 @@ export class WorldScene extends Phaser.Scene {
       return false;
     }
 
+    playUiClickSound();
+    this.moveCameraTo(view.sprite.x, view.sprite.y, FOCUS_ZOOM, () =>
+      this.select(path),
+    );
+    return true;
+  }
+
+  /**
+   * The one way the camera moves itself — search results and construction
+   * sites both come through here, so they read as the same gesture.
+   *
+   * Phaser can pan or zoom, but not "centre on this point at that zoom", so
+   * the end state is set, the scroll it implies is read back, and the camera
+   * is put where it was to tween towards it.
+   */
+  private moveCameraTo(
+    x: number,
+    y: number,
+    zoom: number,
+    onArrive?: () => void,
+  ): void {
     this.focusTween?.stop();
     this.focusTween = undefined;
 
     const camera = this.cameras.main;
-    const targetZoom = Phaser.Math.Clamp(FOCUS_ZOOM, MIN_ZOOM, MAX_ZOOM);
+    const targetZoom = Phaser.Math.Clamp(zoom, MIN_ZOOM, MAX_ZOOM);
     const startScrollX = camera.scrollX;
     const startScrollY = camera.scrollY;
     const startZoom = camera.zoom;
 
     camera.setZoom(targetZoom);
-    camera.centerOn(view.sprite.x, view.sprite.y);
+    camera.centerOn(x, y);
     const targetScrollX = camera.scrollX;
     const targetScrollY = camera.scrollY;
 
@@ -217,7 +385,6 @@ export class WorldScene extends Phaser.Scene {
     camera.scrollX = startScrollX;
     camera.scrollY = startScrollY;
 
-    playUiClickSound();
     this.focusTween = this.tweens.add({
       targets: camera,
       scrollX: targetScrollX,
@@ -231,11 +398,9 @@ export class WorldScene extends Phaser.Scene {
       onComplete: () => {
         this.zoomTarget = targetZoom;
         this.focusTween = undefined;
-        this.select(path);
+        onArrive?.();
       },
     });
-
-    return true;
   }
 
   setWorld(snapshot: WorldSnapshot): void {
@@ -256,6 +421,9 @@ export class WorldScene extends Phaser.Scene {
     }
 
     this.syncBuildings(snapshot);
+    // A rescan can raise the building a crane was waiting on, or move the one
+    // it is standing beside.
+    this.syncConstruction();
 
     if (!this.hasFitCamera) {
       this.fitCamera();
@@ -509,6 +677,17 @@ export class WorldScene extends Phaser.Scene {
     camera.centerOn(center.x, center.y);
   }
 
+  /**
+   * Stops an automatic camera move from fighting the player for the camera.
+   * The tween writes scroll and zoom every frame, so grabbing the world mid
+   * flight has to kill it outright rather than just start a new one.
+   */
+  private noteCameraInput(): void {
+    this.lastCameraInputAt = this.time.now;
+    this.focusTween?.stop();
+    this.focusTween = undefined;
+  }
+
   private bindCamera(): void {
     this.input.on("pointerdown", (pointer: Phaser.Input.Pointer) => {
       this.dragOrigin = { x: pointer.x, y: pointer.y };
@@ -574,6 +753,7 @@ export class WorldScene extends Phaser.Scene {
         camera.scrollX -= (pointer.x - this.dragOrigin.x) / camera.zoom;
         camera.scrollY -= (pointer.y - this.dragOrigin.y) / camera.zoom;
         this.dragOrigin = { x: pointer.x, y: pointer.y };
+        this.noteCameraInput();
         return;
       }
       this.moveHighlight(pointer);
@@ -588,6 +768,7 @@ export class WorldScene extends Phaser.Scene {
         deltaY: number,
       ) => {
         const camera = this.cameras.main;
+        this.noteCameraInput();
         // Anchor the zoom on the cursor: keep whatever world point is under
         // the pointer pinned there as the zoom changes.
         const before = camera.getWorldPoint(pointer.x, pointer.y);

@@ -26,6 +26,10 @@ export type GameCanvasHandle = {
 interface GameCanvasProps {
   world?: WorldSnapshot;
   fileChange?: CanvasFileChange;
+  /** Public URL of the portrait to stand on every construction site. */
+  crewSprite?: string;
+  /** Files the crew is working on; each gets a construction site. */
+  buildingPaths?: string[];
   onSelectBuilding?: (building?: Building) => void;
   onBuildingDragStart?: (
     building: Building,
@@ -43,6 +47,8 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
     {
       world,
       fileChange,
+      crewSprite,
+      buildingPaths,
       onSelectBuilding,
       onBuildingDragStart,
       onBuildingDragMove,
@@ -172,6 +178,17 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
         sceneRef.current?.applyFileChange(fileChange.path, fileChange.change);
       }
     }, [fileChange]);
+
+    useEffect(() => {
+      sceneRef.current?.setCrewSprite(crewSprite);
+    }, [crewSprite]);
+
+    // Joined rather than passed by identity: the parent rebuilds this array on
+    // every event, and only a change in membership should disturb the sites.
+    const pathKey = (buildingPaths ?? []).join("\0");
+    useEffect(() => {
+      sceneRef.current?.setBuildingPaths(pathKey ? pathKey.split("\0") : []);
+    }, [pathKey]);
 
     return (
       <div

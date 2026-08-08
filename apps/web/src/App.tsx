@@ -11,6 +11,7 @@ import {
 import { FormEvent, useEffect, useRef, useState } from "react";
 import { Volume2, VolumeX } from "lucide-react";
 import { useAudio } from "@/components/audio-provider";
+import { ConstructionTracker } from "@/lib/construction-tracker";
 import Dialogue from "@/components/ui/8bit/blocks/dialogue";
 import QuestLog, {
   type Quest,
@@ -70,6 +71,16 @@ const maxBudgetUsd = Number(import.meta.env.VITE_MAX_BUDGET_USD ?? 1);
  * rescan. The agent usually writes several files in a row.
  */
 const RESCAN_DEBOUNCE_MS = 1_200;
+
+/**
+ * How long a site stands after the work on it actually finishes.
+ *
+ * The site's lifetime is the work's lifetime: it opens when a tool starts on a
+ * file and is held open until that tool completes, so a slow edit keeps its
+ * crane for as long as it runs. This is only the tail on the end, so a write
+ * that takes 40ms still leaves something up long enough to notice.
+ */
+const CONSTRUCTION_GRACE_MS = 6_000;
 
 function fileBasename(path: string): string {
   const slash = path.lastIndexOf("/");
@@ -508,6 +519,7 @@ export default function App() {
   const [cityScanOpen, setCityScanOpen] = useState(true);
   const [world, setWorld] = useState<WorldSnapshot>();
   const [fileChange, setFileChange] = useState<CanvasFileChange>();
+  const [buildingPaths, setBuildingPaths] = useState<string[]>([]);
   const [selected, setSelected] = useState<Building>();
   const languageSummary = world ? summarizeLanguages(world.buildings) : [];
   const selectedPalette = paletteFor(selected?.language ?? "unknown");
@@ -552,6 +564,10 @@ export default function App() {
     const socket = new WebSocket(websocketUrl);
     socketRef.current = socket;
     let rescanTimer: ReturnType<typeof setTimeout> | undefined;
+    const sites = new ConstructionTracker({
+      graceMs: CONSTRUCTION_GRACE_MS,
+      onChange: setBuildingPaths,
+    });
 
     // The agent edits in bursts; one rescan after the burst settles is enough,
     // and the scene diffs the result so standing buildings do not flicker.
@@ -588,12 +604,26 @@ export default function App() {
           path: event.path,
           change: event.change,
         });
+        // Covers a change with no tool behind it; a tool-driven one is
+        // already held open by its own hold.
+        sites.start(event.path);
         scheduleRescan();
+      }
+      // A tool's target is the earliest signal that work has started — the
+      // crane goes up before the file is written, and stays up while the tool
+      // runs. Targets that are not a building path (a shell command, say)
+      // simply match no building.
+      if (event.type === "tool.started" && event.target) {
+        sites.start(event.target, event.toolCallId);
+      }
+      if (event.type === "tool.completed") {
+        sites.finish(event.toolCallId);
       }
     });
 
     return () => {
       clearTimeout(rescanTimer);
+      sites.dispose();
       socket.close();
       socketRef.current = null;
     };
@@ -694,7 +724,7 @@ export default function App() {
       ) : null}
       <header className="flex items-center justify-between border-b-4 border-foreground px-4 py-3 dark:border-ring">
         <div className="flex min-w-0 items-center gap-3">
-          <span className="retro flex size-9 shrink-0 items-center justify-center border-2 border-foreground bg-primary text-xs font-black text-primary-foreground dark:border-ring">
+          <span className="retro flex size-9 shrink-0 items-center justify-center border-2 border-foreground bg-primary text-xs text-primary-foreground dark:border-ring">
             SC
           </span>
           <div className="min-w-0">
@@ -737,6 +767,8 @@ export default function App() {
                 ref={canvasRef}
                 world={world}
                 fileChange={fileChange}
+                buildingPaths={buildingPaths}
+                crewSprite={crewAvatarSrc}
                 onSelectBuilding={setSelected}
                 onBuildingDragStart={handleBuildingDragStart}
                 onBuildingDragMove={handleBuildingDragMove}
