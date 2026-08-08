@@ -145,11 +145,18 @@ export class AgentSessionManager {
   }
 
   async interrupt(): Promise<void> {
-    this.abortController?.abort();
+    for (const toolCallId of this.pendingPermits.keys()) {
+      this.emit({
+        type: "tool.completed",
+        toolCallId,
+        outcome: "denied",
+      });
+    }
     for (const permit of this.pendingPermits.values()) {
       permit.reject(new Error("Agent session interrupted"));
     }
     this.pendingPermits.clear();
+    this.abortController?.abort();
   }
 
   async setModel(model: string): Promise<void> {
@@ -163,6 +170,13 @@ export class AgentSessionManager {
       return false;
     }
     this.pendingPermits.delete(toolCallId);
+    if (decision === "deny") {
+      this.emit({
+        type: "tool.completed",
+        toolCallId,
+        outcome: "denied",
+      });
+    }
     permit.resolve(
       decision === "allow"
         ? { behavior: "allow", toolUseID: toolCallId }

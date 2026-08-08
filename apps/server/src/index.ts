@@ -691,6 +691,7 @@ app.get("/ws", { websocket: true }, (socket) => {
             kind: "error",
             code: "PERMIT_NOT_FOUND",
             message: "This permit is no longer pending.",
+            toolCallId: data.toolCallId,
           });
         }
         break;

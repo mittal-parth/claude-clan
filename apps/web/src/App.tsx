@@ -495,8 +495,13 @@ function eventsToQuests(events: GameEvent[]): Quest[] {
 function findPendingPermit(
   events: GameEvent[],
 ): Extract<GameEvent, { type: "permit.requested" }> | undefined {
+  const latestSessionIndex = events.findLastIndex(
+    (event) => event.type === "session.started",
+  );
+  const relevantEvents =
+    latestSessionIndex >= 0 ? events.slice(latestSessionIndex) : events;
   const completed = new Set<string>();
-  for (const event of events.slice().reverse()) {
+  for (const event of relevantEvents.slice().reverse()) {
     if (event.type === "tool.completed") {
       completed.add(event.toolCallId);
     }
@@ -508,6 +513,24 @@ function findPendingPermit(
     }
   }
   return undefined;
+}
+
+function createLocalPermitDismissal(
+  cityId: string,
+  toolCallId: string,
+  events: GameEvent[],
+): Extract<GameEvent, { type: "tool.completed" }> {
+  const lastSequence = events.at(-1)?.sequence ?? 0;
+  return {
+    id: crypto.randomUUID(),
+    cityId: cityId as GameEvent["cityId"],
+    sessionId: "local",
+    sequence: lastSequence + 1,
+    timestamp: new Date().toISOString(),
+    type: "tool.completed",
+    toolCallId,
+    outcome: "denied",
+  };
 }
 
 function pointIsInside(
@@ -705,6 +728,36 @@ export default function App() {
 
       if (decoded.data.kind === "diff") {
         setDiff(decoded.data);
+        return;
+      }
+
+      if (decoded.data.kind === "error") {
+        if (
+          decoded.data.code === "PERMIT_NOT_FOUND" &&
+          decoded.data.toolCallId
+        ) {
+          const toolCallId = decoded.data.toolCallId;
+          setEventsByCity((current) => {
+            for (const [cityId, bucket] of Object.entries(current)) {
+              if (
+                bucket.some(
+                  (event) =>
+                    event.type === "permit.requested" &&
+                    event.toolCallId === toolCallId,
+                )
+              ) {
+                return {
+                  ...current,
+                  [cityId]: [
+                    ...bucket,
+                    createLocalPermitDismissal(cityId, toolCallId, bucket),
+                  ],
+                };
+              }
+            }
+            return current;
+          });
+        }
         return;
       }
 

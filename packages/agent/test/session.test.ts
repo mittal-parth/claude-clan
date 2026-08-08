@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const queryMock = vi.hoisted(() => vi.fn());
 
@@ -9,7 +9,11 @@ vi.mock("@anthropic-ai/claude-agent-sdk", () => ({
 import { AgentSessionManager } from "../src/index.js";
 
 describe("AgentSessionManager", () => {
-  it("ignores stale permit resolutions and interrupts cleanly", async () => {
+  beforeEach(() => {
+    queryMock.mockReset();
+  });
+
+  it("ignores stale permit resolutions", async () => {
     const emit = vi.fn();
     const manager = new AgentSessionManager({
       cwd: process.cwd(),
@@ -17,8 +21,113 @@ describe("AgentSessionManager", () => {
     });
 
     expect(manager.resolvePermit("missing", "deny")).toBe(false);
-    await expect(manager.interrupt()).resolves.toBeUndefined();
     expect(emit).not.toHaveBeenCalled();
+  });
+
+  it("emits tool.completed when a permit is denied", async () => {
+    type CanUseTool = NonNullable<
+      import("@anthropic-ai/claude-agent-sdk").Options["canUseTool"]
+    >;
+    let canUseTool: CanUseTool | undefined;
+
+    queryMock.mockImplementation(({ options }) => {
+      canUseTool = options.canUseTool;
+      return {
+        async *[Symbol.asyncIterator]() {
+          // The test only needs to observe permit lifecycle events.
+        },
+      };
+    });
+
+    const emit = vi.fn();
+    const manager = new AgentSessionManager({
+      cwd: process.cwd(),
+      emit,
+    });
+
+    const session = manager.start("write the readme");
+    await vi.waitFor(() => expect(canUseTool).toBeDefined());
+
+    void canUseTool!("Write", { file_path: "README.md" }, {
+      toolUseID: "tool-1",
+      requestId: "req-1",
+      signal: new AbortController().signal,
+      title: "Permit · Write",
+      description: "Write README.md",
+    });
+
+    await vi.waitFor(() => {
+      expect(emit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "permit.requested",
+          toolCallId: "tool-1",
+        }),
+      );
+    });
+
+    expect(manager.resolvePermit("tool-1", "deny")).toBe(true);
+    expect(emit).toHaveBeenCalledWith({
+      type: "tool.completed",
+      toolCallId: "tool-1",
+      outcome: "denied",
+    });
+
+    await session;
+  });
+
+  it("emits tool.completed for pending permits on interrupt", async () => {
+    type CanUseTool = NonNullable<
+      import("@anthropic-ai/claude-agent-sdk").Options["canUseTool"]
+    >;
+    let canUseTool: CanUseTool | undefined;
+
+    queryMock.mockImplementation(({ options }) => {
+      canUseTool = options.canUseTool;
+      return {
+        async *[Symbol.asyncIterator]() {
+          // The test only needs to observe permit lifecycle events.
+        },
+      };
+    });
+
+    const emit = vi.fn();
+    const manager = new AgentSessionManager({
+      cwd: process.cwd(),
+      emit,
+    });
+
+    const session = manager.start("write the readme");
+    await vi.waitFor(() => expect(canUseTool).toBeDefined());
+
+    const pendingPermit = canUseTool!("Write", { file_path: "README.md" }, {
+      toolUseID: "tool-1",
+      requestId: "req-1",
+      signal: new AbortController().signal,
+      title: "Permit · Write",
+      description: "Write README.md",
+    });
+    void pendingPermit.catch(() => {
+      // interrupt rejects the permit promise by design
+    });
+
+    await vi.waitFor(() => {
+      expect(emit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "permit.requested",
+          toolCallId: "tool-1",
+        }),
+      );
+    });
+
+    emit.mockClear();
+    await manager.interrupt();
+    await session;
+
+    expect(emit).toHaveBeenCalledWith({
+      type: "tool.completed",
+      toolCallId: "tool-1",
+      outcome: "denied",
+    });
   });
 
   it("accepts a read-only configuration -- disallowedTools, a system prompt append, and a mutable budget -- without needing an active query", async () => {
