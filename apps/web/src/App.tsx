@@ -37,6 +37,10 @@ import {
   ResizablePanelGroup,
 } from "@/components/ui/8bit/resizable";
 import {
+  colorToCss,
+  paletteFor,
+} from "./game/palette";
+import {
   GameCanvas,
   type CanvasDragPreview,
   type CanvasFileChange,
@@ -75,6 +79,29 @@ function fileBasename(path: string): string {
 function fileDirname(path: string): string {
   const slash = path.lastIndexOf("/");
   return slash >= 0 ? path.slice(0, slash) : ".";
+}
+
+interface LanguageSummary {
+  language: string;
+  count: number;
+}
+
+function summarizeLanguages(buildings: Building[]): LanguageSummary[] {
+  const counts = new Map<string, number>();
+  for (const building of buildings) {
+    counts.set(building.language, (counts.get(building.language) ?? 0) + 1);
+  }
+  return [...counts.entries()]
+    .map(([language, count]) => ({ language, count }))
+    .sort((left, right) =>
+      right.count - left.count || left.language.localeCompare(right.language),
+    );
+}
+
+function colorWithAlpha(color: number, alpha: number): string {
+  return `${colorToCss(color)}${Math.round(alpha * 255)
+    .toString(16)
+    .padStart(2, "0")}`;
 }
 
 const EVENTS_STORAGE_KEY = "sudo-city:events";
@@ -478,9 +505,13 @@ export default function App() {
   const [crewDialogOpen, setCrewDialogOpen] = useState(false);
   const [prompt, setPrompt] = useState("");
   const [commandOpen, setCommandOpen] = useState(false);
+  const [cityScanOpen, setCityScanOpen] = useState(true);
   const [world, setWorld] = useState<WorldSnapshot>();
   const [fileChange, setFileChange] = useState<CanvasFileChange>();
   const [selected, setSelected] = useState<Building>();
+  const languageSummary = world ? summarizeLanguages(world.buildings) : [];
+  const selectedPalette = paletteFor(selected?.language ?? "unknown");
+  const draggingPalette = paletteFor(draggingBuilding?.language ?? "unknown");
   const pendingPermit = findPendingPermit(events);
   const usage = events
     .slice()
@@ -701,7 +732,7 @@ export default function App() {
       <ResizablePanelGroup orientation="horizontal" className="min-h-0 flex-1">
         <ResizablePanel defaultSize={72} minSize={45}>
           <div className="flex h-full min-h-0 flex-col">
-            <section className="relative min-h-0 flex-1 overflow-hidden">
+            <section className="city-stage relative min-h-0 flex-1 overflow-hidden">
               <GameCanvas
                 ref={canvasRef}
                 world={world}
@@ -711,47 +742,148 @@ export default function App() {
                 onBuildingDragMove={handleBuildingDragMove}
                 onBuildingDragEnd={handleBuildingDrop}
               />
-              <div className="pointer-events-none absolute left-4 top-4 border-2 border-foreground bg-card px-3 py-2 dark:border-ring">
-                <span className="retro block text-[10px] text-primary">
-                  District survey
-                </span>
-                <strong className="retro block text-xs">
-                  {world?.buildings.length ?? 0} structures mapped
-                </strong>
+              <div
+                id="city-scan-panel"
+                className={`city-panel city-scan-panel pointer-events-auto absolute left-4 top-4 z-20 ${
+                  cityScanOpen
+                    ? "w-[min(26rem,calc(100%-2rem))] px-3 py-3"
+                    : "w-auto px-1.5 py-1.5"
+                }`}
+              >
+                <div
+                  className={`flex ${
+                    cityScanOpen ? "items-start gap-3" : "items-center gap-2"
+                  }`}
+                >
+                  <button
+                    type="button"
+                    aria-controls="city-scan-panel"
+                    aria-expanded={cityScanOpen}
+                    aria-label={
+                      cityScanOpen
+                        ? "Collapse City Scan panel"
+                        : "Expand City Scan panel"
+                    }
+                    title={cityScanOpen ? "Collapse City Scan" : "Expand City Scan"}
+                    onClick={() => setCityScanOpen((open) => !open)}
+                    className="retro flex size-6 shrink-0 items-center justify-center border border-primary/60 bg-primary/10 text-sm leading-none text-primary transition-colors hover:bg-primary hover:text-primary-foreground"
+                  >
+                    <span aria-hidden="true">{cityScanOpen ? "‹" : "›"}</span>
+                  </button>
+                  {cityScanOpen ? (
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="retro text-[9px] tracking-[0.16em] text-primary">
+                          CITY SCAN // LIVE
+                        </span>
+                        <span className="retro border border-primary/50 px-1.5 py-0.5 text-[8px] text-primary">
+                          {world ? "SYNCED" : "LINKING"}
+                        </span>
+                      </div>
+                      <div className="mt-2 flex items-end justify-between gap-4">
+                        <strong className="retro text-sm text-foreground">
+                          {world?.buildings.length ?? 0}
+                        </strong>
+                        <span className="retro mb-0.5 flex-1 text-[9px] text-muted-foreground">
+                          file structures mapped
+                        </span>
+                        <span className="retro text-[8px] text-muted-foreground">
+                          {languageSummary.length} types
+                        </span>
+                      </div>
+                      {languageSummary.length > 0 ? (
+                        <div className="mt-3 flex flex-wrap gap-1.5">
+                          {languageSummary.slice(0, 6).map(({ language, count }) => {
+                            const palette = paletteFor(language);
+                            return (
+                              <span
+                                key={language}
+                                className="retro inline-flex items-center gap-1 border px-1.5 py-1 text-[8px]"
+                                style={{
+                                  backgroundColor: colorWithAlpha(palette.accent, 0.16),
+                                  borderColor: colorWithAlpha(palette.accent, 0.72),
+                                  color: colorToCss(palette.accent),
+                                }}
+                              >
+                                <span className="font-black">{palette.mark}</span>
+                                <span className="text-foreground/80">{count}</span>
+                              </span>
+                            );
+                          })}
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : (
+                    <span className="retro text-[8px] tracking-[0.16em] text-primary">
+                      SCAN
+                    </span>
+                  )}
+                </div>
               </div>
 
               {selected ? (
-                <div className="absolute bottom-4 left-4 max-w-[min(22rem,calc(100%-2rem))] border-2 border-foreground bg-card px-3 py-2 dark:border-ring">
-                  <div className="flex items-start justify-between gap-3">
-                    <span className="retro block text-[10px] text-primary">
-                      {selected.district}
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => setSelected(undefined)}
-                      aria-label="Close structure details"
-                      className="retro shrink-0 text-[10px] text-muted-foreground hover:text-foreground"
-                    >
-                      ✕
-                    </button>
+                <div className="city-panel absolute bottom-4 left-4 w-max max-w-[calc(100%-2rem)] overflow-x-auto overflow-y-hidden">
+                  <div
+                    className="h-1"
+                    style={{ backgroundColor: colorToCss(selectedPalette.accent) }}
+                  />
+                  <div className="shrink-0 p-3">
+                    <div className="flex items-start justify-between gap-3 whitespace-nowrap">
+                      <div className="flex shrink-0 items-center gap-2">
+                        <span
+                          className="retro flex size-8 shrink-0 items-center justify-center border text-[9px] font-black"
+                          style={{
+                            backgroundColor: colorToCss(selectedPalette.accent),
+                            borderColor: colorToCss(selectedPalette.accentDark),
+                            color: colorToCss(selectedPalette.ink),
+                          }}
+                        >
+                          {selectedPalette.mark}
+                        </span>
+                        <div className="shrink-0">
+                          <span className="retro block whitespace-nowrap text-[10px] text-primary">
+                            {selected.language} structure
+                          </span>
+                          <span className="retro block whitespace-nowrap text-[8px] text-muted-foreground">
+                            {selected.path}
+                          </span>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setSelected(undefined)}
+                        aria-label="Close structure details"
+                        className="retro shrink-0 text-[10px] text-muted-foreground transition-colors hover:text-foreground"
+                      >
+                        ✕
+                      </button>
+                    </div>
+                    <dl className="retro mt-3 flex gap-2 whitespace-nowrap text-[9px]">
+                      <div className="border border-border/70 bg-background/30 px-2 py-1.5">
+                        <dt className="inline text-[7px] text-muted-foreground">
+                          LINES OF CODE{" "}
+                        </dt>
+                        <dd className="inline text-foreground">
+                          {selected.loc.toLocaleString()}
+                        </dd>
+                      </div>
+                      <div className="border border-border/70 bg-background/30 px-2 py-1.5">
+                        <dt className="inline text-[7px] text-muted-foreground">
+                          FILE TYPE{" "}
+                        </dt>
+                        <dd
+                          className="inline"
+                          style={{ color: colorToCss(selectedPalette.accent) }}
+                        >
+                          {selected.language}
+                        </dd>
+                      </div>
+                    </dl>
                   </div>
-                  <p className="retro mt-1 break-all text-xs">{selected.path}</p>
-                  <dl className="retro mt-2 flex gap-4 text-[10px] text-muted-foreground">
-                    <div>
-                      <dt className="inline">Language </dt>
-                      <dd className="inline text-foreground">
-                        {selected.language}
-                      </dd>
-                    </div>
-                    <div>
-                      <dt className="inline">Lines </dt>
-                      <dd className="inline text-foreground">{selected.loc}</dd>
-                    </div>
-                  </dl>
                 </div>
               ) : null}
 
-              <div className="pointer-events-none absolute bottom-4 right-4 border border-border bg-card/90 px-2 py-1">
+              <div className="city-panel pointer-events-none absolute bottom-4 right-4 px-2 py-1.5">
                 <span className="retro text-[8px] text-muted-foreground">
                   Drag to pan · Scroll to zoom · Click a building
                 </span>
@@ -760,8 +892,8 @@ export default function App() {
 
             <form
               ref={orderFormRef}
-              className={`border-t-4 border-foreground p-4 dark:border-ring ${
-                draggingBuilding ? "bg-primary/5 ring-2 ring-inset ring-primary" : ""
+              className={`city-order-form border-t-4 border-foreground p-4 dark:border-ring ${
+                draggingBuilding ? "is-drop-target ring-2 ring-inset ring-primary" : ""
               }`}
               onSubmit={submitPrompt}
             >
@@ -772,32 +904,76 @@ export default function App() {
                 Mayor&apos;s order
               </label>
               {draggingBuilding ? (
-                <div className="mb-2 border-2 border-primary bg-primary/10 px-2 py-1">
-                  <span className="retro text-[8px] text-primary">
-                    Drop to attach context:
-                  </span>{" "}
-                  <code className="break-all text-[9px] text-foreground">
-                    {draggingBuilding.path}
-                  </code>
+                <div
+                  className="mb-3 flex items-center gap-2 border px-2 py-2"
+                  style={{
+                    backgroundColor: colorWithAlpha(draggingPalette.accent, 0.14),
+                    borderColor: colorWithAlpha(draggingPalette.accent, 0.72),
+                  }}
+                >
+                  <span
+                    className="retro flex size-6 shrink-0 items-center justify-center border text-[8px] font-black"
+                    style={{
+                      backgroundColor: colorToCss(draggingPalette.accent),
+                      borderColor: colorToCss(draggingPalette.accentDark),
+                      color: colorToCss(draggingPalette.ink),
+                    }}
+                  >
+                    {draggingPalette.mark}
+                  </span>
+                  <div className="min-w-0">
+                    <span className="retro block text-[8px] text-primary">
+                      Drop to attach {draggingBuilding.language} context
+                    </span>
+                    <code className="block truncate text-[9px] text-foreground">
+                      {draggingBuilding.path}
+                    </code>
+                  </div>
                 </div>
               ) : null}
               {contextPaths.length > 0 ? (
                 <div className="mb-3 flex flex-wrap items-center gap-1.5">
-                  <span className="retro text-[8px] text-muted-foreground">
-                    Context:
+                  <span className="retro mr-1 text-[8px] text-muted-foreground">
+                    Context queue
                   </span>
-                  {contextPaths.map((path) => (
-                    <button
-                      key={path}
-                      type="button"
-                      title={`Remove ${path} from context`}
-                      onClick={() => removeContextPath(path)}
-                      className="retro inline-flex max-w-full items-center gap-1 border border-foreground bg-card px-2 py-1 text-left text-[8px] text-foreground hover:bg-primary hover:text-primary-foreground dark:border-ring"
-                    >
-                      <span className="max-w-[16rem] truncate">{path}</span>
-                      <span aria-hidden="true">×</span>
-                    </button>
-                  ))}
+                  {contextPaths.map((path) => {
+                    const contextBuilding = world?.buildings.find(
+                      (building) => building.path === path,
+                    );
+                    const palette = paletteFor(
+                      contextBuilding?.language ?? "unknown",
+                    );
+                    return (
+                      <button
+                        key={path}
+                        type="button"
+                        title={`Remove ${path} from context`}
+                        onClick={() => removeContextPath(path)}
+                        className="retro inline-flex max-w-full items-center gap-1.5 border px-2 py-1.5 text-left text-[8px] transition-colors hover:text-primary-foreground"
+                        style={{
+                          backgroundColor: colorWithAlpha(palette.accent, 0.12),
+                          borderColor: colorWithAlpha(palette.accent, 0.72),
+                        }}
+                      >
+                        <span
+                          className="flex size-4 shrink-0 items-center justify-center border text-[7px] font-black"
+                          style={{
+                            backgroundColor: colorToCss(palette.accent),
+                            borderColor: colorToCss(palette.accentDark),
+                            color: colorToCss(palette.ink),
+                          }}
+                        >
+                          {palette.mark}
+                        </span>
+                        <span className="max-w-[16rem] truncate text-foreground">
+                          {path}
+                        </span>
+                        <span aria-hidden="true" className="text-muted-foreground">
+                          ×
+                        </span>
+                      </button>
+                    );
+                  })}
                 </div>
               ) : null}
               <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
