@@ -35,12 +35,17 @@ describe("AgentSessionManager", () => {
       emit,
     });
 
-    await manager.start("ship the endpoint", "auto", ["src/index.ts"]);
+    await manager.start("ship the endpoint", "auto", {
+      contextPaths: ["src/index.ts"],
+    });
 
     expect(queryMock).toHaveBeenCalledWith(
       expect.objectContaining({
         prompt: expect.stringContaining("ship the endpoint"),
-        options: expect.objectContaining({ permissionMode: "auto" }),
+        options: expect.objectContaining({
+          permissionMode: "auto",
+          effort: "high",
+        }),
       }),
     );
     expect(queryMock.mock.calls[0]?.[0]?.prompt).toEqual(
@@ -49,7 +54,43 @@ describe("AgentSessionManager", () => {
     expect(emit).toHaveBeenCalledWith({
       type: "session.started",
       model: "sonnet",
+      effort: "high",
       permissionMode: "auto",
+    });
+  });
+
+  it("forwards model and effort overrides into the SDK query", async () => {
+    const activeQuery = {
+      async *[Symbol.asyncIterator]() {
+        // The test only needs to observe query construction.
+      },
+    };
+    queryMock.mockReturnValue(activeQuery);
+
+    const emit = vi.fn();
+    const manager = new AgentSessionManager({
+      cwd: process.cwd(),
+      emit,
+    });
+
+    await manager.start("plan the tower", "default", {
+      model: "opus",
+      effort: "xhigh",
+    });
+
+    expect(queryMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        options: expect.objectContaining({
+          model: "opus",
+          effort: "xhigh",
+        }),
+      }),
+    );
+    expect(emit).toHaveBeenCalledWith({
+      type: "session.started",
+      model: "opus",
+      effort: "xhigh",
+      permissionMode: "default",
     });
   });
 });

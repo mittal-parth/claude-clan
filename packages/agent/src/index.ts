@@ -9,6 +9,7 @@ import {
   type SDKMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 import type {
+  EffortLevel,
   GameEvent,
   PermissionMode as MayorPermissionMode,
 } from "@sudo-city/protocol";
@@ -28,7 +29,14 @@ export interface AgentSessionOptions {
   maxBudgetUsd?: number;
   maxTurns?: number;
   model?: string;
+  effort?: EffortLevel;
   safeTools?: readonly string[];
+}
+
+export interface AgentStartOptions {
+  model?: string;
+  effort?: EffortLevel;
+  contextPaths?: readonly string[];
 }
 
 export class AgentSessionManager {
@@ -38,6 +46,7 @@ export class AgentSessionManager {
   private readonly maxTurns: number;
   private readonly safeTools: Set<string>;
   private model: string;
+  private effort: EffortLevel;
   private activeQuery?: Query;
   private abortController?: AbortController;
   private readonly pendingPermits = new Map<string, PendingPermit>();
@@ -48,20 +57,29 @@ export class AgentSessionManager {
     this.maxBudgetUsd = options.maxBudgetUsd ?? 1;
     this.maxTurns = options.maxTurns ?? 12;
     this.model = options.model ?? "sonnet";
+    this.effort = options.effort ?? "high";
     this.safeTools = new Set(options.safeTools ?? ["Read", "Glob", "Grep"]);
   }
 
   async start(
     prompt: string,
     permissionMode: MayorPermissionMode = "default",
-    contextPaths: readonly string[] = [],
+    options?: AgentStartOptions,
   ): Promise<void> {
     await this.interrupt();
+    const contextPaths = options?.contextPaths ?? [];
+    if (options?.model) {
+      this.model = options.model;
+    }
+    if (options?.effort) {
+      this.effort = options.effort;
+    }
     const abortController = new AbortController();
     this.abortController = abortController;
     this.emit({
       type: "session.started",
       model: this.model,
+      effort: this.effort,
       permissionMode,
     });
 
@@ -71,6 +89,7 @@ export class AgentSessionManager {
         abortController,
         canUseTool: this.canUseTool,
         cwd: this.cwd,
+        effort: this.effort,
         hooks: this.createHooks(),
         maxBudgetUsd: this.maxBudgetUsd,
         maxTurns: this.maxTurns,

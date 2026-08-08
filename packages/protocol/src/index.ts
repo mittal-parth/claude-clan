@@ -72,6 +72,14 @@ export const WorldSnapshotSchema = z.object({
 
 export const PermissionModeSchema = z.enum(["default", "auto"]);
 
+export const EffortLevelSchema = z.enum([
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+]);
+
 const EventBaseSchema = z.object({
   id: z.string().min(1),
   sessionId: z.string().min(1),
@@ -87,6 +95,7 @@ export const GameEventSchema = z.discriminatedUnion("type", [
   EventBaseSchema.extend({
     type: z.literal("session.started"),
     model: z.string().min(1),
+    effort: EffortLevelSchema.default("high"),
     permissionMode: PermissionModeSchema.default("default"),
   }),
   EventBaseSchema.extend({
@@ -157,6 +166,7 @@ export const MayorCommandSchema = z.discriminatedUnion("type", [
       .max(20)
       .optional(),
     model: z.string().min(1).optional(),
+    effort: EffortLevelSchema.optional(),
   }),
   z.object({
     type: z.literal("session.interrupt"),
@@ -183,6 +193,7 @@ export const ServerMessageSchema = z.discriminatedUnion("kind", [
   }),
 ]);
 
+export type EffortLevel = z.infer<typeof EffortLevelSchema>;
 export type Building = z.infer<typeof BuildingSchema>;
 export type DistrictRect = z.infer<typeof DistrictRectSchema>;
 export type ExternalDependency = z.infer<typeof ExternalDependencySchema>;

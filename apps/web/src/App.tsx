@@ -2,6 +2,7 @@ import {
   GameEventSchema,
   ServerMessageSchema,
   type Building,
+  type EffortLevel,
   type GameEvent,
   type MayorCommand,
   type PermissionMode,
@@ -42,6 +43,17 @@ import {
   type CanvasPointerPosition,
   type GameCanvasHandle,
 } from "./components/GameCanvas";
+import CrewSelectDialog, {
+  type CrewSelection,
+} from "./components/CrewSelectDialog";
+import {
+  DEFAULT_CREW_ID,
+  DEFAULT_EFFORT,
+  crewSpriteUrl,
+  effortLabel,
+  findCrewByModel,
+  getCrewMember,
+} from "./crew/catalog";
 
 type ConnectionState = "connecting" | "online" | "offline";
 
@@ -99,12 +111,18 @@ function permissionModeLabel(mode: PermissionMode): string {
   return mode === "auto" ? "Don’t Disturb Mayor" : "Mayor approval";
 }
 
+function sessionCrewLabel(model: string, effort: EffortLevel): string {
+  const crew = findCrewByModel(model);
+  const name = crew?.name ?? model;
+  return `${name} · ${effortLabel(effort)} effort`;
+}
+
 function eventLabel(event: GameEvent): string {
   switch (event.type) {
     case "world.ready":
       return `${event.snapshot.buildings.length} structures surveyed`;
     case "session.started":
-      return `${event.model} crew dispatched · ${permissionModeLabel(event.permissionMode)}`;
+      return `${sessionCrewLabel(event.model, event.effort)} · ${permissionModeLabel(event.permissionMode)}`;
     case "session.message":
       return `${event.role}: ${event.text}`;
     case "session.usage":
@@ -163,7 +181,7 @@ function timelineContentForEvent(
       };
     case "session.started":
       return {
-        label: `${event.model} crew dispatched · ${permissionModeLabel(event.permissionMode)}`,
+        label: `${sessionCrewLabel(event.model, event.effort)} · ${permissionModeLabel(event.permissionMode)}`,
       };
     case "subagent.changed":
       return {
@@ -453,6 +471,11 @@ export default function App() {
   const [contextPaths, setContextPaths] = useState<string[]>([]);
   const [orderPermissionMode, setOrderPermissionMode] =
     useState<PermissionMode>("default");
+  const [crewSelection, setCrewSelection] = useState<CrewSelection>({
+    crewId: DEFAULT_CREW_ID,
+    effort: DEFAULT_EFFORT,
+  });
+  const [crewDialogOpen, setCrewDialogOpen] = useState(false);
   const [prompt, setPrompt] = useState("");
   const [commandOpen, setCommandOpen] = useState(false);
   const [world, setWorld] = useState<WorldSnapshot>();
@@ -473,10 +496,20 @@ export default function App() {
     .slice()
     .reverse()
     .find((event) => event.type === "session.started");
-  const agentModel =
+  const selectedCrew = getCrewMember(crewSelection.crewId);
+  const activeCrew =
     startedSession?.type === "session.started"
-      ? startedSession.model
-      : "Engineer";
+      ? (findCrewByModel(startedSession.model) ?? selectedCrew)
+      : selectedCrew;
+  const activeEffort =
+    startedSession?.type === "session.started"
+      ? startedSession.effort
+      : crewSelection.effort;
+  const crewAvatarSrc = crewSpriteUrl(activeCrew.id, activeEffort);
+  const crewDialogueTitle = activeCrew.name;
+  const crewDialogueDescription = pendingPermit
+    ? "Awaiting permit stamp"
+    : `${effortLabel(activeEffort)} effort · ${activeCrew.title}`;
   const showDragPreview = Boolean(
     draggingBuilding &&
       dragPreview?.src &&
@@ -599,6 +632,8 @@ export default function App() {
       type: "session.prompt",
       prompt: nextPrompt,
       permissionMode: orderPermissionMode,
+      model: getCrewMember(crewSelection.crewId).model,
+      effort: crewSelection.effort,
       contextPaths,
     });
     setPrompt("");
@@ -767,6 +802,33 @@ export default function App() {
               ) : null}
               <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                 <span className="retro text-[9px] text-muted-foreground">
+                  Crew for this order
+                </span>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  disabled={connection !== "online"}
+                  onClick={() => setCrewDialogOpen(true)}
+                  className="retro h-auto justify-start gap-2 px-2 py-1.5 text-left"
+                >
+                  <img
+                    src={crewSpriteUrl(crewSelection.crewId, crewSelection.effort)}
+                    alt=""
+                    className="size-8 object-contain [image-rendering:pixelated]"
+                  />
+                  <span className="min-w-0">
+                    <span className="block text-[8px] text-primary">
+                      {getCrewMember(crewSelection.crewId).name}
+                    </span>
+                    <span className="block text-[8px] text-muted-foreground">
+                      {effortLabel(crewSelection.effort)} effort
+                    </span>
+                  </span>
+                </Button>
+              </div>
+              <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                <span className="retro text-[9px] text-muted-foreground">
                   Permission&apos;s for this order
                 </span>
                 <div
@@ -847,11 +909,10 @@ export default function App() {
             <div className="flex min-h-0 flex-1 flex-col gap-4 p-4">
               <div className="shrink-0 space-y-4">
                 <Dialogue
-                  avatarFallback={agentModel.slice(0, 1).toUpperCase()}
-                  title={agentModel}
-                  description={
-                    pendingPermit ? "Awaiting permit stamp" : "Awaiting orders"
-                  }
+                  avatarSrc={crewAvatarSrc}
+                  avatarFallback={activeCrew.name.slice(0, 1)}
+                  title={crewDialogueTitle}
+                  description={crewDialogueDescription}
                 />
 
                 <div className="space-y-3">
@@ -919,6 +980,13 @@ export default function App() {
           </aside>
         </ResizablePanel>
       </ResizablePanelGroup>
+
+      <CrewSelectDialog
+        open={crewDialogOpen}
+        onOpenChange={setCrewDialogOpen}
+        value={crewSelection}
+        onConfirm={setCrewSelection}
+      />
 
       <CommandDialog open={commandOpen} onOpenChange={setCommandOpen}>
         <CommandInput placeholder="Search files or mayor commands..." />
