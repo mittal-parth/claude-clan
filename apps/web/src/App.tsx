@@ -106,14 +106,26 @@ function questStatus(event: GameEvent): QuestStatus {
   }
 }
 
+function truncatePreview(text: string, maxLength = 100): string {
+  if (text.length <= maxLength) {
+    return text;
+  }
+
+  return `${text.substring(0, maxLength)}...`;
+}
+
 function eventsToQuests(events: GameEvent[]): Quest[] {
-  return events.map((event) => ({
-    id: event.id,
-    title: event.type.replace(".", " · "),
-    description: eventLabel(event),
-    status: questStatus(event),
-    shortDescription: eventLabel(event),
-  }));
+  return events.map((event) => {
+    const description = eventLabel(event);
+
+    return {
+      id: event.id,
+      title: event.type.replace(".", " · "),
+      description,
+      status: questStatus(event),
+      shortDescription: truncatePreview(description),
+    };
+  });
 }
 
 function findPendingPermit(
