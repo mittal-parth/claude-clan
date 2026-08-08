@@ -48,6 +48,12 @@ const fallbackWorld: WorldSnapshot = {
   repoPath: targetRepo,
   revision: "working-tree",
   generatedAt: new Date().toISOString(),
+  size: { width: 8, height: 8 },
+  districts: [
+    { path: "apps/web", x: 0, y: 0, width: 4, height: 8, weight: 184 },
+    { path: "apps/server", x: 4, y: 0, width: 4, height: 4, weight: 96 },
+    { path: "packages/protocol", x: 4, y: 4, width: 4, height: 4, weight: 121 },
+  ],
   buildings: [
     {
       path: "apps/web/src/App.tsx",

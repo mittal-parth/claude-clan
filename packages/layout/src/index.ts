@@ -1,18 +1,12 @@
 import type {
   Building,
+  DistrictRect,
   Plot,
   WorldMap,
   WorldSnapshot,
 } from "@sudo-city/protocol";
 
-export interface DistrictRect {
-  path: string;
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-  weight: number;
-}
+export type { DistrictRect } from "@sudo-city/protocol";
 
 export interface LayoutOptions {
   generatedAt?: string;
@@ -21,8 +15,9 @@ export interface LayoutOptions {
   width?: number;
 }
 
+// District rectangles now travel on the snapshot so the renderer can draw
+// district ground and streets; they are not duplicated here.
 export interface LayoutResult {
-  districts: DistrictRect[];
   snapshot: WorldSnapshot;
   plots: Record<string, Plot>;
 }
@@ -81,13 +76,14 @@ export function layoutWorld(
   }));
 
   return {
-    districts,
     plots,
     snapshot: {
       id: `world:${world.revision}`,
       repoPath: world.repoPath,
       revision: world.revision,
       generatedAt: options.generatedAt ?? new Date().toISOString(),
+      size: { width, height },
+      districts,
       buildings,
     },
   };
