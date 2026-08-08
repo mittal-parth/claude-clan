@@ -3,24 +3,34 @@ import {
   ServerMessageSchema,
   type Building,
   type CitySummary,
+  type EffortLevel,
   type GameEvent,
   type Issue,
   type MayorCommand,
+  type PermissionMode,
   type PullRequestOverlay,
   type WorldSnapshot,
 } from "@sudo-city/protocol";
 import { FormEvent, useEffect, useRef, useState } from "react";
-import { Volume2, VolumeX } from "lucide-react";
+import { Command, ShieldAlert, Volume2, VolumeX, X } from "lucide-react";
 import { useAudio } from "@/components/audio-provider";
 import { Markdown } from "@/components/markdown";
-import Dialogue from "@/components/ui/8bit/blocks/dialogue";
+import { ConstructionTracker } from "@/lib/construction-tracker";
+import { cn } from "@/lib/utils";
+import HudWindow from "@/components/hud/HudWindow";
+import HudButton from "@/components/hud/HudButton";
+import HudMeter from "@/components/hud/HudMeter";
+import {
+  readHudState,
+  toggleHudPanel,
+  writeHudState,
+  type HudPanelId,
+} from "@/components/hud/hud-state";
 import QuestLog, {
   type Quest,
   type QuestStatus,
   type QuestTimelineStep,
 } from "@/components/ui/8bit/blocks/quest-log";
-import { Badge } from "@/components/ui/8bit/badge";
-import { Button } from "@/components/ui/8bit/button";
 import {
   CommandDialog,
   CommandEmpty,
@@ -29,21 +39,30 @@ import {
   CommandItem,
   CommandList,
 } from "@/components/ui/8bit/command";
-import HealthBar from "@/components/ui/8bit/health-bar";
-import { Input } from "@/components/ui/8bit/input";
-import { Kbd } from "@/components/ui/8bit/kbd";
-import ManaBar from "@/components/ui/8bit/mana-bar";
 import {
-  ResizableHandle,
-  ResizablePanel,
-  ResizablePanelGroup,
-} from "@/components/ui/8bit/resizable";
+  colorToCss,
+  paletteFor,
+} from "./game/palette";
 import {
   GameCanvas,
+  type CanvasDragPreview,
   type CanvasFileChange,
+  type CanvasPointerPosition,
   type CanvasTravelRequest,
+  type GameCanvasHandle,
 } from "./components/GameCanvas";
 import type { ShipHoverInfo } from "./game/WorldScene";
+import CrewSelectDialog, {
+  type CrewSelection,
+} from "./components/CrewSelectDialog";
+import {
+  DEFAULT_CREW_ID,
+  DEFAULT_EFFORT,
+  crewSpriteUrl,
+  effortLabel,
+  findCrewByModel,
+  getCrewMember,
+} from "./crew/catalog";
 
 type ConnectionState = "connecting" | "online" | "offline";
 
@@ -68,6 +87,72 @@ function promptForIssue(issue: Issue): string {
   ]
     .filter(Boolean)
     .join("\n\n");
+}
+
+/** Basename of a repo path → title case words (claude-clan → Claude Clan). */
+function titleFromRepoPath(repoPath: string): string {
+  const base =
+    repoPath.split(/[/\\]/).filter(Boolean).at(-1)?.replace(/[-_]+/g, " ").trim() ??
+    "";
+  if (!base) {
+    return "City";
+  }
+  return base.replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+/** Header brand: `{Repo Name} City`, without doubling a trailing City. */
+function cityNameFromRepo(repoPath: string | undefined): string {
+  if (!repoPath) {
+    return "City";
+  }
+  const titled = titleFromRepoPath(repoPath);
+  if (/\bcity$/i.test(titled)) {
+    return titled;
+  }
+  return `${titled} City`;
+}
+
+/**
+ * How long a site stands after the work on it actually finishes.
+ *
+ * The site's lifetime is the work's lifetime: it opens when a tool starts on a
+ * file and is held open until that tool completes, so a slow edit keeps its
+ * crane for as long as it runs. This is only the tail on the end, so a write
+ * that takes 40ms still leaves something up long enough to notice.
+ */
+const CONSTRUCTION_GRACE_MS = 6_000;
+
+function fileBasename(path: string): string {
+  const slash = path.lastIndexOf("/");
+  return slash >= 0 ? path.slice(slash + 1) : path;
+}
+
+function fileDirname(path: string): string {
+  const slash = path.lastIndexOf("/");
+  return slash >= 0 ? path.slice(0, slash) : ".";
+}
+
+interface LanguageSummary {
+  language: string;
+  count: number;
+}
+
+function summarizeLanguages(buildings: Building[]): LanguageSummary[] {
+  const counts = new Map<string, number>();
+  for (const building of buildings) {
+    counts.set(building.language, (counts.get(building.language) ?? 0) + 1);
+  }
+  return [...counts.entries()]
+    .map(([language, count]) => ({ language, count }))
+    .sort((left, right) =>
+      right.count - left.count || left.language.localeCompare(right.language),
+    );
+}
+
+function colorWithAlpha(color: number, alpha: number): string {
+  return `${colorToCss(color)}${Math.round(alpha * 255)
+    .toString(16)
+    .padStart(2, "0")}`;
 }
 
 function loadStoredEvents(cityId: string): GameEvent[] {
@@ -102,12 +187,22 @@ function statusLabel(status: ConnectionState): string {
   }
 }
 
+function permissionModeLabel(mode: PermissionMode): string {
+  return mode === "auto" ? "Don’t Disturb Mayor" : "Mayor approval";
+}
+
+function sessionCrewLabel(model: string, effort: EffortLevel): string {
+  const crew = findCrewByModel(model);
+  const name = crew?.name ?? model;
+  return `${name} · ${effortLabel(effort)} effort`;
+}
+
 function eventLabel(event: GameEvent): string {
   switch (event.type) {
     case "world.ready":
       return `${event.snapshot.buildings.length} structures surveyed`;
     case "session.started":
-      return `${event.model} crew dispatched`;
+      return `${sessionCrewLabel(event.model, event.effort)} · ${permissionModeLabel(event.permissionMode)}`;
     case "session.message":
       return `${event.role}: ${event.text}`;
     case "session.usage":
@@ -166,7 +261,7 @@ function timelineContentForEvent(
       };
     case "session.started":
       return {
-        label: `${event.model} crew dispatched`,
+        label: `${sessionCrewLabel(event.model, event.effort)} · ${permissionModeLabel(event.permissionMode)}`,
       };
     case "subagent.changed":
       return {
@@ -424,9 +519,28 @@ function findPendingPermit(
   return undefined;
 }
 
+function pointIsInside(
+  element: HTMLElement | null,
+  position: CanvasPointerPosition,
+): boolean {
+  if (!element) {
+    return false;
+  }
+
+  const bounds = element.getBoundingClientRect();
+  return (
+    position.clientX >= bounds.left &&
+    position.clientX <= bounds.right &&
+    position.clientY >= bounds.top &&
+    position.clientY <= bounds.bottom
+  );
+}
+
 export default function App() {
   const { sfxEnabled, toggleSfx } = useAudio();
   const socketRef = useRef<WebSocket>(null);
+  const canvasRef = useRef<GameCanvasHandle>(null);
+  const orderFormRef = useRef<HTMLFormElement>(null);
   const [connection, setConnection] =
     useState<ConnectionState>("connecting");
   const [cities, setCities] = useState<CitySummary[]>([]);
@@ -448,7 +562,21 @@ export default function App() {
   }>();
   const [prompt, setPrompt] = useState("");
   const [commandOpen, setCommandOpen] = useState(false);
+  const [draggingBuilding, setDraggingBuilding] = useState<Building>();
+  const [dragPreview, setDragPreview] = useState<CanvasDragPreview>();
+  const [dragPosition, setDragPosition] =
+    useState<CanvasPointerPosition>();
+  const [contextPaths, setContextPaths] = useState<string[]>([]);
+  const [orderPermissionMode, setOrderPermissionMode] =
+    useState<PermissionMode>("default");
+  const [crewSelection, setCrewSelection] = useState<CrewSelection>({
+    crewId: DEFAULT_CREW_ID,
+    effort: DEFAULT_EFFORT,
+  });
+  const [crewDialogOpen, setCrewDialogOpen] = useState(false);
+  const [hud, setHud] = useState(readHudState);
   const [fileChange, setFileChange] = useState<CanvasFileChange>();
+  const [buildingPaths, setBuildingPaths] = useState<string[]>([]);
   const [selected, setSelected] = useState<Building>();
   const [shipHover, setShipHover] = useState<ShipHoverInfo>();
   const [shipTravelTargetId, setShipTravelTargetId] = useState<string>();
@@ -465,6 +593,9 @@ export default function App() {
   const selectedChange = selected
     ? overlay?.files.find((file) => file.path === selected.path)
     : undefined;
+  const languageSummary = world ? summarizeLanguages(world.buildings) : [];
+  const selectedPalette = paletteFor(selected?.language ?? "unknown");
+  const draggingPalette = paletteFor(draggingBuilding?.language ?? "unknown");
   const pendingPermit = findPendingPermit(events);
   const usage = events
     .slice()
@@ -480,10 +611,46 @@ export default function App() {
     .slice()
     .reverse()
     .find((event) => event.type === "session.started");
-  const agentModel =
+  const selectedCrew = getCrewMember(crewSelection.crewId);
+  const activeCrew =
     startedSession?.type === "session.started"
-      ? startedSession.model
-      : "Engineer";
+      ? (findCrewByModel(startedSession.model) ?? selectedCrew)
+      : selectedCrew;
+  const activeEffort =
+    startedSession?.type === "session.started"
+      ? startedSession.effort
+      : crewSelection.effort;
+  const crewAvatarSrc = crewSpriteUrl(activeCrew.id, activeEffort);
+  const crewStatus = pendingPermit
+    ? "Awaiting permit stamp"
+    : `${effortLabel(activeEffort)} effort · ${activeCrew.title}`;
+  const quests = eventsToQuests(events);
+  const activeQuestCount = quests.filter(
+    (quest) => quest.status === "active",
+  ).length;
+  // No snapshot yet is a survey still in flight, not an empty city.
+  const surveying = !world && connection !== "offline";
+  const showDragPreview = Boolean(
+    draggingBuilding &&
+      dragPreview?.src &&
+      dragPosition &&
+      pointIsInside(orderFormRef.current, dragPosition),
+  );
+  // A PR city is checked out under .sudocity/worktrees/pr-<n>, so deriving its
+  // name from the repo path would brand the console "Pr 10 City". Only main is
+  // named after the repo; a PR city is named after its pull request.
+  const cityName =
+    activeCity && activeCity.kind === "pull-request"
+      ? cityLabel(activeCity)
+      : cityNameFromRepo(world?.repoPath);
+  const cityStatusLine =
+    activeCity?.status === "building"
+      ? "constructing…"
+      : activeCity && activeCity.kind === "pull-request"
+        ? activeCity.ref
+        : world?.repoPath
+          ? fileBasename(world.repoPath)
+          : "linking";
 
   useEffect(() => {
     const socket = new WebSocket(websocketUrl);
@@ -491,6 +658,10 @@ export default function App() {
     // Every city rescans on its own schedule -- an edit burst in one city
     // must not delay or coalesce with another city's rescan.
     const rescanTimers: Record<string, ReturnType<typeof setTimeout>> = {};
+    const sites = new ConstructionTracker({
+      graceMs: CONSTRUCTION_GRACE_MS,
+      onChange: setBuildingPaths,
+    });
 
     // The agent edits in bursts; one rescan after the burst settles is enough,
     // and the scene diffs the result so standing buildings do not flicker.
@@ -575,7 +746,20 @@ export default function App() {
           path: event.path,
           change: event.change,
         });
+        // Covers a change with no tool behind it; a tool-driven one is
+        // already held open by its own hold.
+        sites.start(event.path);
         scheduleRescan(event.cityId);
+      }
+      // A tool's target is the earliest signal that work has started — the
+      // crane goes up before the file is written, and stays up while the tool
+      // runs. Targets that are not a building path (a shell command, say)
+      // simply match no building.
+      if (event.type === "tool.started" && event.target) {
+        sites.start(event.target, event.toolCallId);
+      }
+      if (event.type === "tool.completed") {
+        sites.finish(event.toolCallId);
       }
     });
 
@@ -583,6 +767,7 @@ export default function App() {
       for (const timer of Object.values(rescanTimers)) {
         clearTimeout(timer);
       }
+      sites.dispose();
       socket.close();
       socketRef.current = null;
     };
@@ -607,6 +792,14 @@ export default function App() {
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
   }, []);
+
+  useEffect(() => {
+    writeHudState(hud);
+  }, [hud]);
+
+  function toggleHud(id: HudPanelId): void {
+    setHud((current) => toggleHudPanel(current, id));
+  }
 
   function send(command: MayorCommand): void {
     if (socketRef.current?.readyState === WebSocket.OPEN) {
@@ -668,365 +861,733 @@ export default function App() {
     }
   }
 
+  function handleBuildingDragStart(
+    building: Building,
+    preview?: CanvasDragPreview,
+  ): void {
+    setDraggingBuilding(building);
+    setDragPreview(preview);
+    setDragPosition(undefined);
+  }
+
+  function handleBuildingDragMove(position: CanvasPointerPosition): void {
+    setDragPosition(position);
+  }
+
+  function handleBuildingDrop(
+    building: Building,
+    position: CanvasPointerPosition,
+  ): void {
+    setDraggingBuilding(undefined);
+    setDragPreview(undefined);
+    setDragPosition(undefined);
+    if (!pointIsInside(orderFormRef.current, position)) {
+      return;
+    }
+
+    setContextPaths((current) =>
+      current.includes(building.path) ? current : [...current, building.path],
+    );
+  }
+
+  function removeContextPath(path: string): void {
+    setContextPaths((current) => current.filter((item) => item !== path));
+  }
+
   function submitPrompt(event: FormEvent<HTMLFormElement>): void {
     event.preventDefault();
     const nextPrompt = prompt.trim();
     if (!nextPrompt) {
       return;
     }
-    send({ type: "session.prompt", cityId: activeCityId, prompt: nextPrompt });
+    send({
+      type: "session.prompt",
+      cityId: activeCityId,
+      prompt: nextPrompt,
+      permissionMode: orderPermissionMode,
+      model: getCrewMember(crewSelection.crewId).model,
+      effort: crewSelection.effort,
+      contextPaths,
+    });
     setPrompt("");
+    setContextPaths([]);
+    setOrderPermissionMode("default");
   }
-
   return (
-    <div className="flex h-dvh min-h-[36rem] flex-col bg-background">
-      <header className="flex items-center justify-between border-b-4 border-foreground px-4 py-3 dark:border-ring">
-        <div className="flex min-w-0 items-center gap-3">
-          <span className="retro flex size-9 shrink-0 items-center justify-center border-2 border-foreground bg-primary text-xs font-black text-primary-foreground dark:border-ring">
-            SC
-          </span>
-          <div className="min-w-0">
-            <h1 className="retro truncate text-sm md:text-base">Sudo City</h1>
-            <p className="retro truncate text-[10px] text-muted-foreground">
-              {activeCity ? cityLabel(activeCity) : activeCityId} · mayor
-              console
-              {activeCity?.status === "building" ? " · constructing…" : ""}
-            </p>
+    <div className="hud-root">
+      {showDragPreview && dragPreview && dragPosition ? (
+        <img
+          src={dragPreview.src}
+          alt=""
+          aria-hidden="true"
+          draggable={false}
+          className="pointer-events-none fixed z-[100] select-none"
+          style={{
+            left: dragPosition.clientX,
+            top: dragPosition.clientY,
+            transform: "translate(-50%, -100%)",
+            opacity: 0.48,
+            width: 32,
+            height: "auto",
+            imageRendering: "pixelated",
+          }}
+        />
+      ) : null}
+      <GameCanvas
+        ref={canvasRef}
+        cityId={activeCityId}
+        world={world}
+        overlay={overlay}
+        travelCityId={shipTravelTargetId}
+        travelWorld={
+          shipTravelTargetId ? worldByCity[shipTravelTargetId] : undefined
+        }
+        travelOverlay={
+          shipTravelTargetId ? overlayByCity[shipTravelTargetId] : undefined
+        }
+        fileChange={fileChange}
+        cities={cities}
+        buildingPaths={buildingPaths}
+        crewSprite={crewAvatarSrc}
+        issues={issues}
+        travelRequest={issueTravelRequest}
+        onTravelRequest={requestShipTravel}
+        onTravelComplete={completeShipTravel}
+        onTravelTransitionChange={setShipTransitioning}
+        onIssueShopClick={() => {
+          setSelected(undefined);
+          setDiff(undefined);
+          setIssueShopOpen(true);
+        }}
+        onShipHover={setShipHover}
+        onSelectBuilding={selectBuilding}
+        onBuildingDragStart={handleBuildingDragStart}
+        onBuildingDragMove={handleBuildingDragMove}
+        onBuildingDragEnd={handleBuildingDrop}
+      />
+
+      {issueShopOpen ? (
+        <div className="absolute inset-x-4 bottom-4 top-4 z-20 flex flex-col border-4 border-foreground bg-card shadow-xl dark:border-ring">
+          <div className="flex items-center justify-between border-b-2 border-foreground px-3 py-2 dark:border-ring">
+            <div>
+              <p className="retro text-[10px] text-primary">Issue shop</p>
+              <h2 className="retro text-xs">Open GitHub issues</h2>
+            </div>
+            <button
+              type="button"
+              className="retro text-xs text-muted-foreground hover:text-foreground"
+              aria-label="Close issue shop"
+              onClick={() => setIssueShopOpen(false)}
+            >
+              ✕
+            </button>
+          </div>
+          <div className="min-h-0 flex-1 overflow-y-auto p-3">
+            {issues.length ? (
+              <div className="space-y-3">
+                {issues.map((issue) => (
+                  <article
+                    key={issue.number}
+                    className="border-2 border-border bg-background p-3 dark:border-ring"
+                  >
+                    <p className="retro text-[10px] text-primary">
+                      #{issue.number} · @{issue.author}
+                    </p>
+                    <h3 className="retro mt-1 text-xs">{issue.title}</h3>
+                    {issue.body ? (
+                      <p className="mt-2 whitespace-pre-wrap text-xs text-muted-foreground">
+                        {truncatePreview(issue.body, 280)}
+                      </p>
+                    ) : null}
+                    <HudButton
+                      className="mt-3"
+                      onClick={() => takeIssueToFix(issue)}
+                    >
+                      Take this issue to fix
+                    </HudButton>
+                  </article>
+                ))}
+              </div>
+            ) : (
+              <p className="retro text-xs text-muted-foreground">
+                No open GitHub issues found.
+              </p>
+            )}
           </div>
         </div>
-        <div className="flex items-center gap-2">
-          <Button
-            type="button"
-            size="icon"
-            variant="ghost"
-            sound={false}
-            aria-label={sfxEnabled ? "Mute UI sounds" : "Unmute UI sounds"}
-            aria-pressed={!sfxEnabled}
-            onClick={toggleSfx}
-          >
-            {sfxEnabled ? (
-              <Volume2 className="size-4" aria-hidden="true" />
-            ) : (
-              <VolumeX className="size-4" aria-hidden="true" />
-            )}
-          </Button>
-          <Badge
-            variant={connection === "online" ? "default" : "outline"}
-            className="retro text-[10px]"
-          >
-            {statusLabel(connection)}
-          </Badge>
-        </div>
-      </header>
+      ) : null}
 
-      <ResizablePanelGroup orientation="horizontal" className="min-h-0 flex-1">
-        <ResizablePanel defaultSize={72} minSize={45}>
-          <div className="flex h-full min-h-0 flex-col">
-            <section className="relative min-h-0 flex-1 overflow-hidden">
-              <GameCanvas
-                cityId={activeCityId}
-                world={world}
-                overlay={overlay}
-                travelCityId={shipTravelTargetId}
-                travelWorld={
-                  shipTravelTargetId
-                    ? worldByCity[shipTravelTargetId]
-                    : undefined
-                }
-                travelOverlay={
-                  shipTravelTargetId
-                    ? overlayByCity[shipTravelTargetId]
-                    : undefined
-                }
-                fileChange={fileChange}
-                cities={cities}
-                issues={issues}
-                travelRequest={issueTravelRequest}
-                onTravelRequest={requestShipTravel}
-                onTravelComplete={completeShipTravel}
-                onTravelTransitionChange={setShipTransitioning}
-                onIssueShopClick={() => {
-                  setSelected(undefined);
-                  setDiff(undefined);
-                  setIssueShopOpen(true);
-                }}
-                onShipHover={setShipHover}
-                onSelectBuilding={selectBuilding}
-              />
-              {!shipTransitioning ? (
-                <>
-              <div className="pointer-events-none absolute left-4 top-4 border-2 border-foreground bg-card px-3 py-2 dark:border-ring">
-                <span className="retro block text-[10px] text-primary">
-                  District survey
+      {shipHover ? (
+        <div
+          className="retro pointer-events-none absolute z-30 -translate-x-1/2 -translate-y-full whitespace-nowrap border-2 border-foreground bg-card px-2 py-1 text-[10px] text-foreground dark:border-ring"
+          style={{ left: shipHover.screenX, top: shipHover.screenY - 12 }}
+        >
+          {shipHover.action}
+        </div>
+      ) : null}
+
+      <div aria-hidden="true" className="hud-vignette" />
+
+      {/* The canvas whiteout owns the screen while a ship is sailing; the
+          HUD would otherwise float over clouds describing the city being
+          left behind. */}
+      <div className="hud-layer" hidden={shipTransitioning}>
+        <div className="hud-column hud-column--main">
+          <HudWindow
+            id="hud-scan"
+            title="City scan"
+            hint={surveying ? "surveying" : world ? "live" : "offline"}
+            expanded={hud.scan}
+            onToggle={() => toggleHud("scan")}
+            className="w-[min(20rem,100%)]"
+            meta={
+              <span
+                className={cn("hud-pill", !world && "hud-pill--muted")}
+              >
+                <span
+                  aria-hidden="true"
+                  className={cn("hud-dot", world && "hud-dot--live")}
+                />
+                {world ? "synced" : surveying ? "linking" : "no link"}
+              </span>
+            }
+          >
+            <div className="grid gap-2 p-2.5">
+              <div className="flex items-baseline gap-2">
+                <span className="hud-figure retro">
+                  {world ? world.buildings.length : "—"}
                 </span>
-                <strong className="retro block text-xs">
-                  {world?.buildings.length ?? 0} structures mapped
-                </strong>
+                <span className="hud-label flex-1">structures mapped</span>
+                <span className="hud-label">
+                  {languageSummary.length} types
+                </span>
               </div>
 
-              {issueShopOpen ? (
-                <div className="absolute inset-x-4 bottom-4 top-4 z-20 flex flex-col border-4 border-foreground bg-card shadow-xl dark:border-ring">
-                  <div className="flex items-center justify-between border-b-2 border-foreground px-3 py-2 dark:border-ring">
-                    <div>
-                      <p className="retro text-[10px] text-primary">Issue shop</p>
-                      <h2 className="retro text-xs">Open GitHub issues</h2>
-                    </div>
-                    <button
-                      type="button"
-                      className="retro text-xs text-muted-foreground hover:text-foreground"
-                      aria-label="Close issue shop"
-                      onClick={() => setIssueShopOpen(false)}
-                    >
-                      ✕
-                    </button>
+              {surveying ? (
+                <div className="hud-scanline" aria-label="Surveying district" />
+              ) : null}
+
+              {languageSummary.length > 0 ? (
+                <div className="flex flex-wrap gap-1">
+                  {languageSummary.slice(0, 8).map(({ language, count }) => {
+                    const palette = paletteFor(language);
+                    return (
+                      <span
+                        key={language}
+                        title={`${count} ${language} structures`}
+                        className="retro inline-flex items-center gap-1 border px-1 py-0.5 text-[8px]"
+                        style={{
+                          backgroundColor: colorWithAlpha(palette.accent, 0.14),
+                          borderColor: colorWithAlpha(palette.accent, 0.6),
+                          color: colorToCss(palette.accent),
+                        }}
+                      >
+                        <span>{palette.mark}</span>
+                        <span className="text-foreground/75">{count}</span>
+                      </span>
+                    );
+                  })}
+                </div>
+              ) : null}
+            </div>
+          </HudWindow>
+
+          <div className="flex-1" />
+
+          {selected ? (
+            <HudWindow
+              id="hud-inspector"
+              title={fileBasename(selected.path)}
+              hint={selected.language}
+              accent={colorToCss(selectedPalette.accent)}
+              expanded={hud.inspector}
+              onToggle={() => toggleHud("inspector")}
+              className="w-[min(22rem,100%)]"
+              icon={
+                <span
+                  className="hud-mark retro size-[18px] text-[8px]"
+                  style={{
+                    backgroundColor: colorToCss(selectedPalette.accent),
+                    borderColor: colorToCss(selectedPalette.accentDark),
+                    color: colorToCss(selectedPalette.ink),
+                  }}
+                >
+                  {selectedPalette.mark}
+                </span>
+              }
+              actions={
+                <button
+                  type="button"
+                  className="hud-icon-button"
+                  aria-label="Close structure details"
+                  title="Close"
+                  onClick={() => selectBuilding(undefined)}
+                >
+                  <X className="size-3" aria-hidden="true" />
+                </button>
+              }
+            >
+              <div className="grid gap-2 p-2.5">
+                <code className="retro block truncate text-[9px] text-muted-foreground">
+                  {fileDirname(selected.path)}
+                </code>
+                <dl className="retro flex flex-wrap gap-1.5 text-[9px]">
+                  <div className="border border-border/60 bg-background/30 px-1.5 py-1">
+                    <dt className="inline text-[7px] text-muted-foreground">
+                      LINES{" "}
+                    </dt>
+                    <dd className="inline text-foreground">
+                      {selected.loc.toLocaleString()}
+                    </dd>
                   </div>
-                  <div className="min-h-0 flex-1 overflow-y-auto p-3">
-                    {issues.length ? (
-                      <div className="space-y-3">
-                        {issues.map((issue) => (
-                          <article
-                            key={issue.number}
-                            className="border-2 border-border bg-background p-3 dark:border-ring"
-                          >
-                            <p className="retro text-[10px] text-primary">
-                              #{issue.number} · @{issue.author}
-                            </p>
-                            <h3 className="retro mt-1 text-xs">{issue.title}</h3>
-                            {issue.body ? (
-                              <p className="mt-2 whitespace-pre-wrap text-xs text-muted-foreground">
-                                {truncatePreview(issue.body, 280)}
-                              </p>
-                            ) : null}
-                            <Button
-                              type="button"
-                              className="mt-3"
-                              onClick={() => takeIssueToFix(issue)}
-                            >
-                              Take this issue to fix
-                            </Button>
-                          </article>
-                        ))}
-                      </div>
+                  <div className="border border-border/60 bg-background/30 px-1.5 py-1">
+                    <dt className="inline text-[7px] text-muted-foreground">
+                      TYPE{" "}
+                    </dt>
+                    <dd
+                      className="inline"
+                      style={{ color: colorToCss(selectedPalette.accent) }}
+                    >
+                      {selected.language}
+                    </dd>
+                  </div>
+                  {selectedChange ? (
+                    <div className="border border-border/60 bg-background/30 px-1.5 py-1">
+                      <dt className="inline text-[7px] text-muted-foreground">
+                        IN THIS PR{" "}
+                      </dt>
+                      <dd className="inline text-foreground">
+                        {selectedChange.change}
+                      </dd>
+                    </div>
+                  ) : null}
+                </dl>
+                {selectedChange && selectedChange.change !== "deleted" ? (
+                  <div className="max-h-64 overflow-auto border-t border-border/50 pt-2">
+                    {diff &&
+                    diff.cityId === activeCityId &&
+                    diff.path === selected.path ? (
+                      <Markdown className="retro text-[9px]">
+                        {`\`\`\`diff\n${diff.patch}\n\`\`\``}
+                      </Markdown>
                     ) : (
-                      <p className="retro text-xs text-muted-foreground">
-                        No open GitHub issues found.
+                      <p className="retro text-[9px] text-muted-foreground">
+                        Loading diff…
                       </p>
                     )}
                   </div>
-                </div>
-              ) : null}
-
-              {shipHover ? (
-                <div
-                  className="retro pointer-events-none absolute z-10 -translate-x-1/2 -translate-y-full whitespace-nowrap border-2 border-foreground bg-card px-2 py-1 text-[10px] text-foreground dark:border-ring"
-                  style={{
-                    left: shipHover.screenX,
-                    top: shipHover.screenY - 12,
-                  }}
-                >
-                  {shipHover.action}
-                </div>
-              ) : null}
-
-              {selected ? (
-                <div className="absolute bottom-4 left-4 max-w-[min(28rem,calc(100%-2rem))] border-2 border-foreground bg-card px-3 py-2 dark:border-ring">
-                  <div className="flex items-start justify-between gap-3">
-                    <span className="retro block text-[10px] text-primary">
-                      {selected.district}
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => selectBuilding(undefined)}
-                      aria-label="Close structure details"
-                      className="retro shrink-0 text-[10px] text-muted-foreground hover:text-foreground"
-                    >
-                      ✕
-                    </button>
-                  </div>
-                  <p className="retro mt-1 break-all text-xs">{selected.path}</p>
-                  <dl className="retro mt-2 flex gap-4 text-[10px] text-muted-foreground">
-                    <div>
-                      <dt className="inline">Language </dt>
-                      <dd className="inline text-foreground">
-                        {selected.language}
-                      </dd>
-                    </div>
-                    <div>
-                      <dt className="inline">Lines </dt>
-                      <dd className="inline text-foreground">{selected.loc}</dd>
-                    </div>
-                    {selectedChange ? (
-                      <div>
-                        <dt className="inline">PR </dt>
-                        <dd className="inline text-foreground">
-                          {selectedChange.change}
-                        </dd>
-                      </div>
-                    ) : null}
-                  </dl>
-                  {selectedChange && selectedChange.change !== "deleted" ? (
-                    <div className="mt-2 max-h-64 overflow-auto">
-                      {diff &&
-                      diff.cityId === activeCityId &&
-                      diff.path === selected.path ? (
-                        <Markdown className="retro text-[10px]">
-                          {`\`\`\`diff\n${diff.patch}\n\`\`\``}
-                        </Markdown>
-                      ) : (
-                        <p className="retro text-[10px] text-muted-foreground">
-                          Loading diff…
-                        </p>
-                      )}
-                    </div>
-                  ) : null}
-                </div>
-              ) : null}
-
-              <div className="pointer-events-none absolute bottom-4 right-4 border border-border bg-card/90 px-2 py-1">
-                <span className="retro text-[8px] text-muted-foreground">
-                  Drag to pan · Scroll to zoom · Click a building
-                </span>
-              </div>
-                </>
-              ) : null}
-            </section>
-
-            <form
-              className="border-t-4 border-foreground p-4 dark:border-ring"
-              onSubmit={submitPrompt}
-            >
-              <label
-                htmlFor="mayor-prompt"
-                className="retro mb-2 block text-[10px] text-muted-foreground"
-              >
-                Mayor&apos;s order
-              </label>
-              <div className="flex flex-col gap-2 sm:flex-row">
-                <Input
-                  id="mayor-prompt"
-                  value={prompt}
-                  onChange={(event) => setPrompt(event.target.value)}
-                  placeholder="What should the crew build?"
-                  disabled={connection !== "online"}
-                  className="min-w-0 flex-1"
-                />
-                <div className="flex shrink-0 gap-2">
-                  <Button
-                    type="submit"
-                    disabled={connection !== "online" || !prompt.trim()}
-                  >
-                    Dispatch
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="secondary"
-                    onClick={() =>
-                      send({
-                        type: "session.interrupt",
-                        cityId: activeCityId,
-                      })
-                    }
-                    disabled={connection !== "online"}
-                  >
-                    Halt
-                  </Button>
-                </div>
-              </div>
-            </form>
-          </div>
-        </ResizablePanel>
-
-        <ResizableHandle withHandle />
-
-        <ResizablePanel defaultSize={28} minSize={20}>
-          <aside className="flex h-full min-h-0 flex-col overflow-hidden border-l-4 border-foreground bg-card dark:border-ring">
-            <div className="flex shrink-0 items-center justify-between border-b-4 border-foreground px-4 py-3 dark:border-ring">
-              <span className="retro text-[10px] text-primary">City works</span>
-              <Kbd>⌘ K</Kbd>
-            </div>
-
-            <div className="flex min-h-0 flex-1 flex-col gap-4 p-4">
-              <div className="shrink-0 space-y-4">
-                <Dialogue
-                  avatarFallback={agentModel.slice(0, 1).toUpperCase()}
-                  title={agentModel}
-                  description={
-                    pendingPermit
-                      ? "Awaiting permit stamp"
-                      : "Awaiting orders"
-                  }
-                />
-
-                <div className="space-y-3">
-                  <div className="space-y-1">
-                    <div className="retro flex justify-between text-[10px] text-muted-foreground">
-                      <span>Context stamina</span>
-                      <span>100%</span>
-                    </div>
-                    <HealthBar variant="retro" value={100} className="h-4" />
-                  </div>
-                  <div className="space-y-1">
-                    <div className="retro flex justify-between text-[10px] text-muted-foreground">
-                      <span>Treasury</span>
-                      <span>${treasuryUsed.toFixed(4)}</span>
-                    </div>
-                    <ManaBar variant="retro" value={treasuryPercent} className="h-4" />
-                  </div>
-                </div>
-
-                {pendingPermit ? (
-                  <div className="space-y-3">
-                    <Dialogue
-                      player={false}
-                      avatarFallback="!"
-                      title={`Permit: ${pendingPermit.tool}`}
-                      description={pendingPermit.message}
-                    />
-                    <div className="grid grid-cols-2 gap-2">
-                      <Button
-                        type="button"
-                        onClick={() =>
-                          send({
-                            type: "permit.resolve",
-                            toolCallId: pendingPermit.toolCallId,
-                            decision: "allow",
-                          })
-                        }
-                      >
-                        Stamp
-                      </Button>
-                      <Button
-                        type="button"
-                        variant="destructive"
-                        onClick={() =>
-                          send({
-                            type: "permit.resolve",
-                            toolCallId: pendingPermit.toolCallId,
-                            decision: "deny",
-                          })
-                        }
-                      >
-                        Deny
-                      </Button>
-                    </div>
-                  </div>
                 ) : null}
               </div>
+            </HudWindow>
+          ) : (
+            <p className="hud-caption retro">
+              Drag to pan · Scroll to zoom · Click a building
+            </p>
+          )}
 
+          <form
+            ref={orderFormRef}
+            onSubmit={submitPrompt}
+            className={cn(
+              "hud-form w-[min(34rem,100%)]",
+              draggingBuilding && "is-drop-target",
+            )}
+          >
+            <HudWindow
+              id="hud-order"
+              title="Mayor's order"
+              hint={draggingBuilding ? "drop to attach" : undefined}
+              expanded={hud.order}
+              onToggle={() => toggleHud("order")}
+              bodyClassName="grid gap-2 p-2.5"
+              meta={
+                contextPaths.length > 0 ? (
+                  <span className="hud-pill">
+                    {contextPaths.length} in context
+                  </span>
+                ) : null
+              }
+              persistent={
+                <div className="flex flex-col gap-2 sm:flex-row">
+                  <div className="hud-field min-w-0 flex-1">
+                    <span aria-hidden="true" className="hud-field__caret">
+                      ❯
+                    </span>
+                    <input
+                      id="mayor-prompt"
+                      className="hud-field__input retro"
+                      value={prompt}
+                      onChange={(event) => setPrompt(event.target.value)}
+                      placeholder="What should the crew build?"
+                      aria-label="Mayor's order"
+                      autoComplete="off"
+                      disabled={connection !== "online"}
+                    />
+                  </div>
+                  <div className="flex shrink-0 gap-2">
+                    <HudButton
+                      type="submit"
+                      size="sm"
+                      disabled={connection !== "online" || !prompt.trim()}
+                    >
+                      Dispatch
+                    </HudButton>
+                    <HudButton
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      onClick={() =>
+                        send({
+                          type: "session.interrupt",
+                          cityId: activeCityId,
+                        })
+                      }
+                      disabled={connection !== "online"}
+                    >
+                      Halt
+                    </HudButton>
+                  </div>
+                </div>
+              }
+            >
+              {draggingBuilding ? (
+                <div
+                  className="flex items-center gap-2 border px-2 py-1.5"
+                  style={{
+                    backgroundColor: colorWithAlpha(draggingPalette.accent, 0.14),
+                    borderColor: colorWithAlpha(draggingPalette.accent, 0.7),
+                  }}
+                >
+                  <span
+                    className="hud-mark retro size-5 text-[8px]"
+                    style={{
+                      backgroundColor: colorToCss(draggingPalette.accent),
+                      borderColor: colorToCss(draggingPalette.accentDark),
+                      color: colorToCss(draggingPalette.ink),
+                    }}
+                  >
+                    {draggingPalette.mark}
+                  </span>
+                  <code className="retro min-w-0 flex-1 truncate text-[9px] text-foreground">
+                    {draggingBuilding.path}
+                  </code>
+                </div>
+              ) : null}
+
+              {contextPaths.length > 0 ? (
+                <div className="flex flex-wrap items-center gap-1">
+                  {contextPaths.map((path) => {
+                    const contextBuilding = world?.buildings.find(
+                      (building) => building.path === path,
+                    );
+                    const palette = paletteFor(
+                      contextBuilding?.language ?? "unknown",
+                    );
+                    return (
+                      <button
+                        key={path}
+                        type="button"
+                        title={`Remove ${path} from context`}
+                        onClick={() => removeContextPath(path)}
+                        className="retro inline-flex max-w-full items-center gap-1.5 border px-1.5 py-1 text-left text-[8px] transition-colors hover:border-primary"
+                        style={{
+                          backgroundColor: colorWithAlpha(palette.accent, 0.12),
+                          borderColor: colorWithAlpha(palette.accent, 0.6),
+                        }}
+                      >
+                        <span
+                          className="hud-mark size-3.5 text-[7px]"
+                          style={{
+                            backgroundColor: colorToCss(palette.accent),
+                            borderColor: colorToCss(palette.accentDark),
+                            color: colorToCss(palette.ink),
+                          }}
+                        >
+                          {palette.mark}
+                        </span>
+                        <span className="max-w-[14rem] truncate text-foreground">
+                          {path}
+                        </span>
+                        <span aria-hidden="true" className="text-muted-foreground">
+                          ×
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : null}
+
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="hud-label">Crew</span>
+                <HudButton
+                  type="button"
+                  size="auto"
+                  variant="outline"
+                  disabled={connection !== "online"}
+                  onClick={() => setCrewDialogOpen(true)}
+                  className="justify-start gap-2 text-left"
+                >
+                  <img
+                    src={crewSpriteUrl(
+                      crewSelection.crewId,
+                      crewSelection.effort,
+                    )}
+                    alt=""
+                    className="size-6 object-contain [image-rendering:pixelated]"
+                  />
+                  <span className="min-w-0">
+                    <span className="block text-[8px] text-primary">
+                      {getCrewMember(crewSelection.crewId).name}
+                    </span>
+                    <span className="block text-[8px] text-muted-foreground">
+                      {effortLabel(crewSelection.effort)} effort
+                    </span>
+                  </span>
+                </HudButton>
+              </div>
+
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="hud-label">Permissions</span>
+                <div
+                  className="flex gap-1.5"
+                  role="group"
+                  aria-label="Permission mode for this order"
+                >
+                  <HudButton
+                    type="button"
+                    size="sm"
+                    variant={
+                      orderPermissionMode === "default" ? "primary" : "outline"
+                    }
+                    aria-pressed={orderPermissionMode === "default"}
+                    onClick={() => setOrderPermissionMode("default")}
+                    disabled={connection !== "online"}
+                  >
+                    Ask Mayor
+                  </HudButton>
+                  <HudButton
+                    type="button"
+                    size="sm"
+                    variant={
+                      orderPermissionMode === "auto" ? "primary" : "outline"
+                    }
+                    aria-pressed={orderPermissionMode === "auto"}
+                    onClick={() => setOrderPermissionMode("auto")}
+                    disabled={connection !== "online"}
+                  >
+                    Don&apos;t Disturb
+                  </HudButton>
+                </div>
+              </div>
+
+              <p className="retro text-[8px] leading-relaxed text-muted-foreground">
+                {orderPermissionMode === "auto"
+                  ? "Auto mode applies only to this order."
+                  : "Default mode pauses for your approval."}
+              </p>
+            </HudWindow>
+          </form>
+        </div>
+
+        <div className="hud-column hud-column--console">
+          <HudWindow
+            id="hud-console"
+            title={cityName}
+            fill
+            expanded={hud.console}
+            onToggle={() => toggleHud("console")}
+            bodyClassName="flex min-h-0 flex-1 flex-col gap-2.5 p-2.5"
+            meta={
+              <span
+                className={cn(
+                  "hud-pill",
+                  connection !== "online" && "hud-pill--muted",
+                )}
+              >
+                <span
+                  aria-hidden="true"
+                  className={cn(
+                    "hud-dot",
+                    connection === "online" && "hud-dot--live",
+                  )}
+                />
+                {statusLabel(connection)}
+              </span>
+            }
+            actions={
+              <>
+                <button
+                  type="button"
+                  className="hud-icon-button"
+                  aria-label={sfxEnabled ? "Mute sound" : "Unmute sound"}
+                  aria-pressed={!sfxEnabled}
+                  title={sfxEnabled ? "Mute sound" : "Unmute sound"}
+                  onClick={toggleSfx}
+                >
+                  {sfxEnabled ? (
+                    <Volume2 className="size-3" aria-hidden="true" />
+                  ) : (
+                    <VolumeX className="size-3" aria-hidden="true" />
+                  )}
+                </button>
+                <button
+                  type="button"
+                  className="hud-icon-button retro gap-0.5 px-1 text-[8px]"
+                  aria-label="Open the command palette"
+                  title="Command palette (⌘K)"
+                  onClick={() => setCommandOpen(true)}
+                >
+                  <Command className="size-2.5" aria-hidden="true" />K
+                </button>
+              </>
+            }
+            footer={
+              <div className="flex items-center justify-between gap-2">
+                <span className="hud-label">
+                  Permits · {orderPermissionMode === "auto" ? "auto" : "mayor"}
+                </span>
+                <span className="hud-label">
+                  {world?.buildings.length ?? 0} structures ·{" "}
+                  {languageSummary.length} types
+                </span>
+              </div>
+            }
+          >
+            <div className="hud-masthead">
+              <div className="min-w-0">
+                <h1 className="hud-masthead__name retro">{cityName}</h1>
+                <p className="hud-masthead__sub retro">
+                  {cityStatusLine} · mayor console
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2.5">
+              <img
+                src={crewAvatarSrc}
+                alt=""
+                className="hud-crew__portrait"
+              />
+              <div className="min-w-0 flex-1">
+                <span className="hud-label">Crew on duty</span>
+                <p className="retro truncate text-[11px] text-foreground">
+                  {activeCrew.name}
+                </p>
+                <p className="retro truncate text-[9px] text-muted-foreground">
+                  {crewStatus}
+                </p>
+              </div>
+            </div>
+
+            <div className="grid gap-1.5">
+              <HudMeter
+                label="Context stamina"
+                readout="100%"
+                value={100}
+                tone="var(--color-signal, oklch(0.74 0.16 155))"
+              />
+              <HudMeter
+                label="Treasury"
+                readout={`$${treasuryUsed.toFixed(4)} / $${maxBudgetUsd.toFixed(2)}`}
+                value={treasuryPercent}
+              />
+            </div>
+
+            {pendingPermit ? (
+              <div className="hud-permit grid gap-2">
+                <div className="flex items-center gap-1.5">
+                  <ShieldAlert
+                    className="size-3 shrink-0 text-primary"
+                    aria-hidden="true"
+                  />
+                  <span className="hud-label truncate text-primary">
+                    Permit · {pendingPermit.tool}
+                  </span>
+                </div>
+                <p className="retro text-[9px] leading-relaxed text-foreground">
+                  {pendingPermit.message}
+                </p>
+                <div className="grid grid-cols-2 gap-2">
+                  <HudButton
+                    type="button"
+                    size="sm"
+                    onClick={() =>
+                      send({
+                        type: "permit.resolve",
+                        toolCallId: pendingPermit.toolCallId,
+                        decision: "allow",
+                      })
+                    }
+                  >
+                    Stamp
+                  </HudButton>
+                  <HudButton
+                    type="button"
+                    size="sm"
+                    variant="danger"
+                    onClick={() =>
+                      send({
+                        type: "permit.resolve",
+                        toolCallId: pendingPermit.toolCallId,
+                        decision: "deny",
+                      })
+                    }
+                  >
+                    Deny
+                  </HudButton>
+                </div>
+              </div>
+            ) : null}
+
+            <div className="flex min-h-0 flex-1 flex-col gap-1.5 border-t border-border/50 pt-2">
+              <div className="flex items-center justify-between gap-2">
+                <span className="hud-label">Transmissions</span>
+                {activeQuestCount > 0 ? (
+                  <span className="hud-pill">{activeQuestCount} active</span>
+                ) : null}
+              </div>
               <QuestLog
-                quests={eventsToQuests(events)}
+                variant="bare"
+                quests={quests}
                 emptyStateMessage="The radio is quiet."
                 className="min-h-0 flex-1"
               />
             </div>
-          </aside>
-        </ResizablePanel>
-      </ResizablePanelGroup>
+          </HudWindow>
+        </div>
+      </div>
+
+      <CrewSelectDialog
+        open={crewDialogOpen}
+        onOpenChange={setCrewDialogOpen}
+        value={crewSelection}
+        onConfirm={setCrewSelection}
+      />
 
       <CommandDialog open={commandOpen} onOpenChange={setCommandOpen}>
-        <CommandInput placeholder="Type a mayor command..." />
+        <CommandInput placeholder="Search files or mayor commands..." />
         <CommandList>
-          <CommandEmpty>No command found.</CommandEmpty>
+          <CommandEmpty>No file or command found.</CommandEmpty>
+          {world?.buildings.length ? (
+            <CommandGroup heading="Files">
+              {world.buildings.map((building) => (
+                <CommandItem
+                  key={building.path}
+                  value={building.path}
+                  onSelect={() => {
+                    canvasRef.current?.focusBuilding(building.path);
+                    selectBuilding(building);
+                    setCommandOpen(false);
+                  }}
+                >
+                  <span className="truncate">{fileBasename(building.path)}</span>
+                  <span className="text-muted-foreground ml-2 truncate text-xs">
+                    {fileDirname(building.path)}
+                  </span>
+                </CommandItem>
+              ))}
+            </CommandGroup>
+          ) : null}
           <CommandGroup heading="Mayor">
             <CommandItem
               onSelect={() => {

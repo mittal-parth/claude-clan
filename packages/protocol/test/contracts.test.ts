@@ -102,6 +102,65 @@ describe("protocol contracts", () => {
     ).toThrow();
   });
 
+  it("carries permission mode on an individual order", () => {
+    const command = MayorCommandSchema.parse({
+      type: "session.prompt",
+      cityId: "main",
+      prompt: "add an endpoint",
+      permissionMode: "auto",
+      contextPaths: ["src/index.ts", "packages/protocol/src/index.ts"],
+    });
+
+    expect(command).toEqual({
+      type: "session.prompt",
+      cityId: "main",
+      prompt: "add an endpoint",
+      permissionMode: "auto",
+      contextPaths: ["src/index.ts", "packages/protocol/src/index.ts"],
+    });
+
+    const started = GameEventSchema.parse({
+      ...base,
+      type: "session.started",
+      model: "sonnet",
+      effort: "xhigh",
+      permissionMode: "auto",
+    });
+    expect(started).toMatchObject({
+      type: "session.started",
+      effort: "xhigh",
+      permissionMode: "auto",
+    });
+
+    const legacyStarted = GameEventSchema.parse({
+      ...base,
+      type: "session.started",
+      model: "sonnet",
+    });
+    expect(legacyStarted).toMatchObject({
+      permissionMode: "default",
+      effort: "high",
+    });
+  });
+
+  it("accepts model and effort on session.prompt", () => {
+    const command = MayorCommandSchema.parse({
+      type: "session.prompt",
+      cityId: "main",
+      prompt: "refactor the district",
+      model: "opus",
+      effort: "max",
+    });
+
+    expect(command).toEqual({
+      type: "session.prompt",
+      cityId: "main",
+      prompt: "refactor the district",
+      model: "opus",
+      effort: "max",
+    });
+  });
+
   it("trims and validates mayor prompts", () => {
     const command = MayorCommandSchema.parse({
       type: "session.prompt",

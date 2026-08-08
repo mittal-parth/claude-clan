@@ -11,7 +11,9 @@ import {
   ensureWorktree,
   fileDiff,
   issueCityIdFor,
+  parseGitHubRemote,
   parseIssueListJson,
+  parsePullRequestApiJson,
   parsePullRequestListJson,
   pruneWorktrees,
   removeWorktree,
@@ -263,5 +265,62 @@ describe("GhCliClient helpers", () => {
     expect(reviewEventFlag("APPROVE")).toBe("--approve");
     expect(reviewEventFlag("REQUEST_CHANGES")).toBe("--request-changes");
     expect(reviewEventFlag("COMMENT")).toBe("--comment");
+  });
+
+  it("maps the REST shape, which names every field differently", () => {
+    const refs = parsePullRequestApiJson(
+      JSON.stringify([
+        {
+          number: 42,
+          title: "Fix the thing",
+          user: { login: "octocat" },
+          head: { sha: "abc123", ref: "fix-thing" },
+          base: { ref: "main" },
+          html_url: "https://example.invalid/pr/42",
+        },
+      ]),
+    );
+
+    expect(refs).toEqual([
+      {
+        number: 42,
+        title: "Fix the thing",
+        author: "octocat",
+        headSha: "abc123",
+        headRef: "fix-thing",
+        baseRef: "main",
+        url: "https://example.invalid/pr/42",
+      },
+    ]);
+  });
+
+  it("reports a deleted author as ghost, the way gh does", () => {
+    const [ref] = parsePullRequestApiJson(
+      JSON.stringify([
+        {
+          number: 1,
+          title: "Orphaned",
+          user: null,
+          head: { sha: "a", ref: "b" },
+          base: { ref: "main" },
+          html_url: "https://example.invalid/pr/1",
+        },
+      ]),
+    );
+
+    expect(ref?.author).toBe("ghost");
+  });
+
+  it("reads owner/repo from either remote transport", () => {
+    expect(parseGitHubRemote("https://github.com/mittal-parth/claude-clan.git"))
+      .toBe("mittal-parth/claude-clan");
+    expect(parseGitHubRemote("git@github.com:mittal-parth/claude-clan.git"))
+      .toBe("mittal-parth/claude-clan");
+    expect(parseGitHubRemote("https://github.com/mittal-parth/claude-clan\n"))
+      .toBe("mittal-parth/claude-clan");
+  });
+
+  it("declines to guess an API host for a non-GitHub remote", () => {
+    expect(parseGitHubRemote("https://gitlab.com/owner/repo.git")).toBeUndefined();
   });
 });

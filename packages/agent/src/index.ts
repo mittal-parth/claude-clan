@@ -1,4 +1,4 @@
-import { relative, sep } from "node:path";
+import { isAbsolute, relative, sep } from "node:path";
 import {
   query,
   type HookCallback,
@@ -8,7 +8,11 @@ import {
   type SDKAssistantMessage,
   type SDKMessage,
 } from "@anthropic-ai/claude-agent-sdk";
-import type { GameEvent } from "@sudo-city/protocol";
+import type {
+  EffortLevel,
+  GameEvent,
+  PermissionMode as MayorPermissionMode,
+} from "@sudo-city/protocol";
 
 // cityId is stamped by the server, which owns the CityRegistry -- an
 // AgentSessionManager doesn't know which city it belongs to any more than
@@ -28,6 +32,7 @@ export interface AgentSessionOptions {
   maxBudgetUsd?: number;
   maxTurns?: number;
   model?: string;
+  effort?: EffortLevel;
   safeTools?: readonly string[];
   /**
    * Removed from the model's context entirely -- unlike safeTools/canUseTool,
@@ -38,6 +43,12 @@ export interface AgentSessionOptions {
   disallowedTools?: readonly string[];
   /** Appended to the default system prompt -- e.g. review framing for a PR city. */
   systemPromptAppend?: string;
+}
+
+export interface AgentStartOptions {
+  model?: string;
+  effort?: EffortLevel;
+  contextPaths?: readonly string[];
 }
 
 export class AgentSessionManager {
@@ -51,6 +62,7 @@ export class AgentSessionManager {
   private readonly disallowedTools?: readonly string[];
   private readonly systemPromptAppend?: string;
   private model: string;
+  private effort: EffortLevel;
   private activeQuery?: Query;
   private abortController?: AbortController;
   private readonly pendingPermits = new Map<string, PendingPermit>();
@@ -61,6 +73,7 @@ export class AgentSessionManager {
     this.maxBudgetUsd = options.maxBudgetUsd ?? 1;
     this.maxTurns = options.maxTurns ?? 12;
     this.model = options.model ?? "sonnet";
+    this.effort = options.effort ?? "high";
     this.safeTools = new Set(options.safeTools ?? ["Read", "Glob", "Grep"]);
     this.disallowedTools = options.disallowedTools;
     this.systemPromptAppend = options.systemPromptAppend;
@@ -71,14 +84,30 @@ export class AgentSessionManager {
     this.maxBudgetUsd = maxBudgetUsd;
   }
 
-  async start(prompt: string): Promise<void> {
+  async start(
+    prompt: string,
+    permissionMode: MayorPermissionMode = "default",
+    options?: AgentStartOptions,
+  ): Promise<void> {
     await this.interrupt();
+    const contextPaths = options?.contextPaths ?? [];
+    if (options?.model) {
+      this.model = options.model;
+    }
+    if (options?.effort) {
+      this.effort = options.effort;
+    }
     const abortController = new AbortController();
     this.abortController = abortController;
-    this.emit({ type: "session.started", model: this.model });
+    this.emit({
+      type: "session.started",
+      model: this.model,
+      effort: this.effort,
+      permissionMode,
+    });
 
     const activeQuery = query({
-      prompt,
+      prompt: promptWithContext(prompt, contextPaths),
       options: {
         abortController,
         canUseTool: this.canUseTool,
@@ -86,11 +115,12 @@ export class AgentSessionManager {
         disallowedTools: this.disallowedTools
           ? [...this.disallowedTools]
           : undefined,
+        effort: this.effort,
         hooks: this.createHooks(),
         maxBudgetUsd: this.maxBudgetUsd,
         maxTurns: this.maxTurns,
         model: this.model,
-        permissionMode: "default",
+        permissionMode,
         systemPrompt: this.systemPromptAppend
           ? {
               type: "preset",
@@ -205,7 +235,7 @@ export class AgentSessionManager {
         type: "tool.started",
         toolCallId: input.tool_use_id,
         tool: input.tool_name,
-        target: toolTarget(input.tool_input),
+        target: toolTarget(input.tool_input, this.cwd),
       });
     }
     return {};
@@ -337,11 +367,23 @@ function assistantText(message: SDKAssistantMessage): string {
     .join("\n");
 }
 
-function toolTarget(input: unknown): string | undefined {
+/**
+ * A tool's headline argument. File paths arrive absolute from the SDK, and are
+ * made repo-relative to match the paths on file.changed and on the world
+ * snapshot's buildings — the renderer looks a target up by building path, so an
+ * absolute one silently matched nothing.
+ */
+function toolTarget(input: unknown, cwd: string): string | undefined {
   if (!isRecord(input)) {
     return undefined;
   }
-  for (const key of ["file_path", "path", "command", "pattern"]) {
+  for (const key of ["file_path", "path"]) {
+    const value = input[key];
+    if (typeof value === "string") {
+      return normalizePath(isAbsolute(value) ? relative(cwd, value) : value);
+    }
+  }
+  for (const key of ["command", "pattern"]) {
     const value = input[key];
     if (typeof value === "string") {
       return value;
@@ -356,6 +398,22 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function normalizePath(path: string): string {
   return sep === "/" ? path : path.split(sep).join("/");
+}
+
+function promptWithContext(
+  prompt: string,
+  contextPaths: readonly string[],
+): string {
+  if (contextPaths.length === 0) {
+    return prompt;
+  }
+
+  return [
+    prompt,
+    "",
+    "Read these repository files before acting; they were attached as context for this order:",
+    ...contextPaths.map((path) => `- ${path}`),
+  ].join("\n");
 }
 
 export type { AgentEvent };

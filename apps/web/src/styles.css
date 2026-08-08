@@ -77,3 +77,698 @@
 .game-canvas canvas {
   display: block;
 }
+
+
+/* ---------------------------------------------------------------------------
+ * HUD
+ *
+ * The world owns the whole viewport; every control floats over it in a window
+ * that can be expanded or made compact. The layer below is inert so panning and
+ * zooming still reach the canvas everywhere a window is not.
+ * ------------------------------------------------------------------------- */
+
+:root {
+  --hud-ease: cubic-bezier(0.16, 1, 0.3, 1);
+  --hud-accent: var(--primary);
+  --hud-edge: color-mix(in oklab, var(--foreground) 24%, transparent);
+  --hud-shade: oklch(0.09 0.03 240);
+}
+
+.hud-root {
+  position: relative;
+  height: 100dvh;
+  width: 100%;
+  overflow: hidden;
+  background: var(--background);
+}
+
+/* Sinks the bright map at the edges so pale windows keep their contrast. */
+.hud-vignette {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(
+      130% 90% at 50% 42%,
+      transparent 38%,
+      color-mix(in oklab, var(--hud-shade) 52%, transparent) 100%
+    ),
+    linear-gradient(
+      180deg,
+      color-mix(in oklab, var(--hud-shade) 42%, transparent),
+      transparent 20%,
+      transparent 68%,
+      color-mix(in oklab, var(--hud-shade) 48%, transparent)
+    );
+}
+
+.hud-layer {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  gap: 0.75rem;
+  padding: 0.75rem;
+  pointer-events: none;
+}
+
+@media (min-width: 768px) {
+  .hud-layer {
+    gap: 1rem;
+    padding: 1rem;
+  }
+}
+
+.hud-column {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.hud-column--main {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.hud-column--console {
+  flex: none;
+  width: min(21rem, calc(100vw - 1.5rem));
+}
+
+@media (min-width: 1280px) {
+  .hud-column--console {
+    width: 23rem;
+  }
+}
+
+/* --- window shell --------------------------------------------------------- */
+
+.hud-window {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  pointer-events: auto;
+  color: var(--foreground);
+  border: 2px solid var(--hud-edge);
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in oklab, var(--card) 86%, transparent),
+      color-mix(in oklab, var(--background) 90%, transparent)
+    );
+  box-shadow:
+    inset 0 1px 0 color-mix(in oklab, var(--foreground) 14%, transparent),
+    0 24px 48px -26px rgb(0 0 0 / 0.95),
+    6px 6px 0 color-mix(in oklab, var(--hud-shade) 30%, transparent);
+  backdrop-filter: blur(16px) saturate(140%);
+}
+
+/* Accent hairline riding the top edge. */
+.hud-window::before {
+  content: "";
+  position: absolute;
+  inset-inline: -2px;
+  top: -2px;
+  height: 2px;
+  background: linear-gradient(
+    90deg,
+    var(--hud-accent),
+    color-mix(in oklab, var(--hud-accent) 18%, transparent) 55%,
+    transparent
+  );
+}
+
+/* CRT texture, faint enough to read as grain rather than stripes. */
+.hud-window::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.5;
+  background: repeating-linear-gradient(
+    0deg,
+    rgb(255 255 255 / 0.03) 0 1px,
+    transparent 1px 3px
+  );
+}
+
+/* Four pixel corner brackets, drawn as eight thin gradients. */
+.hud-window__frame {
+  --hud-bracket: color-mix(in oklab, var(--hud-accent) 65%, transparent);
+  position: absolute;
+  inset: 3px;
+  pointer-events: none;
+  background-image:
+    linear-gradient(var(--hud-bracket), var(--hud-bracket)),
+    linear-gradient(var(--hud-bracket), var(--hud-bracket)),
+    linear-gradient(var(--hud-bracket), var(--hud-bracket)),
+    linear-gradient(var(--hud-bracket), var(--hud-bracket)),
+    linear-gradient(var(--hud-bracket), var(--hud-bracket)),
+    linear-gradient(var(--hud-bracket), var(--hud-bracket)),
+    linear-gradient(var(--hud-bracket), var(--hud-bracket)),
+    linear-gradient(var(--hud-bracket), var(--hud-bracket));
+  background-repeat: no-repeat;
+  background-size:
+    9px 2px,
+    2px 9px,
+    9px 2px,
+    2px 9px,
+    9px 2px,
+    2px 9px,
+    9px 2px,
+    2px 9px;
+  background-position:
+    left top,
+    left top,
+    right top,
+    right top,
+    left bottom,
+    left bottom,
+    right bottom,
+    right bottom;
+}
+
+.hud-window__bar {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.45rem 0.5rem 0.45rem 0.65rem;
+  border-bottom: 2px solid
+    color-mix(in oklab, var(--foreground) 14%, transparent);
+  background: linear-gradient(
+    180deg,
+    color-mix(in oklab, var(--hud-accent) 9%, transparent),
+    transparent
+  );
+}
+
+.hud-window[data-expanded="false"] .hud-window__bar {
+  border-bottom-color: transparent;
+}
+
+.hud-window__tick {
+  width: 4px;
+  height: 13px;
+  flex: none;
+  background: var(--hud-accent);
+  box-shadow: 0 0 10px color-mix(in oklab, var(--hud-accent) 55%, transparent);
+}
+
+.hud-window__title {
+  min-width: 0;
+  font-size: 9px;
+  line-height: 1.2;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  color: color-mix(in oklab, var(--foreground) 92%, transparent);
+}
+
+.hud-window__hint {
+  flex: none;
+  font-size: 8px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  color: var(--muted-foreground);
+}
+
+/* Dotted leader that eats the slack between the title and the controls. */
+.hud-window__leader {
+  flex: 1 1 auto;
+  min-width: 0.75rem;
+  height: 2px;
+  background-image: radial-gradient(
+    circle,
+    color-mix(in oklab, var(--foreground) 30%, transparent) 42%,
+    transparent 44%
+  );
+  background-size: 4px 2px;
+}
+
+.hud-window__toggle,
+.hud-icon-button {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  height: 19px;
+  min-width: 19px;
+  padding-inline: 0.15rem;
+  border: 1px solid color-mix(in oklab, var(--hud-accent) 45%, transparent);
+  background: color-mix(in oklab, var(--hud-accent) 12%, transparent);
+  color: var(--hud-accent);
+  transition:
+    background-color 140ms var(--hud-ease),
+    color 140ms var(--hud-ease);
+}
+
+.hud-window__toggle:hover,
+.hud-icon-button:hover {
+  background: var(--hud-accent);
+  color: var(--primary-foreground);
+}
+
+.hud-window__toggle:focus-visible,
+.hud-icon-button:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+.hud-window__toggle svg {
+  transition: transform 240ms var(--hud-ease);
+}
+
+.hud-window[data-expanded="false"] .hud-window__toggle svg {
+  transform: rotate(-90deg);
+}
+
+/* --- collapse ------------------------------------------------------------- */
+
+.hud-window__reveal {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  min-height: 0;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows 260ms var(--hud-ease);
+}
+
+.hud-window[data-expanded="true"] .hud-window__reveal {
+  grid-template-rows: 1fr;
+}
+
+.hud-window__reveal > * {
+  min-height: 0;
+  overflow: hidden;
+}
+
+/*
+ * `fill` sizes to its content and only grows as far as the column allows, so a
+ * quiet console is a short window rather than a tall empty one.
+ */
+.hud-window--fill {
+  max-height: 100%;
+}
+
+.hud-window--fill[data-expanded="true"] {
+  min-height: 0;
+}
+
+.hud-window--fill[data-expanded="true"] .hud-window__reveal {
+  flex: 0 1 auto;
+}
+
+.hud-window__persistent,
+.hud-window__footer {
+  position: relative;
+  z-index: 1;
+}
+
+.hud-window__persistent {
+  padding: 0.65rem;
+  border-top: 2px solid color-mix(in oklab, var(--foreground) 12%, transparent);
+}
+
+.hud-window[data-expanded="false"] .hud-window__persistent {
+  border-top-color: transparent;
+}
+
+.hud-window__footer {
+  padding: 0.4rem 0.65rem;
+  border-top: 2px solid color-mix(in oklab, var(--foreground) 12%, transparent);
+  background: color-mix(in oklab, var(--hud-shade) 28%, transparent);
+}
+
+/* --- content atoms -------------------------------------------------------- */
+
+.hud-label {
+  font-size: 8px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--muted-foreground);
+}
+
+.hud-caption {
+  align-self: flex-start;
+  pointer-events: none;
+  padding: 0.3rem 0.5rem;
+  font-size: 8px;
+  letter-spacing: 0.12em;
+  color: color-mix(in oklab, var(--foreground) 62%, transparent);
+  background: color-mix(in oklab, var(--hud-shade) 46%, transparent);
+  border: 1px solid color-mix(in oklab, var(--foreground) 12%, transparent);
+  backdrop-filter: blur(6px);
+}
+
+.hud-figure {
+  font-size: 1.5rem;
+  line-height: 1;
+  color: var(--foreground);
+  text-shadow: 0 0 18px color-mix(in oklab, var(--hud-accent) 35%, transparent);
+}
+
+.hud-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.1rem 0.35rem;
+  font-size: 8px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  color: var(--hud-accent);
+  border: 1px solid color-mix(in oklab, var(--hud-accent) 40%, transparent);
+  background: color-mix(in oklab, var(--hud-accent) 10%, transparent);
+}
+
+.hud-pill--muted {
+  color: var(--muted-foreground);
+  border-color: color-mix(in oklab, var(--foreground) 18%, transparent);
+  background: transparent;
+}
+
+.hud-dot {
+  width: 5px;
+  height: 5px;
+  flex: none;
+  background: currentColor;
+}
+
+.hud-dot--live {
+  animation: hud-pulse 1.8s var(--hud-ease) infinite;
+}
+
+.hud-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  border-style: solid;
+  border-width: 1px;
+}
+
+/* --- meter ---------------------------------------------------------------- */
+
+.hud-meter {
+  --hud-meter-fill: var(--hud-accent);
+  display: flex;
+  gap: 2px;
+  height: 9px;
+  padding: 2px;
+  border: 1px solid color-mix(in oklab, var(--foreground) 18%, transparent);
+  background: color-mix(in oklab, var(--hud-shade) 45%, transparent);
+}
+
+.hud-meter__cell {
+  flex: 1 1 0;
+  background: color-mix(in oklab, var(--foreground) 10%, transparent);
+}
+
+.hud-meter__cell[data-on="true"] {
+  background: var(--hud-meter-fill);
+  box-shadow: 0 0 6px color-mix(in oklab, var(--hud-meter-fill) 55%, transparent);
+}
+
+/* --- field ---------------------------------------------------------------- */
+
+.hud-field {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  height: 27px;
+  padding-inline: 0.5rem;
+  border: 1px solid color-mix(in oklab, var(--foreground) 22%, transparent);
+  background: color-mix(in oklab, var(--hud-shade) 55%, transparent);
+  transition:
+    border-color 140ms var(--hud-ease),
+    box-shadow 140ms var(--hud-ease);
+}
+
+.hud-field:focus-within {
+  border-color: var(--hud-accent);
+  box-shadow: inset 0 0 14px
+    color-mix(in oklab, var(--hud-accent) 12%, transparent);
+}
+
+.hud-field__caret {
+  flex: none;
+  font-size: 10px;
+  line-height: 1;
+  color: color-mix(in oklab, var(--hud-accent) 80%, transparent);
+}
+
+.hud-field__input {
+  min-width: 0;
+  flex: 1 1 auto;
+  border: 0;
+  background: transparent;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  color: var(--foreground);
+}
+
+.hud-field__input:focus {
+  outline: none;
+}
+
+.hud-field__input::placeholder {
+  color: color-mix(in oklab, var(--foreground) 42%, transparent);
+}
+
+.hud-field__input:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+/* --- button --------------------------------------------------------------- */
+
+.hud-button {
+  --hud-button-ink: var(--foreground);
+  --hud-button-edge: color-mix(in oklab, var(--foreground) 28%, transparent);
+  --hud-button-fill: transparent;
+  --hud-button-shadow: color-mix(in oklab, var(--hud-shade) 55%, transparent);
+  font-size: 9px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--hud-button-ink);
+  background: var(--hud-button-fill);
+  border: 1px solid var(--hud-button-edge);
+  box-shadow: 2px 2px 0 var(--hud-button-shadow);
+  transition:
+    background-color 140ms var(--hud-ease),
+    border-color 140ms var(--hud-ease),
+    color 140ms var(--hud-ease),
+    transform 90ms var(--hud-ease),
+    box-shadow 90ms var(--hud-ease);
+}
+
+.hud-button--sm {
+  height: 22px;
+  padding-inline: 0.5rem;
+}
+
+.hud-button--md {
+  height: 27px;
+  padding-inline: 0.75rem;
+}
+
+.hud-button--auto {
+  padding: 0.3rem 0.45rem;
+  text-transform: none;
+  letter-spacing: 0.06em;
+}
+
+.hud-button--primary {
+  --hud-button-ink: var(--primary-foreground);
+  --hud-button-fill: var(--hud-accent);
+  --hud-button-edge: var(--hud-accent);
+  --hud-button-shadow: color-mix(in oklab, var(--hud-accent) 35%, var(--hud-shade));
+}
+
+.hud-button--danger {
+  --hud-button-ink: var(--foreground);
+  --hud-button-fill: color-mix(in oklab, var(--destructive) 82%, transparent);
+  --hud-button-edge: var(--destructive);
+  --hud-button-shadow: color-mix(in oklab, var(--destructive) 30%, var(--hud-shade));
+}
+
+.hud-button--ghost {
+  --hud-button-ink: var(--muted-foreground);
+  --hud-button-edge: transparent;
+  box-shadow: none;
+}
+
+.hud-button--outline:hover:not(:disabled),
+.hud-button--ghost:hover:not(:disabled) {
+  --hud-button-ink: var(--hud-accent);
+  --hud-button-edge: var(--hud-accent);
+  --hud-button-fill: color-mix(in oklab, var(--hud-accent) 12%, transparent);
+}
+
+.hud-button--primary:hover:not(:disabled),
+.hud-button--danger:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+
+/* A pressed toggle reads as filled, the same as a primary action. */
+.hud-button[aria-pressed="true"] {
+  --hud-button-ink: var(--primary-foreground);
+  --hud-button-fill: var(--hud-accent);
+  --hud-button-edge: var(--hud-accent);
+}
+
+.hud-button:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+.hud-button:active:not(:disabled) {
+  transform: translate(2px, 2px);
+  box-shadow: 0 0 0 var(--hud-button-shadow);
+}
+
+.hud-button:disabled {
+  opacity: 0.4;
+  box-shadow: none;
+  cursor: not-allowed;
+}
+
+/* --- masthead ------------------------------------------------------------- */
+
+.hud-masthead {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding-bottom: 0.55rem;
+  border-bottom: 1px solid
+    color-mix(in oklab, var(--foreground) 12%, transparent);
+}
+
+.hud-masthead__name {
+  font-size: 15px;
+  line-height: 1.15;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--foreground);
+  text-shadow: 0 0 20px color-mix(in oklab, var(--hud-accent) 30%, transparent);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hud-masthead__sub {
+  margin-top: 2px;
+  font-size: 8px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--hud-accent);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hud-crew__portrait {
+  width: 3.25rem;
+  height: 3.25rem;
+  flex: none;
+  object-fit: contain;
+  image-rendering: pixelated;
+  border: 1px solid color-mix(in oklab, var(--foreground) 16%, transparent);
+  background: color-mix(in oklab, var(--hud-shade) 40%, transparent);
+}
+
+.hud-permit {
+  padding: 0.65rem;
+  border: 1px solid color-mix(in oklab, var(--hud-accent) 55%, transparent);
+  background: color-mix(in oklab, var(--hud-accent) 8%, transparent);
+}
+
+/* Indeterminate sweep while the first survey is still coming back. */
+.hud-scanline {
+  position: relative;
+  height: 3px;
+  overflow: hidden;
+  background: color-mix(in oklab, var(--foreground) 12%, transparent);
+}
+
+.hud-scanline::after {
+  content: "";
+  position: absolute;
+  inset-block: 0;
+  width: 34%;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    var(--hud-accent),
+    transparent
+  );
+  animation: hud-sweep 1.4s ease-in-out infinite;
+}
+
+/* --- drop target ---------------------------------------------------------- */
+
+.hud-form {
+  pointer-events: auto;
+}
+
+.hud-form.is-drop-target .hud-window {
+  border-color: color-mix(in oklab, var(--hud-accent) 70%, transparent);
+  box-shadow:
+    inset 0 0 0 1px color-mix(in oklab, var(--hud-accent) 35%, transparent),
+    0 24px 48px -26px rgb(0 0 0 / 0.95),
+    6px 6px 0 color-mix(in oklab, var(--hud-shade) 30%, transparent);
+}
+
+/* --- motion --------------------------------------------------------------- */
+
+@keyframes hud-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.25;
+  }
+}
+
+@keyframes hud-sweep {
+  0% {
+    transform: translateX(-120%);
+  }
+  100% {
+    transform: translateX(400%);
+  }
+}
+
+@keyframes hud-rise {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .hud-window {
+    animation: hud-rise 420ms var(--hud-ease) both;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hud-window__reveal,
+  .hud-window__toggle svg {
+    transition: none;
+  }
+
+  .hud-dot--live,
+  .hud-scanline::after {
+    animation: none;
+  }
+}
