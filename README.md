@@ -5,6 +5,13 @@ command, a Claude agent crew picks it up, and the city reacts live — cranes
 rise over files being edited, buildings grow with the code, and a quest log
 tracks what the crew is doing.
 
+As agents take on more of the actual building, the bottleneck shifts from
+writing code to keeping track of what an agent is doing — which files it's
+touching, where the work is concentrating, when to step in. A terminal
+transcript or a PR diff doesn't show that at a glance. Claude City turns the
+repo into a spatial map instead, so watching a Claude agent build or review
+code feels like watching a construction site, not scrolling a log.
+
 - **Districts** are directories, sized by a treemap over lines of code.
 - **Buildings** are files, colored by language.
 - **Streets and traffic** are derived from import edges between files.
@@ -53,6 +60,22 @@ Thinking level runs `LOW` → `MEDIUM` → `HIGH` → `EXTRA HIGH` → `MAX`.
 
 ![A building selected up close, with the inspector showing its path, line count and type](docs/screenshots/inspector.png)
 
+### PR cities
+
+Every open GitHub pull request (via `gh`) gets its own port city, `pr-<number>`,
+alongside `main`. Ship travel takes you between them:
+
+- Each PR city is a lazily-built `git worktree` at the PR's head — checked out
+  and scanned only the first time you sail there.
+- Changed files render as a diff overlay on top of the map: new buildings for
+  additions, highlighted plots for edits, ghost plots for deletions.
+- The crew dispatched in a PR city is read-only — `Write`, `Edit`, and
+  `NotebookEdit` are disabled at the tool level, not just gated behind a
+  permit — so it can read and search the diff but never patch it in place.
+- To publish a verdict it runs `gh pr review --approve|--request-changes|--comment`
+  through `Bash`, which still raises a mayor permit before it executes —
+  nothing ships without a `STAMP`.
+
 ## How it works
 
 | Package | Responsibility |
@@ -61,8 +84,9 @@ Thinking level runs `LOW` → `MEDIUM` → `HIGH` → `EXTRA HIGH` → `MAX`.
 | `packages/layout` | Turns a `WorldMap` into a laid-out `WorldSnapshot` (treemap districts, plots, streets). |
 | `packages/world` | Persists world state to SQLite (`.sudocity/world.db` in the target repo). |
 | `packages/agent` | Wraps `@anthropic-ai/claude-agent-sdk` sessions and turns SDK messages into `GameEvent`s. |
+| `packages/cities` | Lists open PRs and manages the `git worktree` + diff overlay behind each PR city. |
 | `packages/protocol` | Shared zod schemas/types for world state, game events, and mayor commands. |
-| `apps/server` | Fastify + WebSocket server: scans the repo, serves world snapshots, relays mayor commands to the agent, streams events. |
+| `apps/server` | Fastify + WebSocket server: scans the repo, serves world snapshots per city, relays mayor commands to the agent, streams events. |
 | `apps/web` | Vite + React + Phaser client: renders the isometric city and the mayor HUD (chat, quest log, HUD stats). |
 | `apps/cli` | `sudo-city <path>` — boots the server and web app together against a target repository and opens the browser. |
 
@@ -73,6 +97,9 @@ Thinking level runs `LOW` → `MEDIUM` → `HIGH` → `EXTRA HIGH` → `MAX`.
 - Claude access: either `ANTHROPIC_API_KEY` in your environment (or a `.env`
   file in the repository you point sudo-city at) or an existing local Claude
   Code login, which the agent falls back to.
+- [`gh`](https://cli.github.com) authenticated against the target repo, for PR
+  cities (listing open PRs and posting reviews). Optional if you're only
+  visiting `main`.
 
 ## Getting started
 
@@ -120,6 +147,7 @@ apps/
   web/      Vite/React/Phaser isometric city client
 packages/
   agent/    Claude Agent SDK session wrapper
+  cities/   PR listing, git worktrees, and diff overlays for PR cities
   layout/   Treemap/plot layout for the world map
   protocol/ Shared zod schemas and types
   world/    SQLite-backed world state persistence
