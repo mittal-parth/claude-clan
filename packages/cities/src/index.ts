@@ -129,12 +129,47 @@ async function refExists(repoPath: string, ref: string): Promise<boolean> {
   }
 }
 
+async function headShaOf(worktreePath: string): Promise<string | undefined> {
+  try {
+    const { stdout } = await execFileAsync("git", ["rev-parse", "HEAD"], {
+      cwd: worktreePath,
+    });
+    return stdout.trim();
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Fetches the PR's head into a dedicated local ref and returns a treeish to
+ * check out. Fork PRs don't have their head ref locally, so it's fetched by
+ * PR number; a same-repo branch PR usually already has the commit under
+ * refs/remotes/origin/<headRef>, in which case the fetch still succeeds (it
+ * just re-fetches an object git already has), but even if it failed for some
+ * other reason the fallback to the PR's raw head sha covers it.
+ */
+async function fetchPullRequestHead(
+  repoPath: string,
+  pr: PullRequestRef,
+): Promise<string> {
+  const localRef = `refs/sudo-city/${cityIdFor(pr)}`;
+  await execFileAsync(
+    "git",
+    ["fetch", "origin", `pull/${pr.number}/head:${localRef}`],
+    { cwd: repoPath },
+  ).catch(() => {
+    // Handled by the raw-sha fallback below.
+  });
+  return (await refExists(repoPath, localRef)) ? localRef : pr.headSha;
+}
+
 /**
  * Ensures a git worktree exists for the PR's head, creating it if needed.
- * Fork PRs don't have their head ref locally, so it's fetched by PR number
- * first; a same-repo branch PR usually already has it under
- * refs/remotes/origin/<headRef>, in which case the fetch is a harmless no-op
- * (fetching a ref that already resolves to the same object).
+ * If a worktree already exists but the PR has moved since it was built --
+ * gh reports a newer headSha than the worktree's checked-out HEAD -- it is
+ * fetched and fast-forwarded rather than silently served stale, which would
+ * otherwise show a reviewer old code, or fail outright when a later diff
+ * against the PR's now-current head sha can't find that commit in history.
  */
 export async function ensureWorktree(
   repoPath: string,
@@ -142,25 +177,29 @@ export async function ensureWorktree(
 ): Promise<string> {
   const cityId = cityIdFor(pr);
   const path = worktreePath(repoPath, cityId);
+
   if (await pathExists(path)) {
+    if ((await headShaOf(path)) === pr.headSha) {
+      return path;
+    }
+    const treeish = await fetchPullRequestHead(repoPath, pr);
+    await execFileAsync("git", ["checkout", "--detach", treeish], {
+      cwd: path,
+    });
     return path;
   }
 
-  const localRef = `refs/sudo-city/${cityId}`;
-  await execFileAsync(
-    "git",
-    ["fetch", "origin", `pull/${pr.number}/head:${localRef}`],
-    { cwd: repoPath },
-  ).catch(() => {
-    // Fetch can fail for a same-repo branch PR whose ref already exists
-    // locally under a different name; the worktree add below still works
-    // off the PR's head sha in that case.
-  });
+  // The directory is gone, but if it was ever removed by hand rather than
+  // via removeWorktree(), git still has it registered and refuses to add a
+  // worktree at the same path again until it's pruned.
+  await execFileAsync("git", ["worktree", "prune"], { cwd: repoPath }).catch(
+    () => {
+      // Nothing to prune, or repoPath isn't a git repo -- either way the
+      // add below will surface the real problem if there is one.
+    },
+  );
 
-  const treeish = (await refExists(repoPath, localRef))
-    ? localRef
-    : pr.headSha;
-
+  const treeish = await fetchPullRequestHead(repoPath, pr);
   await mkdir(dirname(path), { recursive: true });
   await execFileAsync("git", ["worktree", "add", "--detach", path, treeish], {
     cwd: repoPath,

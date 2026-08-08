@@ -7,8 +7,10 @@ import {
 } from "@sudo-city/agent";
 import {
   GhCliClient,
+  changedFiles,
   cityIdFor,
   ensureWorktree,
+  fileDiff,
   pruneWorktrees,
   type GitHubClient,
   type PullRequestRef,
@@ -17,9 +19,11 @@ import websocket from "@fastify/websocket";
 import { layoutWorld } from "@sudo-city/layout";
 import {
   MayorCommandSchema,
+  type ChangedFile,
   type CityId,
   type CitySummary,
   type GameEvent,
+  type PullRequestOverlay,
   type ServerMessage,
   type WorldSnapshot,
 } from "@sudo-city/protocol";
@@ -63,6 +67,8 @@ interface City {
   readonly sessionId: string;
   sequence: number;
   snapshot: WorldSnapshot;
+  /** A PR city's diff against main; absent for "main" itself. */
+  overlay?: PullRequestOverlay;
   /** Guards against a burst of file.changed events queueing parallel scans. */
   pendingScan?: Promise<WorldSnapshot>;
 }
@@ -300,6 +306,36 @@ function sendWorld(socket: WebSocket, city: City): void {
   });
 }
 
+function sendOverlay(socket: WebSocket, city: City): void {
+  if (city.overlay) {
+    send(socket, { kind: "overlay", overlay: city.overlay });
+  }
+}
+
+/**
+ * The changed-file set for a PR against its base, computed in the main
+ * checkout (not the worktree). Deleted files carry main's own plot, since
+ * they no longer exist in the PR worktree for the renderer to place them by.
+ */
+async function computeOverlay(
+  cityId: CityId,
+  pr: PullRequestRef,
+): Promise<PullRequestOverlay> {
+  const files = await changedFiles(targetRepo, pr.baseRef, pr.headSha);
+  const mainPlots = store.loadPlots("main");
+  const withPlots: ChangedFile[] = files.map((file) =>
+    file.change === "deleted"
+      ? { ...file, plot: mainPlots[file.path] }
+      : file,
+  );
+  return {
+    cityId,
+    baseRef: pr.baseRef,
+    headSha: pr.headSha,
+    files: withPlots,
+  };
+}
+
 const githubClient: GitHubClient = new GhCliClient();
 
 /**
@@ -343,6 +379,13 @@ async function refreshRoster(): Promise<void> {
 async function buildPrCity(cityId: CityId, pr: PullRequestRef): Promise<City> {
   const worktree = await ensureWorktree(targetRepo, pr);
   const snapshot = await generateWorld(cityId, worktree);
+  const overlay = await computeOverlay(cityId, pr).catch((error: unknown) => {
+    app.log.warn(
+      { error, cityId },
+      "Failed to compute the PR diff overlay; markers will be unavailable",
+    );
+    return undefined;
+  });
   const agent = new AgentSessionManager({
     cwd: worktree,
     emit: (event) => emitAgentEvent(cityId, event),
@@ -355,6 +398,7 @@ async function buildPrCity(cityId: CityId, pr: PullRequestRef): Promise<City> {
     sessionId: `local-${randomUUID()}`,
     sequence: 0,
     snapshot,
+    overlay,
   };
 }
 
@@ -559,6 +603,7 @@ app.get("/ws", { websocket: true }, (socket) => {
             }
             clients.set(socket, { cityId: city.id });
             sendWorld(socket, city);
+            sendOverlay(socket, city);
           })
           .catch((error: unknown) => {
             app.log.error({ error, cityId }, "Failed to travel to city");
@@ -583,13 +628,42 @@ app.get("/ws", { websocket: true }, (socket) => {
           });
         });
         break;
-      case "diff.request":
-        send(socket, {
-          kind: "error",
-          code: "CITY_NOT_FOUND",
-          message: "Diffs are not available until PR cities are wired up.",
-        });
+      case "diff.request": {
+        const city = requireCity(data.cityId);
+        if (!city) {
+          break;
+        }
+        const pr = registry.pullRequestFor(city.id);
+        if (!pr) {
+          send(socket, {
+            kind: "error",
+            code: "CITY_NOT_FOUND",
+            message: "This city has no pull request to diff against.",
+          });
+          break;
+        }
+        void fileDiff(targetRepo, pr.baseRef, pr.headSha, data.path)
+          .then((patch) => {
+            send(socket, {
+              kind: "diff",
+              cityId: city.id,
+              path: data.path,
+              patch,
+            });
+          })
+          .catch((error: unknown) => {
+            app.log.error(
+              { error, cityId: city.id, path: data.path },
+              "Failed to compute file diff",
+            );
+            send(socket, {
+              kind: "error",
+              code: "CITY_NOT_FOUND",
+              message: "Failed to compute that diff.",
+            });
+          });
         break;
+      }
       default: {
         const exhaustiveCommand: never = data;
         throw new Error(`Unhandled command: ${String(exhaustiveCommand)}`);

@@ -128,6 +128,43 @@ describe("worktree lifecycle", () => {
     expect(again).toBe(path);
   });
 
+  it("fast-forwards an existing worktree when the PR gained new commits", async () => {
+    const { repoPath, pr } = await createFixtureRepo();
+    const path = await ensureWorktree(repoPath, pr);
+    expect(readFileSync(join(path, "added.ts"), "utf8")).toContain("added = 1");
+
+    const git = (...args: string[]) =>
+      execFileAsync("git", args, { cwd: repoPath });
+    await git("checkout", "feature");
+    writeFileSync(join(repoPath, "added.ts"), "export const added = 2;\n");
+    await git("commit", "-am", "one more commit on the PR");
+    const { stdout: newHeadSha } = await git("rev-parse", "HEAD");
+    await git("checkout", "main");
+
+    const moved = await ensureWorktree(repoPath, {
+      ...pr,
+      headSha: newHeadSha.trim(),
+    });
+
+    expect(moved).toBe(path);
+    expect(readFileSync(join(path, "added.ts"), "utf8")).toContain(
+      "added = 2",
+    );
+  });
+
+  it("recovers when the worktree directory was deleted by hand", async () => {
+    const { repoPath, pr } = await createFixtureRepo();
+    const path = await ensureWorktree(repoPath, pr);
+
+    // Simulate a user deleting the directory directly instead of going
+    // through removeWorktree() -- git still has it registered afterwards.
+    rmSync(path, { recursive: true, force: true });
+
+    const rebuilt = await ensureWorktree(repoPath, pr);
+    expect(rebuilt).toBe(path);
+    expect(readFileSync(join(path, "kept.ts"), "utf8")).toContain("kept = 2");
+  });
+
   it("removes a worktree cleanly", async () => {
     const { repoPath, pr } = await createFixtureRepo();
     const path = await ensureWorktree(repoPath, pr);

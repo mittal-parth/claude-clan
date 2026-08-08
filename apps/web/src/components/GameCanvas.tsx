@@ -1,4 +1,8 @@
-import type { Building, WorldSnapshot } from "@sudo-city/protocol";
+import type {
+  Building,
+  PullRequestOverlay,
+  WorldSnapshot,
+} from "@sudo-city/protocol";
 import Phaser from "phaser";
 import { useEffect, useRef } from "react";
 import { WorldScene, type FileChange } from "../game/WorldScene";
@@ -14,6 +18,7 @@ export interface CanvasFileChange {
 interface GameCanvasProps {
   cityId: string;
   world?: WorldSnapshot;
+  overlay?: PullRequestOverlay;
   fileChange?: CanvasFileChange;
   onSelectBuilding?: (building?: Building) => void;
 }
@@ -21,6 +26,7 @@ interface GameCanvasProps {
 export function GameCanvas({
   cityId,
   world,
+  overlay,
   fileChange,
   onSelectBuilding,
 }: GameCanvasProps) {
@@ -85,6 +91,10 @@ export function GameCanvas({
       sceneRef.current?.setWorld(world, cityId);
     }
   }, [world, cityId]);
+
+  useEffect(() => {
+    sceneRef.current?.setOverlay(overlay);
+  }, [overlay]);
 
   useEffect(() => {
     if (fileChange) {

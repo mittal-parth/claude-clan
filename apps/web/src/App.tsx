@@ -5,11 +5,13 @@ import {
   type CitySummary,
   type GameEvent,
   type MayorCommand,
+  type PullRequestOverlay,
   type WorldSnapshot,
 } from "@sudo-city/protocol";
 import { FormEvent, useEffect, useRef, useState } from "react";
 import { Volume2, VolumeX } from "lucide-react";
 import { useAudio } from "@/components/audio-provider";
+import { Markdown } from "@/components/markdown";
 import Dialogue from "@/components/ui/8bit/blocks/dialogue";
 import QuestLog, {
   type Quest,
@@ -423,6 +425,14 @@ export default function App() {
   const [worldByCity, setWorldByCity] = useState<
     Record<string, WorldSnapshot>
   >({});
+  const [overlayByCity, setOverlayByCity] = useState<
+    Record<string, PullRequestOverlay>
+  >({});
+  const [diff, setDiff] = useState<{
+    cityId: string;
+    path: string;
+    patch: string;
+  }>();
   const [prompt, setPrompt] = useState("");
   const [commandOpen, setCommandOpen] = useState(false);
   const [fileChange, setFileChange] = useState<CanvasFileChange>();
@@ -430,7 +440,11 @@ export default function App() {
 
   const events = eventsByCity[activeCityId] ?? [];
   const world = worldByCity[activeCityId];
+  const overlay = overlayByCity[activeCityId];
   const activeCity = cities.find((city) => city.id === activeCityId);
+  const selectedChange = selected
+    ? overlay?.files.find((file) => file.path === selected.path)
+    : undefined;
   const pendingPermit = findPendingPermit(events);
   const usage = events
     .slice()
@@ -503,8 +517,20 @@ export default function App() {
         return;
       }
 
-      // Diff overlays and single-file patches arrive starting in a later
-      // step; this client doesn't request them yet.
+      if (decoded.data.kind === "overlay") {
+        const overlay = decoded.data.overlay;
+        setOverlayByCity((current) => ({
+          ...current,
+          [overlay.cityId]: overlay,
+        }));
+        return;
+      }
+
+      if (decoded.data.kind === "diff") {
+        setDiff(decoded.data);
+        return;
+      }
+
       if (decoded.data.kind !== "event") {
         return;
       }
@@ -566,10 +592,22 @@ export default function App() {
   function travelTo(cityId: string): void {
     setActiveCityId(cityId);
     setSelected(undefined);
+    setDiff(undefined);
     setEventsByCity((current) =>
       cityId in current ? current : { ...current, [cityId]: loadStoredEvents(cityId) },
     );
     send({ type: "city.travel", cityId });
+  }
+
+  function selectBuilding(building?: Building): void {
+    setSelected(building);
+    setDiff(undefined);
+    const change = building
+      ? overlay?.files.find((file) => file.path === building.path)
+      : undefined;
+    if (building && change && change.change !== "deleted") {
+      send({ type: "diff.request", cityId: activeCityId, path: building.path });
+    }
   }
 
   function submitPrompt(event: FormEvent<HTMLFormElement>): void {
@@ -630,8 +668,9 @@ export default function App() {
               <GameCanvas
                 cityId={activeCityId}
                 world={world}
+                overlay={overlay}
                 fileChange={fileChange}
-                onSelectBuilding={setSelected}
+                onSelectBuilding={selectBuilding}
               />
               <div className="pointer-events-none absolute left-4 top-4 border-2 border-foreground bg-card px-3 py-2 dark:border-ring">
                 <span className="retro block text-[10px] text-primary">
@@ -643,14 +682,14 @@ export default function App() {
               </div>
 
               {selected ? (
-                <div className="absolute bottom-4 left-4 max-w-[min(22rem,calc(100%-2rem))] border-2 border-foreground bg-card px-3 py-2 dark:border-ring">
+                <div className="absolute bottom-4 left-4 max-w-[min(28rem,calc(100%-2rem))] border-2 border-foreground bg-card px-3 py-2 dark:border-ring">
                   <div className="flex items-start justify-between gap-3">
                     <span className="retro block text-[10px] text-primary">
                       {selected.district}
                     </span>
                     <button
                       type="button"
-                      onClick={() => setSelected(undefined)}
+                      onClick={() => selectBuilding(undefined)}
                       aria-label="Close structure details"
                       className="retro shrink-0 text-[10px] text-muted-foreground hover:text-foreground"
                     >
@@ -669,7 +708,30 @@ export default function App() {
                       <dt className="inline">Lines </dt>
                       <dd className="inline text-foreground">{selected.loc}</dd>
                     </div>
+                    {selectedChange ? (
+                      <div>
+                        <dt className="inline">PR </dt>
+                        <dd className="inline text-foreground">
+                          {selectedChange.change}
+                        </dd>
+                      </div>
+                    ) : null}
                   </dl>
+                  {selectedChange && selectedChange.change !== "deleted" ? (
+                    <div className="mt-2 max-h-64 overflow-auto">
+                      {diff &&
+                      diff.cityId === activeCityId &&
+                      diff.path === selected.path ? (
+                        <Markdown className="retro text-[10px]">
+                          {`\`\`\`diff\n${diff.patch}\n\`\`\``}
+                        </Markdown>
+                      ) : (
+                        <p className="retro text-[10px] text-muted-foreground">
+                          Loading diff…
+                        </p>
+                      )}
+                    </div>
+                  ) : null}
                 </div>
               ) : null}
 

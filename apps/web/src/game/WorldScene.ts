@@ -1,9 +1,14 @@
-import type { Building, WorldSnapshot } from "@sudo-city/protocol";
+import type {
+  Building,
+  PullRequestOverlay,
+  WorldSnapshot,
+} from "@sudo-city/protocol";
 import Phaser from "phaser";
 import { AmbientLife } from "./ambient";
 import { playUiClickSound } from "@/lib/play-ui-click";
 import { hashCoords, hashText, pickIndex, unitFloat } from "./hash";
 import { createIsoProjection } from "./iso";
+import { markerFor, rubbleMarkers } from "./overlay";
 import { archetypeFor, tierFor } from "./palette";
 import {
   buildTerrain,
@@ -12,6 +17,8 @@ import {
 } from "./terrain";
 import {
   HIGHLIGHT_KEY,
+  RUBBLE_KEY,
+  SCAFFOLD_KEY,
   SELECT_KEY,
   TERRAIN_ATLAS_KEY,
   TERRAIN_VARIANT_COUNTS,
@@ -24,6 +31,11 @@ import {
   roadTextureKey,
   terrainTextureKey,
 } from "./textures";
+
+/** Tints applied to a marked building; the marker sprite carries its own colour. */
+const ADDED_TINT = 0xffcf94;
+const MODIFIED_TINT = 0x9fe7ff;
+const MODIFIED_GLOW_TINT = 0x66d9ef;
 
 const projection = createIsoProjection(TILE_WIDTH, TILE_HEIGHT);
 
@@ -74,6 +86,13 @@ export class WorldScene extends Phaser.Scene {
   private zoomTarget = 1;
   /** Which city's snapshot the scene currently holds, if any. */
   private currentCityId?: string;
+
+  private overlay?: PullRequestOverlay;
+  /** Scaffold ring markers for added buildings, keyed by path. */
+  private addedMarkers = new Map<string, Phaser.GameObjects.Sprite>();
+  /** Looping glow for modified buildings, keyed by path. */
+  private modifiedGlows = new Map<string, Phaser.GameObjects.Sprite>();
+  private rubbleSprites: Phaser.GameObjects.Sprite[] = [];
 
   constructor() {
     super("world");
@@ -141,6 +160,10 @@ export class WorldScene extends Phaser.Scene {
     }
 
     this.syncBuildings(snapshot);
+    // Rebuilds marker sprites against whatever views syncBuildings just
+    // produced -- a structural change replaces a building's sprite outright,
+    // so a marker positioned off the old sprite would be orphaned.
+    this.applyOverlay();
 
     // hasFitCamera is reset to false by resetWorld() above, so this also
     // refits the camera for every newly-arrived city, not just the first
@@ -148,6 +171,81 @@ export class WorldScene extends Phaser.Scene {
     if (!this.hasFitCamera) {
       this.fitCamera();
       this.hasFitCamera = true;
+    }
+  }
+
+  /**
+   * A PR city's diff against main: added buildings get a scaffold ring,
+   * modified buildings a looping glow, deleted files a rubble sprite at
+   * their old plot. Call after setWorld (or standalone once an overlay
+   * arrives later than the world did) -- either order is safe since this
+   * only reads views/snapshot, never mutates them.
+   */
+  setOverlay(overlay: PullRequestOverlay | undefined): void {
+    this.overlay = overlay;
+    this.applyOverlay();
+  }
+
+  private applyOverlay(): void {
+    for (const marker of this.addedMarkers.values()) {
+      marker.destroy();
+    }
+    this.addedMarkers.clear();
+    for (const glow of this.modifiedGlows.values()) {
+      this.tweens.killTweensOf(glow);
+      glow.destroy();
+    }
+    this.modifiedGlows.clear();
+    for (const rubble of this.rubbleSprites) {
+      rubble.destroy();
+    }
+    this.rubbleSprites = [];
+    for (const view of this.views.values()) {
+      view.sprite.clearTint();
+    }
+
+    const overlay = this.overlay;
+    if (!overlay) {
+      return;
+    }
+
+    for (const view of this.views.values()) {
+      const change = markerFor(overlay, view.building.path);
+      if (change === "added") {
+        view.sprite.setTint(ADDED_TINT);
+        const marker = this.add
+          .sprite(view.sprite.x, view.sprite.y, SCAFFOLD_KEY)
+          .setOrigin(0.5, 1)
+          .setDepth(view.sprite.depth - 1);
+        this.addedMarkers.set(view.building.path, marker);
+      } else if (change === "modified") {
+        view.sprite.setTint(MODIFIED_TINT);
+        const glow = this.add
+          .sprite(view.sprite.x, view.sprite.y, SELECT_KEY)
+          .setOrigin(0.5, 1)
+          .setDepth(view.sprite.depth - 1)
+          .setTint(MODIFIED_GLOW_TINT);
+        this.tweens.add({
+          targets: glow,
+          alpha: { from: 0.25, to: 0.75 },
+          scale: { from: 1, to: 1.15 },
+          duration: 900,
+          yoyo: true,
+          repeat: -1,
+          ease: "Sine.easeInOut",
+        });
+        this.modifiedGlows.set(view.building.path, glow);
+      }
+    }
+
+    for (const rubble of rubbleMarkers(overlay)) {
+      const point = projection.project(rubble.plot.x, rubble.plot.y);
+      this.rubbleSprites.push(
+        this.add
+          .sprite(point.x, point.y + TILE_ANCHOR_Y, RUBBLE_KEY)
+          .setOrigin(0.5, 1)
+          .setDepth(projection.depth(rubble.plot.x, rubble.plot.y)),
+      );
     }
   }
 
@@ -176,6 +274,21 @@ export class WorldScene extends Phaser.Scene {
     }
     this.groundSprites = [];
     this.propSprites = [];
+
+    for (const marker of this.addedMarkers.values()) {
+      marker.destroy();
+    }
+    this.addedMarkers.clear();
+    for (const glow of this.modifiedGlows.values()) {
+      this.tweens.killTweensOf(glow);
+      glow.destroy();
+    }
+    this.modifiedGlows.clear();
+    for (const rubble of this.rubbleSprites) {
+      rubble.destroy();
+    }
+    this.rubbleSprites = [];
+    this.overlay = undefined;
 
     this.select(undefined);
     this.snapshot = undefined;

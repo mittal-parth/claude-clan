@@ -138,6 +138,10 @@ export function propTextureKey(prop: PropKind): string {
 
 export const HIGHLIGHT_KEY = "tile:highlight";
 export const SELECT_KEY = "tile:select";
+/** Ring marking a building added by the PR city's diff. */
+export const SCAFFOLD_KEY = "fx:scaffold";
+/** Stands in for a building deleted by the PR, at its plot in main. */
+export const RUBBLE_KEY = "fx:rubble";
 export const CLOUD_KEY = "fx:cloud";
 export const SMOKE_KEY = "fx:smoke";
 export const SPARKLE_KEY = "fx:sparkle";
@@ -187,6 +191,8 @@ export function bakeTerrainTextures(scene: Phaser.Scene): void {
 
   bakeHighlight(baker, HIGHLIGHT_KEY, 0xffffff, 0.28);
   bakeHighlight(baker, SELECT_KEY, 0xffd166, 0.5);
+  bakeHighlight(baker, SCAFFOLD_KEY, 0xffb454, 0.65);
+  bakeRubble(baker);
 
   bakeTree(baker);
   bakePine(baker);
@@ -484,6 +490,33 @@ function bakeRock(baker: Baker): void {
   );
 
   baker.finish(propTextureKey("rock"), TILE_WIDTH, PROP_HEIGHT);
+}
+
+function bakeRubble(baker: Baker): void {
+  propShadow(baker, 0.22);
+  const base = baker.at([0, 0, 0], HALF_W, PROP_ORIGIN_Y);
+  baker.graphics.fillStyle(0x8a7c6a, 1);
+  baker.graphics.fillTriangle(
+    base.x - 13,
+    base.y,
+    base.x + 5,
+    base.y,
+    base.x - 5,
+    base.y - 11,
+  );
+  baker.graphics.fillStyle(0x6f6455, 1);
+  baker.graphics.fillTriangle(
+    base.x - 3,
+    base.y,
+    base.x + 15,
+    base.y,
+    base.x + 7,
+    base.y - 9,
+  );
+  baker.graphics.fillStyle(0xa89a86, 1);
+  baker.graphics.fillRect(base.x - 9, base.y - 5, 6, 5);
+
+  baker.finish(RUBBLE_KEY, TILE_WIDTH, PROP_HEIGHT);
 }
 
 function bakeFountain(baker: Baker): void {
