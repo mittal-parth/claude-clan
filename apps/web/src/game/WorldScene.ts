@@ -6,6 +6,7 @@ import { playUiClickSound } from "@/lib/play-ui-click";
 import { hashCoords, hashText, pickIndex, unitFloat } from "./hash";
 import { createIsoProjection } from "./iso";
 import { archetypeFor, tierFor } from "./palette";
+import { shouldRevealSite } from "./reveal";
 import {
   buildTerrain,
   type TerrainCell,
@@ -43,6 +44,11 @@ const MIN_ZOOM = 0.2;
 const MAX_ZOOM = 2;
 const FOCUS_ZOOM = 1.25;
 const FOCUS_DURATION_MS = 450;
+/**
+ * Zoom below which a crane is too small to notice. The world opens fitted to
+ * the whole city, which on a large repo is far below this.
+ */
+const CONSTRUCTION_LEGIBLE_ZOOM = 0.75;
 /** Pointer travel, in screen pixels, above which a press is a drag not a click. */
 const CLICK_SLOP = 5;
 /** After the player moves the camera, leave it alone this long. */
@@ -173,28 +179,38 @@ export class WorldScene extends Phaser.Scene {
    * zoom the world opens at, so work happening off-screen — or just elsewhere
    * in a large city — went unnoticed entirely.
    *
-   * Deliberately yields to the player: if they have touched the camera
-   * recently, or the site is already comfortably on screen, nothing moves.
+   * Uses the same pan-and-zoom as clicking a search result, so the building
+   * being worked on ends up as legible as one you went looking for. It stays
+   * quieter than search though: no click sound, and it does not steal the
+   * selection, because nobody asked for this move.
    */
   private revealConstruction(target: ConstructionTarget): void {
     const camera = this.cameras.main;
 
-    if (this.time.now - this.lastCameraInputAt < CAMERA_YIELD_MS) {
+    const move = shouldRevealSite(
+      target,
+      {
+        x: camera.worldView.x,
+        y: camera.worldView.y,
+        right: camera.worldView.right,
+        bottom: camera.worldView.bottom,
+        zoom: camera.zoom,
+      },
+      {
+        margin: CRANE_HEIGHT,
+        legibleZoom: CONSTRUCTION_LEGIBLE_ZOOM,
+        now: this.time.now,
+        lastCameraInputAt: this.lastCameraInputAt,
+        yieldMs: CAMERA_YIELD_MS,
+      },
+    );
+    if (!move) {
       return;
     }
 
-    const view = camera.worldView;
-    const margin = CRANE_HEIGHT;
-    const onScreen =
-      target.x > view.x + margin &&
-      target.x < view.right - margin &&
-      target.y > view.y + margin &&
-      target.y < view.bottom - margin;
-    if (onScreen) {
-      return;
-    }
-
-    camera.pan(target.x, target.y - CRANE_HEIGHT / 2, 900, "Sine.easeInOut");
+    // Framed on the crane rather than the roof: the mast stands well above the
+    // building it is working on.
+    this.moveCameraTo(target.x, target.y - CRANE_HEIGHT / 2, FOCUS_ZOOM);
   }
 
   setBuildingDragListener(listener: (building: Building) => void): void {
@@ -280,17 +296,38 @@ export class WorldScene extends Phaser.Scene {
       return false;
     }
 
+    playUiClickSound();
+    this.moveCameraTo(view.sprite.x, view.sprite.y, FOCUS_ZOOM, () =>
+      this.select(path),
+    );
+    return true;
+  }
+
+  /**
+   * The one way the camera moves itself — search results and construction
+   * sites both come through here, so they read as the same gesture.
+   *
+   * Phaser can pan or zoom, but not "centre on this point at that zoom", so
+   * the end state is set, the scroll it implies is read back, and the camera
+   * is put where it was to tween towards it.
+   */
+  private moveCameraTo(
+    x: number,
+    y: number,
+    zoom: number,
+    onArrive?: () => void,
+  ): void {
     this.focusTween?.stop();
     this.focusTween = undefined;
 
     const camera = this.cameras.main;
-    const targetZoom = Phaser.Math.Clamp(FOCUS_ZOOM, MIN_ZOOM, MAX_ZOOM);
+    const targetZoom = Phaser.Math.Clamp(zoom, MIN_ZOOM, MAX_ZOOM);
     const startScrollX = camera.scrollX;
     const startScrollY = camera.scrollY;
     const startZoom = camera.zoom;
 
     camera.setZoom(targetZoom);
-    camera.centerOn(view.sprite.x, view.sprite.y);
+    camera.centerOn(x, y);
     const targetScrollX = camera.scrollX;
     const targetScrollY = camera.scrollY;
 
@@ -298,7 +335,6 @@ export class WorldScene extends Phaser.Scene {
     camera.scrollX = startScrollX;
     camera.scrollY = startScrollY;
 
-    playUiClickSound();
     this.focusTween = this.tweens.add({
       targets: camera,
       scrollX: targetScrollX,
@@ -312,11 +348,9 @@ export class WorldScene extends Phaser.Scene {
       onComplete: () => {
         this.zoomTarget = targetZoom;
         this.focusTween = undefined;
-        this.select(path);
+        onArrive?.();
       },
     });
-
-    return true;
   }
 
   setWorld(snapshot: WorldSnapshot): void {
@@ -593,10 +627,15 @@ export class WorldScene extends Phaser.Scene {
     camera.centerOn(center.x, center.y);
   }
 
-  /** Stops the construction auto-pan from fighting the player for the camera. */
+  /**
+   * Stops an automatic camera move from fighting the player for the camera.
+   * The tween writes scroll and zoom every frame, so grabbing the world mid
+   * flight has to kill it outright rather than just start a new one.
+   */
   private noteCameraInput(): void {
     this.lastCameraInputAt = this.time.now;
-    this.cameras.main.panEffect.reset();
+    this.focusTween?.stop();
+    this.focusTween = undefined;
   }
 
   private bindCamera(): void {
