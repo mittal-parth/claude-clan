@@ -19,7 +19,6 @@ import {
   type TerrainGrid,
 } from "./terrain";
 import {
-  CLOUD_KEY,
   HIGHLIGHT_KEY,
   RUBBLE_KEY,
   SCAFFOLD_KEY,
@@ -63,6 +62,9 @@ const PROP_BUDGET = 2_000;
 /** Rings of real water tiles at the coast; past this the background takes over. */
 const SHORE_BAND = 3;
 export const OPEN_WATER = 0x2e9fe0;
+/** Keep the map white long enough for the voyage to feel intentional. */
+const WHITEOUT_HOLD_MS = 500;
+const WHITEOUT_ALPHA = 0.9;
 
 export type FileChange = "added" | "modified" | "deleted";
 
@@ -74,6 +76,7 @@ interface BuildingView {
 export interface ShipHoverInfo {
   cityId: string;
   title: string;
+  action: string;
   /** Position relative to the canvas element, for an HTML tooltip. */
   screenX: number;
   screenY: number;
@@ -110,12 +113,15 @@ export class WorldScene extends Phaser.Scene {
   private modifiedGlows = new Map<string, Phaser.GameObjects.Sprite>();
   private rubbleSprites: Phaser.GameObjects.Sprite[] = [];
 
-  /** Ships are only shown while standing in main -- see setWorld. */
+  /** Ships link main to PR cities and provide every PR city a way home. */
   private lastCities: CitySummary[] = [];
   private shipSprites = new Map<string, Phaser.GameObjects.Sprite>();
   private shipHoverListener?: (info?: ShipHoverInfo) => void;
   private shipClickListener?: (cityId: string) => void;
-  private transitionClouds: Phaser.GameObjects.Sprite[] = [];
+  /** Individually drawn puffs; every travel creates a new set of silhouettes. */
+  private transitionClouds: Phaser.GameObjects.Graphics[] = [];
+  /** Whiteout layer beneath the clouds; it guarantees a fully covered map. */
+  private transitionCloudVeil?: Phaser.GameObjects.Rectangle;
 
   constructor() {
     super("world");
@@ -160,15 +166,13 @@ export class WorldScene extends Phaser.Scene {
   }
 
   /**
-   * The current PR roster. Ships are only drawn while standing in main --
-   * see the layoutShips call in setWorld -- so this just records the roster
-   * and relays out if a city is currently main; if cities arrive before the
-   * first world snapshot, layoutShips no-ops until setWorld has a snapshot
-   * to place ships against.
+   * The current PR roster. Every city gets a harbor: main has one ship per
+   * open PR, while a PR city has one return ship. If cities arrive before the
+   * first world snapshot, layoutShips no-ops until setWorld has a snapshot.
    */
   setCities(cities: readonly CitySummary[]): void {
     this.lastCities = [...cities];
-    if (this.currentCityId === "main") {
+    if (this.currentCityId) {
       this.layoutShips();
     }
   }
@@ -210,12 +214,7 @@ export class WorldScene extends Phaser.Scene {
     // so a marker positioned off the old sprite would be orphaned.
     this.applyOverlay();
 
-    // Ships only make sense as a way OUT of main, to a PR -- inside a PR
-    // city there is nothing to sail past. resetWorld() already cleared any
-    // standing ships when the city changed; this only ever re-adds them.
-    if (cityId === "main") {
-      this.layoutShips();
-    }
+    this.layoutShips();
 
     // hasFitCamera is reset to false by resetWorld() above, so this also
     // refits the camera for every newly-arrived city, not just the first
@@ -754,26 +753,30 @@ export class WorldScene extends Phaser.Scene {
   // -------------------------------------------------------------------------
 
   /**
-   * Moors one ship per open PR just past the coast, east of the island,
-   * spaced out along the shore. Reuses existing sprites by cityId so a
-   * roster refresh doesn't make every ship flicker, and removes ships for
-   * PRs that closed.
+   * Moors one ship per open PR just past main's east coast. In a PR city a
+   * single, west-coast ship returns to main. Reuses sprites by destination
+   * city id so a roster refresh does not make ships flicker.
    */
   private layoutShips(): void {
     const snapshot = this.snapshot;
     if (!snapshot) {
       return;
     }
-    const prCities = this.lastCities.filter(
-      (city) => city.kind === "pull-request",
-    );
+    const isMain = this.currentCityId === "main";
+    const destinations = isMain
+      ? this.lastCities.filter((city) => city.kind === "pull-request")
+      : [{ id: "main", title: "main city" }];
     const { width, height } = snapshot.size;
-    // Just past the sand ring, safely in open water.
-    const dockX = width - 1 + COUNTRYSIDE_RING + COAST_RING + 2;
-    const startY = height / 2 - ((prCities.length - 1) * SHIP_SPACING) / 2;
+    // Just past the sand ring, safely in open water. The return ship docks
+    // on the opposite shore so its departure also reads as heading home.
+    const dockX = isMain
+      ? width - 1 + COUNTRYSIDE_RING + COAST_RING + 2
+      : -COUNTRYSIDE_RING - COAST_RING - 2;
+    const startY =
+      height / 2 - ((destinations.length - 1) * SHIP_SPACING) / 2;
 
     const seen = new Set<string>();
-    prCities.forEach((city, index) => {
+    destinations.forEach((city, index) => {
       seen.add(city.id);
       const gy = startY + index * SHIP_SPACING;
       const point = projection.project(dockX, gy);
@@ -783,6 +786,7 @@ export class WorldScene extends Phaser.Scene {
         sprite = this.add
           .sprite(point.x, point.y + TILE_ANCHOR_Y, SHIP_KEY)
           .setOrigin(0.5, 1)
+          .setScale(1.55)
           .setInteractive({ useHandCursor: true });
         this.shipSprites.set(city.id, sprite);
         this.bindShipInteractions(sprite, city.id);
@@ -795,6 +799,7 @@ export class WorldScene extends Phaser.Scene {
         .setDepth(projection.depth(dockX, gy))
         .setAlpha(1);
       sprite.setData("title", city.title);
+      sprite.setData("returning", !isMain);
 
       const restY = sprite.y;
       this.tweens.add({
@@ -825,6 +830,9 @@ export class WorldScene extends Phaser.Scene {
       this.shipHoverListener?.({
         cityId,
         title: String(sprite.getData("title") ?? cityId),
+        action: sprite.getData("returning")
+          ? "Return to main city"
+          : `Sail to ${String(sprite.getData("title") ?? cityId)}`,
         screenX: (sprite.x - camera.scrollX) * camera.zoom,
         screenY: (sprite.y - camera.scrollY) * camera.zoom,
       });
@@ -858,7 +866,7 @@ export class WorldScene extends Phaser.Scene {
       this.tweens.killTweensOf(sprite);
       this.tweens.add({
         targets: sprite,
-        x: sprite.x + 240,
+        x: sprite.x + (this.currentCityId === "main" ? 300 : -300),
         y: sprite.y - 60,
         alpha: 0,
         duration: 700,
@@ -869,50 +877,82 @@ export class WorldScene extends Phaser.Scene {
   }
 
   /**
-   * Converges five oversized, screen-fixed clouds to cover the whole
-   * viewport. Reuses the existing sky-decoration cloud texture rather than
-   * baking a dedicated one -- at this scale and opacity the overlap already
-   * reads as solid cover.
+   * A random cloud swarm drifts across the map before it fades to white. The
+   * final white veil fills the Phaser viewport exactly, so the city cannot
+   * show through between puffs or on an unusually shaped canvas.
    */
   private playCoverTransition(): Promise<void> {
     const camera = this.cameras.main;
-    const targets: Array<{ x: number; y: number }> = [
-      { x: camera.width * 0.2, y: camera.height * 0.28 },
-      { x: camera.width * 0.8, y: camera.height * 0.22 },
-      { x: camera.width * 0.5, y: camera.height * 0.55 },
-      { x: camera.width * 0.18, y: camera.height * 0.82 },
-      { x: camera.width * 0.82, y: camera.height * 0.78 },
-    ];
+    this.clearTransitionClouds();
+
+    const veil = this.add
+      .rectangle(0, 0, camera.width, camera.height, 0xffffff, 0)
+      .setOrigin(0, 0)
+      .setScrollFactor(0)
+      .setDepth(SKY_DEPTH + 9);
+    this.transitionCloudVeil = veil;
+    const cloudCount = Phaser.Math.Clamp(
+      Math.round((camera.width * camera.height) / 42_000),
+      14,
+      24,
+    );
 
     return new Promise((resolve) => {
-      let remaining = targets.length;
-      targets.forEach((target, index) => {
-        const fromLeft = index % 2 === 0;
-        const cloud = this.add
-          .sprite(
-            fromLeft ? -240 : camera.width + 240,
-            target.y,
-            CLOUD_KEY,
-          )
-          .setOrigin(0.5, 0.5)
-          .setScrollFactor(0)
-          .setScale(7)
-          .setDepth(SKY_DEPTH + 10);
+      let finishedClouds = 0;
+      let veilFinished = false;
+      const finishIfWhite = (): void => {
+        if (veilFinished && finishedClouds === cloudCount) {
+          resolve();
+        }
+      };
+
+      this.tweens.add({
+        targets: veil,
+        alpha: WHITEOUT_ALPHA,
+        delay: 320,
+        duration: 820,
+        ease: "Sine.easeInOut",
+        onComplete: () => {
+          veilFinished = true;
+          finishIfWhite();
+        },
+      });
+
+      for (let index = 0; index < cloudCount; index += 1) {
+        // The cloud shapes are intentionally enormous: their irregular
+        // silhouettes read as a weather front sweeping over the whole map.
+        const cloudSize = Phaser.Math.Between(1_500, 3_000);
+        const start = randomCloudEdge(camera, cloudSize);
+        const cloud = this.createTransitionCloud(
+          cloudSize,
+          SKY_DEPTH + 10 + index,
+        )
+          .setPosition(start.x, start.y)
+          .setAlpha(0);
         this.transitionClouds.push(cloud);
+
+        const restingX = Phaser.Math.Between(
+          -Math.round(cloudSize * 0.25),
+          camera.width + Math.round(cloudSize * 0.25),
+        );
+        const restingY = Phaser.Math.Between(
+          -Math.round(cloudSize * 0.2),
+          camera.height + Math.round(cloudSize * 0.2),
+        );
         this.tweens.add({
           targets: cloud,
-          x: target.x,
-          duration: 650,
-          delay: index * 40,
-          ease: "Cubic.easeOut",
+          x: restingX,
+          y: restingY,
+          alpha: Phaser.Math.FloatBetween(0.38, 0.7),
+          duration: Phaser.Math.Between(520, 900),
+          delay: Phaser.Math.Between(0, 420),
+          ease: "Sine.easeOut",
           onComplete: () => {
-            remaining -= 1;
-            if (remaining === 0) {
-              resolve();
-            }
+            finishedClouds += 1;
+            finishIfWhite();
           },
         });
-      });
+      }
     });
   }
 
@@ -926,28 +966,169 @@ export class WorldScene extends Phaser.Scene {
     await this.playCoverTransition();
   }
 
+  /**
+   * Positions the destination harbor ship outside the frame before the cloud
+   * cover parts. revealAfterTravel then sails it into port, making the trip
+   * visibly continue into the new city instead of ending at a hard swap.
+   */
+  prepareArrivalForTravel(
+    departureCityId: string | undefined,
+    destinationCityId: string,
+  ): void {
+    const shipId = destinationCityId === "main" ? departureCityId : "main";
+    if (!shipId) {
+      return;
+    }
+    const ship = this.shipSprites.get(shipId);
+    if (!ship) {
+      return;
+    }
+    this.tweens.killTweensOf(ship);
+    ship.setData("arrivalX", ship.x);
+    ship.setData("arrivalY", ship.y);
+    ship.setPosition(
+      ship.x + (destinationCityId === "main" ? 300 : -300),
+      ship.y - 55,
+    );
+  }
+
   /** Parts the cloud cover to reveal whatever city has landed underneath. */
   revealAfterTravel(): Promise<void> {
     const clouds = this.transitionClouds;
     this.transitionClouds = [];
-    if (clouds.length === 0) {
+    const veil = this.transitionCloudVeil;
+    this.transitionCloudVeil = undefined;
+    if (clouds.length === 0 && !veil) {
       return Promise.resolve();
     }
 
     const camera = this.cameras.main;
     return new Promise((resolve) => {
-      let remaining = clouds.length;
-      clouds.forEach((cloud, index) => {
-        const toRight = index % 2 === 0;
+      let remaining = clouds.length + (veil ? 1 : 0);
+      const finishReveal = (): void => {
+        remaining -= 1;
+        if (remaining === 0) {
+          void this.playShipArrival().then(resolve);
+        }
+      };
+
+      if (veil) {
+        this.tweens.add({
+          targets: veil,
+          alpha: 0,
+          duration: 780,
+          delay: WHITEOUT_HOLD_MS,
+          ease: "Sine.easeInOut",
+          onComplete: () => {
+            veil.destroy();
+            finishReveal();
+          },
+        });
+      }
+
+      clouds.forEach((cloud) => {
+        const exit = randomCloudEdge(
+          camera,
+          cloud.getData("travelSize") as number,
+        );
+        // Keep the exact position reached during the cover phase. The return
+        // journey therefore visibly retraces from the settled cloud field,
+        // rather than popping to a new random point before flying outward.
         this.tweens.add({
           targets: cloud,
-          x: toRight ? camera.width + 240 : -240,
+          x: exit.x,
+          y: exit.y,
           alpha: 0,
-          duration: 600,
-          delay: index * 60,
-          ease: "Cubic.easeIn",
+          duration: Phaser.Math.Between(520, 920),
+          delay: WHITEOUT_HOLD_MS + Phaser.Math.Between(0, 260),
+          ease: "Sine.easeIn",
           onComplete: () => {
             cloud.destroy();
+            finishReveal();
+          },
+        });
+      });
+    });
+  }
+
+  private clearTransitionClouds(): void {
+    for (const cloud of this.transitionClouds) {
+      this.tweens.killTweensOf(cloud);
+      cloud.destroy();
+    }
+    this.transitionClouds = [];
+    if (this.transitionCloudVeil) {
+      this.tweens.killTweensOf(this.transitionCloudVeil);
+      this.transitionCloudVeil.destroy();
+      this.transitionCloudVeil = undefined;
+    }
+  }
+
+  /** Draws an irregular puff silhouette; no two transition clouds match. */
+  private createTransitionCloud(
+    size: number,
+    depth: number,
+  ): Phaser.GameObjects.Graphics {
+    const cloud = this.add
+      .graphics()
+      .setScrollFactor(0)
+      .setDepth(depth);
+    const puffs = Array.from(
+      { length: Phaser.Math.Between(4, 8) },
+      () => ({
+        x: Phaser.Math.FloatBetween(-size * 0.55, size * 0.55),
+        y: Phaser.Math.FloatBetween(-size * 0.18, size * 0.18),
+        radius: Phaser.Math.FloatBetween(size * 0.16, size * 0.32),
+      }),
+    );
+
+    cloud.fillStyle(0xcfe5f7, 0.52);
+    for (const puff of puffs) {
+      cloud.fillCircle(puff.x + size * 0.035, puff.y + size * 0.06, puff.radius);
+    }
+    cloud.fillStyle(0xffffff, 0.95);
+    for (const puff of puffs) {
+      cloud.fillCircle(puff.x, puff.y, puff.radius);
+    }
+    cloud.setData("travelSize", size);
+    return cloud;
+  }
+
+  private playShipArrival(): Promise<void> {
+    const arrivals: Phaser.GameObjects.Sprite[] = [];
+    for (const ship of this.shipSprites.values()) {
+      const arrivalX = ship.getData("arrivalX") as number | undefined;
+      const arrivalY = ship.getData("arrivalY") as number | undefined;
+      if (arrivalX === undefined || arrivalY === undefined) {
+        continue;
+      }
+      arrivals.push(ship);
+    }
+    if (arrivals.length === 0) {
+      return Promise.resolve();
+    }
+
+    return new Promise((resolve) => {
+      let remaining = arrivals.length;
+      arrivals.forEach((ship) => {
+        const arrivalX = ship.getData("arrivalX") as number;
+        const arrivalY = ship.getData("arrivalY") as number;
+        ship.data?.remove(["arrivalX", "arrivalY"]);
+        this.tweens.add({
+          targets: ship,
+          x: arrivalX,
+          y: arrivalY,
+          duration: 900,
+          ease: "Sine.easeOut",
+          onComplete: () => {
+            this.tweens.add({
+              targets: ship,
+              y: arrivalY - 6,
+              duration: 1_400,
+              yoyo: true,
+              repeat: -1,
+              ease: "Sine.easeInOut",
+            });
             remaining -= 1;
             if (remaining === 0) {
               resolve();
@@ -956,6 +1137,29 @@ export class WorldScene extends Phaser.Scene {
         });
       });
     });
+  }
+}
+
+/** Returns a random point just beyond one edge of the screen-fixed viewport. */
+function randomCloudEdge(
+  camera: Phaser.Cameras.Scene2D.Camera,
+  padding: number,
+): { x: number; y: number } {
+  switch (Phaser.Math.Between(0, 3)) {
+    case 0:
+      return { x: -padding, y: Phaser.Math.Between(-padding, camera.height + padding) };
+    case 1:
+      return {
+        x: camera.width + padding,
+        y: Phaser.Math.Between(-padding, camera.height + padding),
+      };
+    case 2:
+      return { x: Phaser.Math.Between(-padding, camera.width + padding), y: -padding };
+    default:
+      return {
+        x: Phaser.Math.Between(-padding, camera.width + padding),
+        y: camera.height + padding,
+      };
   }
 }
 

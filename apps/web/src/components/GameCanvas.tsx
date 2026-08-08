@@ -24,10 +24,18 @@ interface GameCanvasProps {
   cityId: string;
   world?: WorldSnapshot;
   overlay?: PullRequestOverlay;
+  /** Snapshot that may be revealed once a ship has reached this city. */
+  travelCityId?: string;
+  travelWorld?: WorldSnapshot;
+  travelOverlay?: PullRequestOverlay;
   fileChange?: CanvasFileChange;
   cities?: readonly CitySummary[];
-  /** Sends the real travel command; called immediately on a ship click, in parallel with the departure/cloud-cover animation. */
-  onTravel?: (cityId: string) => void;
+  /** Starts loading the destination while the current city remains on screen. */
+  onTravelRequest?: (cityId: string) => void;
+  /** Commits the application chrome to the new city after the arrival animation. */
+  onTravelComplete?: (cityId: string) => void;
+  /** Lets the HTML map overlays yield to the canvas whiteout. */
+  onTravelTransitionChange?: (transitioning: boolean) => void;
   onSelectBuilding?: (building?: Building) => void;
   onShipHover?: (info?: ShipHoverInfo) => void;
 }
@@ -36,9 +44,14 @@ export function GameCanvas({
   cityId,
   world,
   overlay,
+  travelCityId,
+  travelWorld,
+  travelOverlay,
   fileChange,
   cities,
-  onTravel,
+  onTravelRequest,
+  onTravelComplete,
+  onTravelTransitionChange,
   onSelectBuilding,
   onShipHover,
 }: GameCanvasProps) {
@@ -47,27 +60,68 @@ export function GameCanvas({
   const sceneRef = useRef<WorldScene>(null);
   const selectRef = useRef(onSelectBuilding);
   const shipHoverRef = useRef(onShipHover);
-  const travelRef = useRef(onTravel);
+  const travelRequestRef = useRef(onTravelRequest);
+  const travelCompleteRef = useRef(onTravelComplete);
+  const travelTransitionRef = useRef(onTravelTransitionChange);
   const cityIdRef = useRef(cityId);
-  /** True from a ship click until revealAfterTravel has run. */
+  const travelCityRef = useRef(travelCityId);
+  const travelWorldRef = useRef(travelWorld);
+  const travelOverlayRef = useRef(travelOverlay);
+  /** True from a ship click until the arriving city is fully revealed. */
   const transitioningRef = useRef(false);
-  /** True once the cover animation itself has finished (independent of whether the new world has arrived yet). */
+  /** True once the cover animation itself has finished. */
   const coverDoneRef = useRef(false);
+  const revealStartedRef = useRef(false);
+  const departureCityRef = useRef<string | undefined>(undefined);
+  const destinationCityRef = useRef<string | undefined>(undefined);
 
   // Kept in refs so a changing prop identity never rebuilds the game, and so
   // the ship-click listener (registered once, at scene creation) always sees
   // the latest values.
   selectRef.current = onSelectBuilding;
   shipHoverRef.current = onShipHover;
-  travelRef.current = onTravel;
+  travelRequestRef.current = onTravelRequest;
+  travelCompleteRef.current = onTravelComplete;
+  travelTransitionRef.current = onTravelTransitionChange;
   cityIdRef.current = cityId;
+  travelCityRef.current = travelCityId;
+  travelWorldRef.current = travelWorld;
+  travelOverlayRef.current = travelOverlay;
 
   function tryReveal(): void {
-    if (transitioningRef.current && coverDoneRef.current) {
+    const destinationCityId = destinationCityRef.current;
+    const destinationWorld = travelWorldRef.current;
+    if (
+      !transitioningRef.current ||
+      !coverDoneRef.current ||
+      revealStartedRef.current ||
+      !destinationCityId ||
+      travelCityRef.current !== destinationCityId ||
+      !destinationWorld
+    ) {
+      return;
+    }
+
+    // The outgoing city stays intact until clouds completely cover it. This
+    // is the key difference from changing React's active city on click: a
+    // cached destination can no longer replace the sailing ship mid-flight.
+    revealStartedRef.current = true;
+    const scene = sceneRef.current;
+    scene?.setWorld(destinationWorld, destinationCityId);
+    scene?.setOverlay(travelOverlayRef.current);
+    scene?.prepareArrivalForTravel(departureCityRef.current, destinationCityId);
+    void scene?.revealAfterTravel().then(() => {
+      const completedCityId = destinationCityRef.current;
       transitioningRef.current = false;
       coverDoneRef.current = false;
-      sceneRef.current?.revealAfterTravel();
-    }
+      revealStartedRef.current = false;
+      departureCityRef.current = undefined;
+      destinationCityRef.current = undefined;
+      travelTransitionRef.current?.(false);
+      if (completedCityId) {
+        travelCompleteRef.current?.(completedCityId);
+      }
+    });
   }
 
   useEffect(() => {
@@ -88,6 +142,10 @@ export function GameCanvas({
       }
       transitioningRef.current = true;
       coverDoneRef.current = false;
+      revealStartedRef.current = false;
+      departureCityRef.current = cityIdRef.current;
+      destinationCityRef.current = targetCityId;
+      travelTransitionRef.current?.(true);
       // The network round trip runs concurrently with the departure/cover
       // animation rather than after it, so a fast (already-built) travel
       // isn't needlessly delayed by the animation's fixed duration; a slow
@@ -97,7 +155,7 @@ export function GameCanvas({
         coverDoneRef.current = true;
         tryReveal();
       });
-      travelRef.current?.(targetCityId);
+      travelRequestRef.current?.(targetCityId);
     });
     sceneRef.current = scene;
     const game = new Phaser.Game({
@@ -151,6 +209,13 @@ export function GameCanvas({
   useEffect(() => {
     sceneRef.current?.setOverlay(overlay);
   }, [overlay]);
+
+  useEffect(() => {
+    // A destination may be cached before the click or may arrive over the
+    // socket while clouds are closing. In both cases tryReveal waits until
+    // the cover is complete before replacing the visual world.
+    tryReveal();
+  }, [travelCityId, travelWorld, travelOverlay]);
 
   useEffect(() => {
     sceneRef.current?.setCities(cities ?? []);

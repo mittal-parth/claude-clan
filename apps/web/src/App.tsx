@@ -439,6 +439,8 @@ export default function App() {
   const [fileChange, setFileChange] = useState<CanvasFileChange>();
   const [selected, setSelected] = useState<Building>();
   const [shipHover, setShipHover] = useState<ShipHoverInfo>();
+  const [shipTravelTargetId, setShipTravelTargetId] = useState<string>();
+  const [shipTransitioning, setShipTransitioning] = useState(false);
 
   const events = eventsByCity[activeCityId] ?? [];
   const world = worldByCity[activeCityId];
@@ -601,6 +603,24 @@ export default function App() {
     send({ type: "city.travel", cityId });
   }
 
+  function requestShipTravel(cityId: string): void {
+    // Keep activeCityId on the departing city until the canvas has covered it
+    // in clouds. This prevents a cached PR snapshot from replacing the ship
+    // before its departure animation can be seen.
+    setShipTravelTargetId(cityId);
+    setSelected(undefined);
+    setDiff(undefined);
+    setEventsByCity((current) =>
+      cityId in current ? current : { ...current, [cityId]: loadStoredEvents(cityId) },
+    );
+    send({ type: "city.travel", cityId });
+  }
+
+  function completeShipTravel(cityId: string): void {
+    setActiveCityId(cityId);
+    setShipTravelTargetId(undefined);
+  }
+
   function selectBuilding(building?: Building): void {
     setSelected(building);
     setDiff(undefined);
@@ -671,12 +691,27 @@ export default function App() {
                 cityId={activeCityId}
                 world={world}
                 overlay={overlay}
+                travelCityId={shipTravelTargetId}
+                travelWorld={
+                  shipTravelTargetId
+                    ? worldByCity[shipTravelTargetId]
+                    : undefined
+                }
+                travelOverlay={
+                  shipTravelTargetId
+                    ? overlayByCity[shipTravelTargetId]
+                    : undefined
+                }
                 fileChange={fileChange}
                 cities={cities}
-                onTravel={travelTo}
+                onTravelRequest={requestShipTravel}
+                onTravelComplete={completeShipTravel}
+                onTravelTransitionChange={setShipTransitioning}
                 onShipHover={setShipHover}
                 onSelectBuilding={selectBuilding}
               />
+              {!shipTransitioning ? (
+                <>
               <div className="pointer-events-none absolute left-4 top-4 border-2 border-foreground bg-card px-3 py-2 dark:border-ring">
                 <span className="retro block text-[10px] text-primary">
                   District survey
@@ -694,7 +729,7 @@ export default function App() {
                     top: shipHover.screenY - 12,
                   }}
                 >
-                  Sail to {shipHover.title}
+                  {shipHover.action}
                 </div>
               ) : null}
 
@@ -757,6 +792,8 @@ export default function App() {
                   Drag to pan · Scroll to zoom · Click a building
                 </span>
               </div>
+                </>
+              ) : null}
             </section>
 
             <form
