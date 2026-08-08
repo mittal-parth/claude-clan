@@ -12,6 +12,7 @@ import {
   type TerrainGrid,
 } from "./terrain";
 import {
+  CRANE_HEIGHT,
   HIGHLIGHT_KEY,
   SELECT_KEY,
   TERRAIN_ATLAS_KEY,
@@ -42,6 +43,8 @@ const MIN_ZOOM = 0.2;
 const MAX_ZOOM = 2;
 /** Pointer travel, in screen pixels, above which a press is a drag not a click. */
 const CLICK_SLOP = 5;
+/** After the player moves the camera, leave it alone this long. */
+const CAMERA_YIELD_MS = 8_000;
 /** Most trees, bushes and fountains the world will place, at any size. */
 const PROP_BUDGET = 2_000;
 /** Rings of real water tiles at the coast; past this the background takes over. */
@@ -65,6 +68,9 @@ export class WorldScene extends Phaser.Scene {
   private construction?: ConstructionSites;
   /** Paths the crew is currently working on, newest last. */
   private buildingPaths: string[] = [];
+  /** Paths that already have a site, so only genuinely new ones grab the camera. */
+  private sitedPaths = new Set<string>();
+  private lastCameraInputAt = Number.NEGATIVE_INFINITY;
 
   private highlight?: Phaser.GameObjects.Sprite;
   private selectionMarker?: Phaser.GameObjects.Sprite;
@@ -142,7 +148,44 @@ export class WorldScene extends Phaser.Scene {
         height: view.sprite.height,
       });
     }
+
+    const opened = targets.find((target) => !this.sitedPaths.has(target.path));
+    this.sitedPaths = new Set(targets.map((target) => target.path));
+
     this.construction.sync(targets);
+
+    if (opened) {
+      this.revealConstruction(opened);
+    }
+  }
+
+  /**
+   * Brings a new site into view. A crane is only about sixty pixels tall at the
+   * zoom the world opens at, so work happening off-screen — or just elsewhere
+   * in a large city — went unnoticed entirely.
+   *
+   * Deliberately yields to the player: if they have touched the camera
+   * recently, or the site is already comfortably on screen, nothing moves.
+   */
+  private revealConstruction(target: ConstructionTarget): void {
+    const camera = this.cameras.main;
+
+    if (this.time.now - this.lastCameraInputAt < CAMERA_YIELD_MS) {
+      return;
+    }
+
+    const view = camera.worldView;
+    const margin = CRANE_HEIGHT;
+    const onScreen =
+      target.x > view.x + margin &&
+      target.x < view.right - margin &&
+      target.y > view.y + margin &&
+      target.y < view.bottom - margin;
+    if (onScreen) {
+      return;
+    }
+
+    camera.pan(target.x, target.y - CRANE_HEIGHT / 2, 900, "Sine.easeInOut");
   }
 
   setWorld(snapshot: WorldSnapshot): void {
@@ -419,6 +462,12 @@ export class WorldScene extends Phaser.Scene {
     camera.centerOn(center.x, center.y);
   }
 
+  /** Stops the construction auto-pan from fighting the player for the camera. */
+  private noteCameraInput(): void {
+    this.lastCameraInputAt = this.time.now;
+    this.cameras.main.panEffect.reset();
+  }
+
   private bindCamera(): void {
     this.input.on("pointerdown", (pointer: Phaser.Input.Pointer) => {
       this.dragOrigin = { x: pointer.x, y: pointer.y };
@@ -457,6 +506,7 @@ export class WorldScene extends Phaser.Scene {
         camera.scrollX -= (pointer.x - this.dragOrigin.x) / camera.zoom;
         camera.scrollY -= (pointer.y - this.dragOrigin.y) / camera.zoom;
         this.dragOrigin = { x: pointer.x, y: pointer.y };
+        this.noteCameraInput();
         return;
       }
       this.moveHighlight(pointer);
@@ -471,6 +521,7 @@ export class WorldScene extends Phaser.Scene {
         deltaY: number,
       ) => {
         const camera = this.cameras.main;
+        this.noteCameraInput();
         // Anchor the zoom on the cursor: keep whatever world point is under
         // the pointer pinned there as the zoom changes.
         const before = camera.getWorldPoint(pointer.x, pointer.y);

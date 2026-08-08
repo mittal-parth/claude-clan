@@ -9,6 +9,7 @@ import {
 import { FormEvent, useEffect, useRef, useState } from "react";
 import { Volume2, VolumeX } from "lucide-react";
 import { useAudio } from "@/components/audio-provider";
+import { ConstructionTracker } from "@/lib/construction-tracker";
 import Dialogue from "@/components/ui/8bit/blocks/dialogue";
 import QuestLog, {
   type Quest,
@@ -52,15 +53,14 @@ const maxBudgetUsd = Number(import.meta.env.VITE_MAX_BUDGET_USD ?? 1);
 const RESCAN_DEBOUNCE_MS = 1_200;
 
 /**
- * How long a building keeps its crane after the last sign of work on it.
+ * How long a site stands after the work on it actually finishes.
  *
- * Writing a file takes milliseconds, so this is really a minimum on-screen
- * time rather than a timeout: it is measured from the last activity, so a
- * single instant edit still raises a site that stands long enough to read, and
- * a burst of edits reads as one continuous site instead of flickering
- * scaffolding. Roughly six cycles of the crane's hook.
+ * The site's lifetime is the work's lifetime: it opens when a tool starts on a
+ * file and is held open until that tool completes, so a slow edit keeps its
+ * crane for as long as it runs. This is only the tail on the end, so a write
+ * that takes 40ms still leaves something up long enough to notice.
  */
-const CONSTRUCTION_LINGER_MS = 15_000;
+const CONSTRUCTION_GRACE_MS = 6_000;
 
 const EVENTS_STORAGE_KEY = "sudo-city:events";
 
@@ -450,23 +450,10 @@ export default function App() {
     const socket = new WebSocket(websocketUrl);
     socketRef.current = socket;
     let rescanTimer: ReturnType<typeof setTimeout> | undefined;
-    const siteTimers = new Map<string, ReturnType<typeof setTimeout>>();
-
-    // A file the crew touches becomes a construction site, and stays one until
-    // the work on it goes quiet.
-    const openSite = (path: string): void => {
-      clearTimeout(siteTimers.get(path));
-      setBuildingPaths((current) =>
-        current.includes(path) ? current : [...current, path],
-      );
-      siteTimers.set(
-        path,
-        setTimeout(() => {
-          siteTimers.delete(path);
-          setBuildingPaths((current) => current.filter((item) => item !== path));
-        }, CONSTRUCTION_LINGER_MS),
-      );
-    };
+    const sites = new ConstructionTracker({
+      graceMs: CONSTRUCTION_GRACE_MS,
+      onChange: setBuildingPaths,
+    });
 
     // The agent edits in bursts; one rescan after the burst settles is enough,
     // and the scene diffs the result so standing buildings do not flicker.
@@ -503,22 +490,26 @@ export default function App() {
           path: event.path,
           change: event.change,
         });
-        openSite(event.path);
+        // Covers a change with no tool behind it; a tool-driven one is
+        // already held open by its own hold.
+        sites.start(event.path);
         scheduleRescan();
       }
       // A tool's target is the earliest signal that work has started — the
-      // crane goes up before the file is written. Targets that are not a
-      // building path (a shell command, say) simply match nothing.
+      // crane goes up before the file is written, and stays up while the tool
+      // runs. Targets that are not a building path (a shell command, say)
+      // simply match no building.
       if (event.type === "tool.started" && event.target) {
-        openSite(event.target);
+        sites.start(event.target, event.toolCallId);
+      }
+      if (event.type === "tool.completed") {
+        sites.finish(event.toolCallId);
       }
     });
 
     return () => {
       clearTimeout(rescanTimer);
-      for (const timer of siteTimers.values()) {
-        clearTimeout(timer);
-      }
+      sites.dispose();
       socket.close();
       socketRef.current = null;
     };
