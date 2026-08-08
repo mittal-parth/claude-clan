@@ -161,6 +161,10 @@ export const MayorCommandSchema = z.discriminatedUnion("type", [
     type: z.literal("session.prompt"),
     prompt: z.string().trim().min(1).max(20_000),
     permissionMode: PermissionModeSchema.optional(),
+    contextPaths: z
+      .array(z.string().trim().min(1).max(500))
+      .max(20)
+      .optional(),
     model: z.string().min(1).optional(),
     effort: EffortLevelSchema.optional(),
   }),

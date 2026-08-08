@@ -33,9 +33,10 @@ export interface AgentSessionOptions {
   safeTools?: readonly string[];
 }
 
-export interface AgentStartOverrides {
+export interface AgentStartOptions {
   model?: string;
   effort?: EffortLevel;
+  contextPaths?: readonly string[];
 }
 
 export class AgentSessionManager {
@@ -63,14 +64,15 @@ export class AgentSessionManager {
   async start(
     prompt: string,
     permissionMode: MayorPermissionMode = "default",
-    overrides?: AgentStartOverrides,
+    options?: AgentStartOptions,
   ): Promise<void> {
     await this.interrupt();
-    if (overrides?.model) {
-      this.model = overrides.model;
+    const contextPaths = options?.contextPaths ?? [];
+    if (options?.model) {
+      this.model = options.model;
     }
-    if (overrides?.effort) {
-      this.effort = overrides.effort;
+    if (options?.effort) {
+      this.effort = options.effort;
     }
     const abortController = new AbortController();
     this.abortController = abortController;
@@ -82,7 +84,7 @@ export class AgentSessionManager {
     });
 
     const activeQuery = query({
-      prompt,
+      prompt: promptWithContext(prompt, contextPaths),
       options: {
         abortController,
         canUseTool: this.canUseTool,
@@ -351,6 +353,22 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function normalizePath(path: string): string {
   return sep === "/" ? path : path.split(sep).join("/");
+}
+
+function promptWithContext(
+  prompt: string,
+  contextPaths: readonly string[],
+): string {
+  if (contextPaths.length === 0) {
+    return prompt;
+  }
+
+  return [
+    prompt,
+    "",
+    "Read these repository files before acting; they were attached as context for this order:",
+    ...contextPaths.map((path) => `- ${path}`),
+  ].join("\n");
 }
 
 export type { AgentEvent };

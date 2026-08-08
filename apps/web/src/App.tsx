@@ -38,7 +38,9 @@ import {
 } from "@/components/ui/8bit/resizable";
 import {
   GameCanvas,
+  type CanvasDragPreview,
   type CanvasFileChange,
+  type CanvasPointerPosition,
   type GameCanvasHandle,
 } from "./components/GameCanvas";
 import CrewSelectDialog, {
@@ -437,13 +439,36 @@ function findPendingPermit(
   return undefined;
 }
 
+function pointIsInside(
+  element: HTMLElement | null,
+  position: CanvasPointerPosition,
+): boolean {
+  if (!element) {
+    return false;
+  }
+
+  const bounds = element.getBoundingClientRect();
+  return (
+    position.clientX >= bounds.left &&
+    position.clientX <= bounds.right &&
+    position.clientY >= bounds.top &&
+    position.clientY <= bounds.bottom
+  );
+}
+
 export default function App() {
   const { sfxEnabled, toggleSfx } = useAudio();
   const socketRef = useRef<WebSocket>(null);
   const canvasRef = useRef<GameCanvasHandle>(null);
+  const orderFormRef = useRef<HTMLFormElement>(null);
   const [connection, setConnection] =
     useState<ConnectionState>("connecting");
   const [events, setEvents] = useState<GameEvent[]>(loadStoredEvents);
+  const [draggingBuilding, setDraggingBuilding] = useState<Building>();
+  const [dragPreview, setDragPreview] = useState<CanvasDragPreview>();
+  const [dragPosition, setDragPosition] =
+    useState<CanvasPointerPosition>();
+  const [contextPaths, setContextPaths] = useState<string[]>([]);
   const [orderPermissionMode, setOrderPermissionMode] =
     useState<PermissionMode>("default");
   const [crewSelection, setCrewSelection] = useState<CrewSelection>({
@@ -485,6 +510,12 @@ export default function App() {
   const crewDialogueDescription = pendingPermit
     ? "Awaiting permit stamp"
     : `${effortLabel(activeEffort)} effort · ${activeCrew.title}`;
+  const showDragPreview = Boolean(
+    draggingBuilding &&
+      dragPreview?.src &&
+      dragPosition &&
+      pointIsInside(orderFormRef.current, dragPosition),
+  );
 
   useEffect(() => {
     const socket = new WebSocket(websocketUrl);
@@ -558,6 +589,39 @@ export default function App() {
     }
   }
 
+  function handleBuildingDragStart(
+    building: Building,
+    preview?: CanvasDragPreview,
+  ): void {
+    setDraggingBuilding(building);
+    setDragPreview(preview);
+    setDragPosition(undefined);
+  }
+
+  function handleBuildingDragMove(position: CanvasPointerPosition): void {
+    setDragPosition(position);
+  }
+
+  function handleBuildingDrop(
+    building: Building,
+    position: CanvasPointerPosition,
+  ): void {
+    setDraggingBuilding(undefined);
+    setDragPreview(undefined);
+    setDragPosition(undefined);
+    if (!pointIsInside(orderFormRef.current, position)) {
+      return;
+    }
+
+    setContextPaths((current) =>
+      current.includes(building.path) ? current : [...current, building.path],
+    );
+  }
+
+  function removeContextPath(path: string): void {
+    setContextPaths((current) => current.filter((item) => item !== path));
+  }
+
   function submitPrompt(event: FormEvent<HTMLFormElement>): void {
     event.preventDefault();
     const nextPrompt = prompt.trim();
@@ -570,13 +634,33 @@ export default function App() {
       permissionMode: orderPermissionMode,
       model: getCrewMember(crewSelection.crewId).model,
       effort: crewSelection.effort,
+      contextPaths,
     });
     setPrompt("");
+    setContextPaths([]);
     setOrderPermissionMode("default");
   }
 
   return (
     <div className="flex h-dvh min-h-[36rem] flex-col bg-background">
+      {showDragPreview && dragPreview && dragPosition ? (
+        <img
+          src={dragPreview.src}
+          alt=""
+          aria-hidden="true"
+          draggable={false}
+          className="pointer-events-none fixed z-[100] select-none"
+          style={{
+            left: dragPosition.clientX,
+            top: dragPosition.clientY,
+            transform: "translate(-50%, -100%)",
+            opacity: 0.48,
+            width: 32,
+            height: "auto",
+            imageRendering: "pixelated",
+          }}
+        />
+      ) : null}
       <header className="flex items-center justify-between border-b-4 border-foreground px-4 py-3 dark:border-ring">
         <div className="flex min-w-0 items-center gap-3">
           <span className="retro flex size-9 shrink-0 items-center justify-center border-2 border-foreground bg-primary text-xs font-black text-primary-foreground dark:border-ring">
@@ -623,6 +707,9 @@ export default function App() {
                 world={world}
                 fileChange={fileChange}
                 onSelectBuilding={setSelected}
+                onBuildingDragStart={handleBuildingDragStart}
+                onBuildingDragMove={handleBuildingDragMove}
+                onBuildingDragEnd={handleBuildingDrop}
               />
               <div className="pointer-events-none absolute left-4 top-4 border-2 border-foreground bg-card px-3 py-2 dark:border-ring">
                 <span className="retro block text-[10px] text-primary">
@@ -672,7 +759,10 @@ export default function App() {
             </section>
 
             <form
-              className="border-t-4 border-foreground p-4 dark:border-ring"
+              ref={orderFormRef}
+              className={`border-t-4 border-foreground p-4 dark:border-ring ${
+                draggingBuilding ? "bg-primary/5 ring-2 ring-inset ring-primary" : ""
+              }`}
               onSubmit={submitPrompt}
             >
               <label
@@ -681,6 +771,35 @@ export default function App() {
               >
                 Mayor&apos;s order
               </label>
+              {draggingBuilding ? (
+                <div className="mb-2 border-2 border-primary bg-primary/10 px-2 py-1">
+                  <span className="retro text-[8px] text-primary">
+                    Drop to attach context:
+                  </span>{" "}
+                  <code className="break-all text-[9px] text-foreground">
+                    {draggingBuilding.path}
+                  </code>
+                </div>
+              ) : null}
+              {contextPaths.length > 0 ? (
+                <div className="mb-3 flex flex-wrap items-center gap-1.5">
+                  <span className="retro text-[8px] text-muted-foreground">
+                    Context:
+                  </span>
+                  {contextPaths.map((path) => (
+                    <button
+                      key={path}
+                      type="button"
+                      title={`Remove ${path} from context`}
+                      onClick={() => removeContextPath(path)}
+                      className="retro inline-flex max-w-full items-center gap-1 border border-foreground bg-card px-2 py-1 text-left text-[8px] text-foreground hover:bg-primary hover:text-primary-foreground dark:border-ring"
+                    >
+                      <span className="max-w-[16rem] truncate">{path}</span>
+                      <span aria-hidden="true">×</span>
+                    </button>
+                  ))}
+                </div>
+              ) : null}
               <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                 <span className="retro text-[9px] text-muted-foreground">
                   Crew for this order

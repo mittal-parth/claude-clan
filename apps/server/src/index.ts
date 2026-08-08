@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { loadEnvFile } from "node:process";
-import { join } from "node:path";
+import { join, relative, resolve, sep } from "node:path";
 import {
   AgentSessionManager,
   type AgentEvent,
@@ -27,6 +27,50 @@ await app.register(websocket);
 let sequence = 0;
 const targetRepo =
   process.env.SUDO_CITY_REPO ?? process.env.INIT_CWD ?? process.cwd();
+const repositoryRoot = resolve(targetRepo);
+const MAX_CONTEXT_FILES = 20;
+
+function sanitizeContextPaths(paths: readonly string[] | undefined): string[] {
+  const safePaths = new Set<string>();
+
+  for (const rawPath of paths ?? []) {
+    const candidate = rawPath.trim().replaceAll("\\", "/");
+    if (!candidate || candidate.startsWith("/") || candidate.includes("\0")) {
+      continue;
+    }
+
+    const absolutePath = resolve(repositoryRoot, candidate);
+    const repositoryPath = relative(repositoryRoot, absolutePath);
+    if (
+      !repositoryPath ||
+      repositoryPath === ".." ||
+      repositoryPath.startsWith(`..${sep}`)
+    ) {
+      continue;
+    }
+
+    safePaths.add(sep === "/" ? repositoryPath : repositoryPath.split(sep).join("/"));
+    if (safePaths.size >= MAX_CONTEXT_FILES) {
+      break;
+    }
+  }
+
+  return [...safePaths];
+}
+
+function mayorMessage(prompt: string, contextPaths: readonly string[]): string {
+  if (contextPaths.length === 0) {
+    return prompt;
+  }
+
+  return [
+    prompt,
+    "",
+    "Attached context files:",
+    ...contextPaths.map((path) => `- ${path}`),
+  ].join("\n");
+}
+
 if (!process.env.ANTHROPIC_API_KEY) {
   try {
     loadEnvFile(join(targetRepo, ".env"));
@@ -201,12 +245,13 @@ app.get("/ws", { websocket: true }, (socket) => {
           });
         });
         break;
-      case "session.prompt":
+      case "session.prompt": {
+        const contextPaths = sanitizeContextPaths(decoded.data.contextPaths);
         broadcastEvent(
           createEvent({
             type: "session.message",
             role: "mayor",
-            text: decoded.data.prompt,
+            text: mayorMessage(decoded.data.prompt, contextPaths),
           }),
         );
         void agent
@@ -216,6 +261,7 @@ app.get("/ws", { websocket: true }, (socket) => {
             {
               model: decoded.data.model,
               effort: decoded.data.effort,
+              contextPaths,
             },
           )
           .catch((error: unknown) => {
@@ -229,6 +275,7 @@ app.get("/ws", { websocket: true }, (socket) => {
             });
           });
         break;
+      }
       case "session.interrupt":
         void agent.interrupt();
         broadcastEvent(
