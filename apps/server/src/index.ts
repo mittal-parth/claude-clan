@@ -79,7 +79,9 @@ const fallbackWorld: WorldSnapshot = {
   ],
 };
 
-const previewWorld = await generateWorld();
+let currentWorld = await generateWorld();
+/** Guards against a burst of file.changed events queueing parallel scans. */
+let pendingScan: Promise<WorldSnapshot> | undefined;
 
 async function generateWorld(): Promise<WorldSnapshot> {
   try {
@@ -135,8 +137,21 @@ const agent = new AgentSessionManager({
 function sendWorld(socket: WebSocket): void {
   send(socket, {
     kind: "event",
-    event: createEvent({ type: "world.ready", snapshot: previewWorld }),
+    event: createEvent({ type: "world.ready", snapshot: currentWorld }),
   });
+}
+
+/**
+ * Rescans the repository and broadcasts the result. Plots are persisted, so a
+ * file that already exists keeps its city block and the client's diff leaves
+ * the standing building alone.
+ */
+async function rescanWorld(): Promise<void> {
+  pendingScan ??= generateWorld().finally(() => {
+    pendingScan = undefined;
+  });
+  currentWorld = await pendingScan;
+  broadcastEvent(createEvent({ type: "world.ready", snapshot: currentWorld }));
 }
 
 app.get("/health", async () => ({ ok: true, service: "sudo-city" }));
@@ -176,7 +191,15 @@ app.get("/ws", { websocket: true }, (socket) => {
 
     switch (decoded.data.type) {
       case "world.request":
-        sendWorld(socket);
+        void rescanWorld().catch((error: unknown) => {
+          app.log.error({ error }, "World rescan failed");
+          send(socket, {
+            kind: "error",
+            code: "WORLD_SCAN_FAILED",
+            message:
+              error instanceof Error ? error.message : "Repository scan failed",
+          });
+        });
         break;
       case "session.prompt":
         broadcastEvent(
