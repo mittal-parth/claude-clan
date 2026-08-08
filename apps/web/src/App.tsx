@@ -1327,11 +1327,9 @@ export default function App() {
                 <button
                   type="button"
                   className="hud-icon-button"
-                  aria-label={
-                    sfxEnabled ? "Mute UI sounds" : "Unmute UI sounds"
-                  }
+                  aria-label={sfxEnabled ? "Mute sound" : "Unmute sound"}
                   aria-pressed={!sfxEnabled}
-                  title={sfxEnabled ? "Mute UI sounds" : "Unmute UI sounds"}
+                  title={sfxEnabled ? "Mute sound" : "Unmute sound"}
                   onClick={toggleSfx}
                 >
                   {sfxEnabled ? (
