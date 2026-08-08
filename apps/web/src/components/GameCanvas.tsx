@@ -41,7 +41,7 @@ export function GameCanvas({
     const game = new Phaser.Game({
       type: Phaser.AUTO,
       parent: host,
-      backgroundColor: "#7fc9e8",
+      backgroundColor: "#2e9fe0",
       scene,
       scale: {
         mode: Phaser.Scale.RESIZE,

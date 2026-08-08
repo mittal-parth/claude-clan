@@ -36,6 +36,7 @@ const CAR_TILE_MS = 900;
 
 export interface AmbientDepths {
   ground: number;
+  traffic: number;
   sky: number;
 }
 
@@ -55,6 +56,7 @@ export function prefersReducedMotion(): boolean {
 
 export class AmbientLife {
   private cars: Car[] = [];
+  private traffic?: Phaser.GameObjects.Container;
   private clouds: Phaser.GameObjects.Sprite[] = [];
   private sparkles: Phaser.GameObjects.Sprite[] = [];
   private emitters: Phaser.GameObjects.Particles.ParticleEmitter[] = [];
@@ -68,10 +70,12 @@ export class AmbientLife {
     private readonly depths: AmbientDepths,
   ) {}
 
-  rebuild(terrain: TerrainGrid, withinBudget: boolean): void {
+  rebuild(terrain: TerrainGrid): void {
     this.clear();
     this.terrain = terrain;
-    this.enabled = withinBudget && !this.reducedMotion;
+    // Ambient life is already capped by count, so it costs the same on a huge
+    // repository as a small one; only a motion preference switches it off.
+    this.enabled = !this.reducedMotion;
     if (!this.enabled) {
       return;
     }
@@ -113,6 +117,7 @@ export class AmbientLife {
       this.scene.tweens.killTweensOf(car.sprite);
       car.sprite.destroy();
     }
+    this.traffic?.removeAll(true);
     for (const cloud of this.clouds) {
       this.scene.tweens.killTweensOf(cloud);
       cloud.destroy();
@@ -134,7 +139,20 @@ export class AmbientLife {
   // Traffic
   // -------------------------------------------------------------------------
 
+  /**
+   * Traffic lives in its own container. A car re-depths on every hop, and on
+   * the main display list that dirties tens of thousands of entries and forces
+   * a full re-sort — measured at half the framerate on a large repository.
+   *
+   * A fixed depth below the buildings is not a compromise here: building and
+   * prop sprites are anchored at their tile's bottom corner and extend upward,
+   * so they only ever cover screen positions behind them. A car those sprites
+   * overlap is a car they genuinely stand in front of.
+   */
   private spawnCars(terrain: TerrainGrid): void {
+    this.traffic ??= this.scene.add
+      .container(0, 0)
+      .setDepth(this.depths.traffic);
     // Only junctions and straights carry traffic; a dead-end stub would trap
     // a car into shuffling back and forth on one tile.
     const drivable = terrain.roads.filter((road) => connections(road).length >= 2);
@@ -157,6 +175,7 @@ export class AmbientLife {
         .setOrigin(0.5, 1)
         .setDepth(this.projection.depth(cell.x, cell.y));
 
+      this.traffic?.add(sprite);
       const car: Car = { sprite, cell };
       this.cars.push(car);
       // Stagger departures so they do not all move in lockstep.

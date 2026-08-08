@@ -1,7 +1,7 @@
 import type { Building, WorldSnapshot } from "@sudo-city/protocol";
 import Phaser from "phaser";
 import { AmbientLife } from "./ambient";
-import { hashText, pickIndex } from "./hash";
+import { hashCoords, hashText, pickIndex, unitFloat } from "./hash";
 import { createIsoProjection } from "./iso";
 import { archetypeFor, tierFor } from "./palette";
 import {
@@ -12,6 +12,7 @@ import {
 import {
   HIGHLIGHT_KEY,
   SELECT_KEY,
+  TERRAIN_ATLAS_KEY,
   TERRAIN_VARIANT_COUNTS,
   TILE_ANCHOR_Y,
   TILE_HEIGHT,
@@ -31,14 +32,19 @@ const projection = createIsoProjection(TILE_WIDTH, TILE_HEIGHT);
  */
 const GROUND_DEPTH = -1_000_000;
 const HIGHLIGHT_DEPTH = -900_000;
+/** Above the roads, below every building and prop. See AmbientLife.spawnCars. */
+const TRAFFIC_DEPTH = -800_000;
 const SKY_DEPTH = 100_000_000;
 
 const MIN_ZOOM = 0.2;
 const MAX_ZOOM = 2;
 /** Pointer travel, in screen pixels, above which a press is a drag not a click. */
 const CLICK_SLOP = 5;
-/** Beyond this many buildings, decoration is dropped to protect the framerate. */
-const PROP_BUDGET = 2_500;
+/** Most trees, bushes and fountains the world will place, at any size. */
+const PROP_BUDGET = 2_000;
+/** Rings of real water tiles at the coast; past this the background takes over. */
+const SHORE_BAND = 3;
+export const OPEN_WATER = 0x2e9fe0;
 
 export type FileChange = "added" | "modified" | "deleted";
 
@@ -63,6 +69,8 @@ export class WorldScene extends Phaser.Scene {
   private dragOrigin?: { x: number; y: number };
   private pressOrigin?: { x: number; y: number };
   private hasFitCamera = false;
+  /** Continuous zoom, accumulated across wheel events. */
+  private zoomTarget = 1;
 
   constructor() {
     super("world");
@@ -71,9 +79,9 @@ export class WorldScene extends Phaser.Scene {
   create(): void {
     bakeTerrainTextures(this);
 
-    // Sky blue behind the island, so the ocean edge reads as horizon rather
-    // than a hole in the world.
-    this.cameras.main.setBackgroundColor(0x7fc9e8);
+    // The background IS the open ocean — only the shoreline band gets real
+    // tiles, so this has to be the same blue they fade into.
+    this.cameras.main.setBackgroundColor(OPEN_WATER);
 
     this.highlight = this.add
       .sprite(0, 0, HIGHLIGHT_KEY)
@@ -88,6 +96,7 @@ export class WorldScene extends Phaser.Scene {
 
     this.ambient = new AmbientLife(this, projection, {
       ground: GROUND_DEPTH,
+      traffic: TRAFFIC_DEPTH,
       sky: SKY_DEPTH,
     });
     this.bindCamera();
@@ -111,7 +120,7 @@ export class WorldScene extends Phaser.Scene {
       this.terrain = buildTerrain(snapshot);
       this.drawTerrain(this.terrain);
       this.applyCameraBounds(this.terrain);
-      this.ambient?.rebuild(this.terrain, this.decorationBudget(snapshot));
+      this.ambient?.rebuild(this.terrain);
     }
 
     this.syncBuildings(snapshot);
@@ -156,6 +165,16 @@ export class WorldScene extends Phaser.Scene {
   // Terrain
   // -------------------------------------------------------------------------
 
+  /**
+   * Ground tiles are Sprites so the camera culls them individually. A Blitter
+   * would batch them into one object, but it silently stops drawing partway
+   * through a field this size, and a renderer that quietly loses terrain is
+   * worse than one that costs frames.
+   *
+   * The cost is controlled instead by not emitting what cannot be seen: open
+   * ocean is the camera's background colour, and decoration is thinned to a
+   * budget on large worlds.
+   */
   private drawTerrain(terrain: TerrainGrid): void {
     for (const sprite of this.groundSprites) {
       sprite.destroy();
@@ -166,17 +185,28 @@ export class WorldScene extends Phaser.Scene {
     this.groundSprites = [];
     this.propSprites = [];
 
-    const budget = this.decorationBudget(this.snapshot);
+    const propOdds = this.propOdds(terrain);
 
     for (const cell of terrain.cells) {
+      // Open ocean is a flat colour; only the shoreline band needs tiles to
+      // carry the foam and the depth change.
+      if (cell.kind === "water" && !nearShore(terrain, cell)) {
+        continue;
+      }
+
       const point = projection.project(cell.x, cell.y);
+      // Every ground tile is a frame of one atlas, so the whole plane batches
+      // without the renderer rebinding a texture per tile.
       const sprite = this.add
-        .sprite(point.x, point.y + TILE_ANCHOR_Y, tileKeyFor(cell))
+        .sprite(point.x, point.y + TILE_ANCHOR_Y, TERRAIN_ATLAS_KEY, tileKeyFor(cell))
         .setOrigin(0.5, 1)
         .setDepth(GROUND_DEPTH);
       this.groundSprites.push(sprite);
 
-      if (cell.prop && budget) {
+      if (
+        cell.prop &&
+        unitFloat(hashCoords(cell.x, cell.y, 0xd0e)) < propOdds
+      ) {
         const prop = this.add
           .sprite(point.x, point.y + TILE_ANCHOR_Y, propTextureKey(cell.prop))
           .setOrigin(0.5, 1)
@@ -186,8 +216,17 @@ export class WorldScene extends Phaser.Scene {
     }
   }
 
-  private decorationBudget(snapshot?: WorldSnapshot): boolean {
-    return (snapshot?.buildings.length ?? 0) <= PROP_BUDGET;
+  /**
+   * Fraction of decorated cells that actually get a prop. Thinned rather than
+   * switched off, so a big repository still reads as a landscape. Chosen from a
+   * stable hash so the same trees survive across snapshots.
+   */
+  private propOdds(terrain: TerrainGrid): number {
+    const candidates = terrain.cells.reduce(
+      (total, cell) => (cell.prop ? total + 1 : total),
+      0,
+    );
+    return Math.min(1, PROP_BUDGET / Math.max(candidates, 1));
   }
 
   // -------------------------------------------------------------------------
@@ -327,15 +366,12 @@ export class WorldScene extends Phaser.Scene {
     const height =
       projection.project(maxX, maxY).y - projection.project(minX, minY).y;
 
-    camera.setZoom(
-      snapZoom(
-        Phaser.Math.Clamp(
-          Math.min(camera.width / width, camera.height / height),
-          MIN_ZOOM,
-          MAX_ZOOM,
-        ),
-      ),
+    this.zoomTarget = Phaser.Math.Clamp(
+      Math.min(camera.width / width, camera.height / height),
+      MIN_ZOOM,
+      MAX_ZOOM,
     );
+    camera.setZoom(this.zoomTarget);
 
     const center = projection.project((minX + maxX) / 2, (minY + maxY) / 2);
     camera.centerOn(center.x, center.y);
@@ -392,11 +428,12 @@ export class WorldScene extends Phaser.Scene {
         // Anchor the zoom on the cursor: keep whatever world point is under
         // the pointer pinned there as the zoom changes.
         const before = camera.getWorldPoint(pointer.x, pointer.y);
-        camera.setZoom(
-          snapZoom(
-            Phaser.Math.Clamp(camera.zoom - deltaY * 0.0015, MIN_ZOOM, MAX_ZOOM),
-          ),
+        this.zoomTarget = Phaser.Math.Clamp(
+          this.zoomTarget * Math.pow(2, -wheelSteps(pointer, deltaY)),
+          MIN_ZOOM,
+          MAX_ZOOM,
         );
+        camera.setZoom(this.zoomTarget);
         const after = camera.getWorldPoint(pointer.x, pointer.y);
         camera.scrollX += before.x - after.x;
         camera.scrollY += before.y - after.y;
@@ -481,6 +518,22 @@ export class WorldScene extends Phaser.Scene {
   }
 }
 
+/**
+ * True when a water cell is close enough to land that its tile is worth
+ * drawing. Open ocean is indistinguishable from the flat background.
+ */
+function nearShore(terrain: TerrainGrid, cell: TerrainCell): boolean {
+  for (let dy = -SHORE_BAND; dy <= SHORE_BAND; dy += 1) {
+    for (let dx = -SHORE_BAND; dx <= SHORE_BAND; dx += 1) {
+      const kind = terrain.cellAt(cell.x + dx, cell.y + dy)?.kind;
+      if (kind && kind !== "water") {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 function tileKeyFor(cell: TerrainCell): string {
   if (cell.kind === "road") {
     return roadTextureKey(cell.roadMask);
@@ -525,9 +578,19 @@ function sameStructure(before: Building, after: Building): boolean {
   );
 }
 
-/** Half steps keep baked textures crisp under pixelArt rendering. */
-function snapZoom(zoom: number): number {
-  return Math.round(zoom * 4) / 4;
+/**
+ * Wheel deltas in "doublings of zoom".
+ *
+ * A mouse notch reports deltaY around 100 while a trackpad reports single
+ * digits many times a second, so zoom has to be proportional and accumulate
+ * rather than step: quantising to fixed stops threw away every trackpad event.
+ * deltaMode is normalised because Firefox reports lines, not pixels.
+ */
+function wheelSteps(pointer: Phaser.Input.Pointer, deltaY: number): number {
+  const event = pointer.event as WheelEvent | undefined;
+  const unit =
+    event?.deltaMode === 1 ? 16 : event?.deltaMode === 2 ? 100 : 1;
+  return (deltaY * unit) / 500;
 }
 
 /** Deterministic variant choice for anything keyed by identity rather than cell. */

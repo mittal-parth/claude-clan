@@ -67,6 +67,13 @@ function createBaker(scene: Phaser.Scene) {
       graphics.generateTexture(key, width, height);
       graphics.clear();
     },
+    /** Bakes what has been drawn so far without clearing — used by the atlas. */
+    flush(key: string, width: number, height: number): void {
+      if (scene.textures.exists(key)) {
+        scene.textures.remove(key);
+      }
+      graphics.generateTexture(key, width, height);
+    },
     destroy(): void {
       graphics.destroy();
     },
@@ -150,43 +157,21 @@ export const TERRAIN_VARIANT_COUNTS: Record<TerrainKind, number> = {
   road: 1,
 };
 
+/**
+ * Every ground tile lives in ONE texture, so the whole terrain plane can be a
+ * single batched object. A large repository lays down tens of thousands of
+ * tiles; as individual Sprites that is a per-frame culling and depth-sorting
+ * cost that dominates the frame budget.
+ */
+export const TERRAIN_ATLAS_KEY = "terrain-atlas";
+const ATLAS_COLUMNS = 8;
+
 /** Bakes every terrain tile, prop and effect sprite. Call once, in create(). */
 export function bakeTerrainTextures(scene: Phaser.Scene): void {
   const baker = createBaker(scene);
 
-  for (let variant = 0; variant < GRASS_VARIANTS; variant += 1) {
-    bakeGroundTile(
-      baker,
-      terrainTextureKey("grass", variant),
-      TERRAIN_COLORS.grass[variant] as number,
-      variant,
-    );
-  }
-  for (let variant = 0; variant < PARK_VARIANTS; variant += 1) {
-    bakeGroundTile(
-      baker,
-      terrainTextureKey("park", variant),
-      variant === 0 ? TERRAIN_COLORS.park : TERRAIN_COLORS.field,
-      variant + 7,
-    );
-  }
-  for (let variant = 0; variant < SAND_VARIANTS; variant += 1) {
-    bakeGroundTile(
-      baker,
-      terrainTextureKey("sand", variant),
-      variant === 0 ? TERRAIN_COLORS.sand : TERRAIN_COLORS.sandShade,
-      variant + 3,
-    );
-  }
-  bakeGroundTile(baker, terrainTextureKey("ground", 0), TERRAIN_COLORS.ground, 11);
-
-  for (let variant = 0; variant < WATER_VARIANTS; variant += 1) {
-    bakeWaterTile(baker, terrainTextureKey("water", variant), variant);
-  }
-
-  for (let mask = 0; mask < 16; mask += 1) {
-    bakeRoadTile(baker, mask);
-  }
+  bakeTerrainAtlas(scene, baker);
+  baker.graphics.clear();
 
   bakeHighlight(baker, HIGHLIGHT_KEY, 0xffffff, 0.28);
   bakeHighlight(baker, SELECT_KEY, 0xffd166, 0.5);
@@ -205,28 +190,78 @@ export function bakeTerrainTextures(scene: Phaser.Scene): void {
   baker.destroy();
 }
 
-const TILE_ORIGIN_X = HALF_W;
-const TILE_ORIGIN_Y = HALF_H;
+function bakeTerrainAtlas(scene: Phaser.Scene, baker: Baker): void {
+  const slots: Array<{ name: string; x: number; y: number }> = [];
+  let index = 0;
 
-function bakeGroundTile(
+  const place = (name: string, draw: (x: number, y: number) => void): void => {
+    const x = (index % ATLAS_COLUMNS) * TILE_WIDTH;
+    const y = Math.floor(index / ATLAS_COLUMNS) * TILE_HEIGHT;
+    draw(x + HALF_W, y + HALF_H);
+    slots.push({ name, x, y });
+    index += 1;
+  };
+
+  for (let variant = 0; variant < GRASS_VARIANTS; variant += 1) {
+    place(terrainTextureKey("grass", variant), (x, y) =>
+      drawGroundTile(baker, x, y, TERRAIN_COLORS.grass[variant] as number, variant),
+    );
+  }
+  for (let variant = 0; variant < PARK_VARIANTS; variant += 1) {
+    place(terrainTextureKey("park", variant), (x, y) =>
+      drawGroundTile(
+        baker,
+        x,
+        y,
+        variant === 0 ? TERRAIN_COLORS.park : TERRAIN_COLORS.field,
+        variant + 7,
+      ),
+    );
+  }
+  for (let variant = 0; variant < SAND_VARIANTS; variant += 1) {
+    place(terrainTextureKey("sand", variant), (x, y) =>
+      drawGroundTile(
+        baker,
+        x,
+        y,
+        variant === 0 ? TERRAIN_COLORS.sand : TERRAIN_COLORS.sandShade,
+        variant + 3,
+      ),
+    );
+  }
+  place(terrainTextureKey("ground", 0), (x, y) =>
+    drawGroundTile(baker, x, y, TERRAIN_COLORS.ground, 11),
+  );
+  for (let variant = 0; variant < WATER_VARIANTS; variant += 1) {
+    place(terrainTextureKey("water", variant), (x, y) =>
+      drawWaterTile(baker, x, y, variant),
+    );
+  }
+  for (let mask = 0; mask < 16; mask += 1) {
+    place(roadTextureKey(mask), (x, y) => drawRoadTile(baker, x, y, mask));
+  }
+
+  const rows = Math.ceil(index / ATLAS_COLUMNS);
+  baker.flush(TERRAIN_ATLAS_KEY, ATLAS_COLUMNS * TILE_WIDTH, rows * TILE_HEIGHT);
+
+  const texture = scene.textures.get(TERRAIN_ATLAS_KEY);
+  for (const slot of slots) {
+    texture.add(slot.name, 0, slot.x, slot.y, TILE_WIDTH, TILE_HEIGHT);
+  }
+}
+
+function drawGroundTile(
   baker: Baker,
-  key: string,
+  originX: number,
+  originY: number,
   color: number,
   seed: number,
 ): void {
-  fillFace(baker, color, 1, diamond(0.5), TILE_ORIGIN_X, TILE_ORIGIN_Y);
+  fillFace(baker, color, 1, diamond(0.5), originX, originY);
 
   // A faint darker edge on the two far sides reads as a very shallow slab and
   // stops large fields looking like flat paper.
-  strokeFace(
-    baker,
-    shade(color, -8),
-    0.5,
-    1,
-    diamond(0.5),
-    TILE_ORIGIN_X,
-    TILE_ORIGIN_Y,
-  );
+  strokeFace(baker, shade(color, -8), 0.5, 1, diamond(0.5), originX, originY);
 
   // Scattered blades, positioned from the variant seed so tiles differ but
   // each variant is stable.
@@ -236,45 +271,40 @@ function bakeGroundTile(
     const radius = 0.12 + ((seed * 13 + index * 29) % 24) / 100;
     const point = baker.at(
       [Math.cos(angle) * radius, Math.sin(angle) * radius, 0],
-      TILE_ORIGIN_X,
-      TILE_ORIGIN_Y,
+      originX,
+      originY,
     );
     baker.graphics.fillRect(point.x, point.y, 3, 2);
   }
-
-  baker.finish(key, TILE_WIDTH, TILE_HEIGHT);
 }
 
-function bakeWaterTile(baker: Baker, key: string, variant: number): void {
+function drawWaterTile(
+  baker: Baker,
+  originX: number,
+  originY: number,
+  variant: number,
+): void {
   const base = variant === 2 ? TERRAIN_COLORS.waterDeep : TERRAIN_COLORS.water;
-  fillFace(baker, base, 1, diamond(0.5), TILE_ORIGIN_X, TILE_ORIGIN_Y);
-  fillFace(
-    baker,
-    shade(base, -6),
-    0.6,
-    diamond(0.34),
-    TILE_ORIGIN_X,
-    TILE_ORIGIN_Y,
-  );
+  fillFace(baker, base, 1, diamond(0.5), originX, originY);
+  fillFace(baker, shade(base, -6), 0.6, diamond(0.34), originX, originY);
 
   if (variant !== 2) {
     baker.graphics.fillStyle(TERRAIN_COLORS.waterFoam, 0.35);
-    const crest = baker.at(
-      [-0.1 + variant * 0.18, -0.05, 0],
-      TILE_ORIGIN_X,
-      TILE_ORIGIN_Y,
-    );
+    const crest = baker.at([-0.1 + variant * 0.18, -0.05, 0], originX, originY);
     baker.graphics.fillRect(crest.x - 8, crest.y, 16, 2);
   }
-
-  baker.finish(key, TILE_WIDTH, TILE_HEIGHT);
 }
 
 /**
  * Roads are drawn as a centre block plus one arm per connected neighbour, all
  * in grid space, so junctions line up exactly whatever the mask.
  */
-function bakeRoadTile(baker: Baker, mask: number): void {
+function drawRoadTile(
+  baker: Baker,
+  originX: number,
+  originY: number,
+  mask: number,
+): void {
   const arms: Array<[number, Point3[]]> = [
     // North is -v, which projects up-and-right on screen.
     [1, band(-0.5, -ROAD_HALF, "v")],
@@ -290,33 +320,19 @@ function bakeRoadTile(baker: Baker, mask: number): void {
   ];
 
   // Grass base, so an arm that stops mid-tile blends into the lot beside it.
-  fillFace(baker, TERRAIN_COLORS.ground, 1, diamond(0.5), TILE_ORIGIN_X, TILE_ORIGIN_Y);
+  fillFace(baker, TERRAIN_COLORS.ground, 1, diamond(0.5), originX, originY);
 
-  fillFace(
-    baker,
-    TERRAIN_COLORS.pavement,
-    1,
-    diamond(KERB_HALF),
-    TILE_ORIGIN_X,
-    TILE_ORIGIN_Y,
-  );
+  fillFace(baker, TERRAIN_COLORS.pavement, 1, diamond(KERB_HALF), originX, originY);
   for (const [bit, points] of kerbArms) {
     if (mask & bit) {
-      fillFace(baker, TERRAIN_COLORS.pavement, 1, points, TILE_ORIGIN_X, TILE_ORIGIN_Y);
+      fillFace(baker, TERRAIN_COLORS.pavement, 1, points, originX, originY);
     }
   }
 
-  fillFace(
-    baker,
-    TERRAIN_COLORS.road,
-    1,
-    diamond(ROAD_HALF),
-    TILE_ORIGIN_X,
-    TILE_ORIGIN_Y,
-  );
+  fillFace(baker, TERRAIN_COLORS.road, 1, diamond(ROAD_HALF), originX, originY);
   for (const [bit, points] of arms) {
     if (mask & bit) {
-      fillFace(baker, TERRAIN_COLORS.road, 1, points, TILE_ORIGIN_X, TILE_ORIGIN_Y);
+      fillFace(baker, TERRAIN_COLORS.road, 1, points, originX, originY);
     }
   }
 
@@ -324,21 +340,18 @@ function bakeRoadTile(baker: Baker, mask: number): void {
   const straightUV = mask === (2 | 8);
   const straightVU = mask === (1 | 4);
   if (straightUV || straightVU) {
-    baker.graphics.fillStyle(TERRAIN_COLORS.roadLine, 0.85);
     for (const offset of [-0.28, 0.04]) {
       const from: Point3 = straightUV ? [offset, 0, 0] : [0, offset, 0];
       const to: Point3 = straightUV ? [offset + 0.24, 0, 0] : [0, offset + 0.24, 0];
       baker.graphics.lineStyle(2, TERRAIN_COLORS.roadLine, 0.85);
       baker.graphics.lineBetween(
-        baker.at(from, TILE_ORIGIN_X, TILE_ORIGIN_Y).x,
-        baker.at(from, TILE_ORIGIN_X, TILE_ORIGIN_Y).y,
-        baker.at(to, TILE_ORIGIN_X, TILE_ORIGIN_Y).x,
-        baker.at(to, TILE_ORIGIN_X, TILE_ORIGIN_Y).y,
+        baker.at(from, originX, originY).x,
+        baker.at(from, originX, originY).y,
+        baker.at(to, originX, originY).x,
+        baker.at(to, originX, originY).y,
       );
     }
   }
-
-  baker.finish(roadTextureKey(mask), TILE_WIDTH, TILE_HEIGHT);
 }
 
 /** A rectangular strip in grid space, running along one axis. */
@@ -369,8 +382,8 @@ function bakeHighlight(
   color: number,
   alpha: number,
 ): void {
-  fillFace(baker, color, alpha * 0.4, diamond(0.46), TILE_ORIGIN_X, TILE_ORIGIN_Y);
-  strokeFace(baker, color, alpha, 2, diamond(0.46), TILE_ORIGIN_X, TILE_ORIGIN_Y);
+  fillFace(baker, color, alpha * 0.4, diamond(0.46), HALF_W, HALF_H);
+  strokeFace(baker, color, alpha, 2, diamond(0.46), HALF_W, HALF_H);
   baker.finish(key, TILE_WIDTH, TILE_HEIGHT);
 }
 
