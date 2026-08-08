@@ -16,10 +16,19 @@ export interface PullRequestRef {
   url: string;
 }
 
+export interface IssueRef {
+  number: number;
+  title: string;
+  body: string;
+  author: string;
+  url: string;
+}
+
 export type ReviewEvent = "COMMENT" | "APPROVE" | "REQUEST_CHANGES";
 
 export interface GitHubClient {
   listOpenPullRequests(repoPath: string): Promise<PullRequestRef[]>;
+  listOpenIssues(repoPath: string): Promise<IssueRef[]>;
   postReview(
     repoPath: string,
     number: number,
@@ -38,6 +47,14 @@ interface RawPullRequest {
   url: string;
 }
 
+interface RawIssue {
+  number: number;
+  title: string;
+  body: string | null;
+  author: { login: string } | null;
+  url: string;
+}
+
 /**
  * Split out from GhCliClient so the JSON shape can be tested without
  * shelling out to `gh` -- no network, no auth, just a fixture string.
@@ -51,6 +68,17 @@ export function parsePullRequestListJson(json: string): PullRequestRef[] {
     headSha: row.headRefOid,
     headRef: row.headRefName,
     baseRef: row.baseRefName,
+    url: row.url,
+  }));
+}
+
+export function parseIssueListJson(json: string): IssueRef[] {
+  const rows = JSON.parse(json) as RawIssue[];
+  return rows.map((row) => ({
+    number: row.number,
+    title: row.title,
+    body: row.body ?? "",
+    author: row.author?.login ?? "unknown",
     url: row.url,
   }));
 }
@@ -95,6 +123,34 @@ export function parsePullRequestApiJson(json: string): PullRequestRef[] {
     baseRef: row.base.ref,
     url: row.html_url,
   }));
+}
+
+interface RawApiIssue {
+  number: number;
+  title: string;
+  body: string | null;
+  user: { login: string } | null;
+  html_url: string;
+  /** Present only when the "issue" is actually a pull request. */
+  pull_request?: unknown;
+}
+
+/**
+ * The REST equivalent of parseIssueListJson. GitHub's issues endpoint also
+ * returns pull requests, distinguished only by the presence of a
+ * `pull_request` field, so those are filtered out here.
+ */
+export function parseIssueApiJson(json: string): IssueRef[] {
+  const rows = JSON.parse(json) as RawApiIssue[];
+  return rows
+    .filter((row) => !row.pull_request)
+    .map((row) => ({
+      number: row.number,
+      title: row.title,
+      body: row.body ?? "",
+      author: row.user?.login ?? "ghost",
+      url: row.html_url,
+    }));
 }
 
 /**
@@ -156,6 +212,23 @@ export class GitHubApiClient implements GitHubClient {
     return parsePullRequestApiJson(await response.text());
   }
 
+  async listOpenIssues(repoPath: string): Promise<IssueRef[]> {
+    const slug = await this.slugFor(repoPath);
+    if (!slug) {
+      return [];
+    }
+    const response = await fetch(
+      `https://api.github.com/repos/${slug}/issues?state=open&per_page=100`,
+      { headers: this.headers() },
+    );
+    if (!response.ok) {
+      throw new Error(
+        `GitHub API ${response.status} listing issues for ${slug}`,
+      );
+    }
+    return parseIssueApiJson(await response.text());
+  }
+
   async postReview(
     repoPath: string,
     number: number,
@@ -194,12 +267,32 @@ export class GhCliClient implements GitHubClient {
         "list",
         "--state",
         "open",
+        "--limit",
+        "1000",
         "--json",
         "number,title,author,headRefName,headRefOid,baseRefName,url",
       ],
       { cwd: repoPath },
     );
     return parsePullRequestListJson(stdout);
+  }
+
+  async listOpenIssues(repoPath: string): Promise<IssueRef[]> {
+    const { stdout } = await execFileAsync(
+      "gh",
+      [
+        "issue",
+        "list",
+        "--state",
+        "open",
+        "--limit",
+        "1000",
+        "--json",
+        "number,title,body,author,url",
+      ],
+      { cwd: repoPath },
+    );
+    return parseIssueListJson(stdout);
   }
 
   async postReview(
@@ -218,6 +311,10 @@ export class GhCliClient implements GitHubClient {
 
 export function cityIdFor(pr: Pick<PullRequestRef, "number">): string {
   return `pr-${pr.number}`;
+}
+
+export function issueCityIdFor(issue: Pick<IssueRef, "number">): string {
+  return `issue-${issue.number}`;
 }
 
 export function worktreePath(repoPath: string, cityId: string): string {
@@ -319,6 +416,33 @@ export async function ensureWorktree(
   await execFileAsync("git", ["worktree", "add", "--detach", path, treeish], {
     cwd: repoPath,
   });
+  return path;
+}
+
+/**
+ * Gives an issue its own detached copy of main. Unlike a PR worktree this is
+ * deliberately writable: the mayor can hand the issue to an implementation
+ * agent without altering the primary checkout.
+ */
+export async function ensureMainWorktree(
+  repoPath: string,
+  cityId: string,
+  baseRef = "main",
+): Promise<string> {
+  const path = worktreePath(repoPath, cityId);
+  if (await pathExists(path)) {
+    return path;
+  }
+
+  await execFileAsync("git", ["worktree", "prune"], { cwd: repoPath }).catch(
+    () => {},
+  );
+  await mkdir(dirname(path), { recursive: true });
+  await execFileAsync(
+    "git",
+    ["worktree", "add", "--detach", path, baseRef],
+    { cwd: repoPath },
+  );
   return path;
 }
 
