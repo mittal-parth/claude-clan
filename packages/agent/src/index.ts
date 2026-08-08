@@ -10,8 +10,11 @@ import {
 } from "@anthropic-ai/claude-agent-sdk";
 import type { GameEvent } from "@sudo-city/protocol";
 
+// cityId is stamped by the server, which owns the CityRegistry -- an
+// AgentSessionManager doesn't know which city it belongs to any more than
+// it knows its own sequence number.
 type AgentEvent<Event extends GameEvent = GameEvent> = Event extends GameEvent
-  ? Omit<Event, "id" | "sessionId" | "sequence" | "timestamp">
+  ? Omit<Event, "id" | "cityId" | "sessionId" | "sequence" | "timestamp">
   : never;
 
 interface PendingPermit {

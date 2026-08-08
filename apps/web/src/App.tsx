@@ -446,7 +446,10 @@ export default function App() {
       rescanTimer = setTimeout(() => {
         if (socket.readyState === WebSocket.OPEN) {
           socket.send(
-            JSON.stringify({ type: "world.request" } satisfies MayorCommand),
+            JSON.stringify({
+              type: "world.request",
+              cityId: "main",
+            } satisfies MayorCommand),
           );
         }
       }, RESCAN_DEBOUNCE_MS);
@@ -459,7 +462,9 @@ export default function App() {
       const decoded = ServerMessageSchema.safeParse(
         JSON.parse(String(message.data)) as unknown,
       );
-      if (!decoded.success || decoded.data.kind === "error") {
+      // City roster and diff messages arrive starting in a later step; for
+      // now this client only understands its own game events.
+      if (!decoded.success || decoded.data.kind !== "event") {
         return;
       }
 
@@ -512,7 +517,7 @@ export default function App() {
     if (!nextPrompt) {
       return;
     }
-    send({ type: "session.prompt", prompt: nextPrompt });
+    send({ type: "session.prompt", cityId: "main", prompt: nextPrompt });
     setPrompt("");
   }
 
@@ -640,7 +645,9 @@ export default function App() {
                   <Button
                     type="button"
                     variant="secondary"
-                    onClick={() => send({ type: "session.interrupt" })}
+                    onClick={() =>
+                      send({ type: "session.interrupt", cityId: "main" })
+                    }
                     disabled={connection !== "online"}
                   >
                     Halt
@@ -745,7 +752,7 @@ export default function App() {
           <CommandGroup heading="Mayor">
             <CommandItem
               onSelect={() => {
-                send({ type: "world.request" });
+                send({ type: "world.request", cityId: "main" });
                 setCommandOpen(false);
               }}
             >
@@ -753,7 +760,7 @@ export default function App() {
             </CommandItem>
             <CommandItem
               onSelect={() => {
-                send({ type: "session.interrupt" });
+                send({ type: "session.interrupt", cityId: "main" });
                 setCommandOpen(false);
               }}
             >

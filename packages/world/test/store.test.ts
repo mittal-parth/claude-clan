@@ -24,6 +24,7 @@ describe("SQLiteWorldStore", () => {
     const store = createStore();
     const event: GameEvent = {
       id: "evt_1",
+      cityId: "main",
       sessionId: "session_1",
       sequence: 1,
       timestamp: "2026-08-08T00:00:00.000Z",

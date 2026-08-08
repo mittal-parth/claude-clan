@@ -39,8 +39,10 @@ const store = new SQLiteWorldStore(
   join(targetRepo, ".sudocity", "world.db"),
 );
 const clients = new Set<WebSocket>();
+/** Only "main" exists until the CityRegistry refactor lands. */
+const CITY_ID = "main";
 type EventInput<Event extends GameEvent = GameEvent> = Event extends GameEvent
-  ? Omit<Event, "id" | "sessionId" | "sequence" | "timestamp">
+  ? Omit<Event, "id" | "cityId" | "sessionId" | "sequence" | "timestamp">
   : never;
 
 const fallbackWorld: WorldSnapshot = {
@@ -103,6 +105,7 @@ function createEvent(
   const completedEvent = {
     ...event,
     id: `evt_${currentSequence}`,
+    cityId: CITY_ID,
     sessionId,
     sequence: currentSequence,
     timestamp: new Date().toISOString(),
@@ -241,6 +244,26 @@ app.get("/ws", { websocket: true }, (socket) => {
             message: "This permit is no longer pending.",
           });
         }
+        break;
+      // city.travel/refresh and diff.request are wired up once the
+      // CityRegistry lands; only "main" exists today.
+      case "city.travel":
+        if (decoded.data.cityId !== CITY_ID) {
+          send(socket, {
+            kind: "error",
+            code: "CITY_NOT_FOUND",
+            message: "Only the main city exists right now.",
+          });
+        }
+        break;
+      case "city.refresh":
+        break;
+      case "diff.request":
+        send(socket, {
+          kind: "error",
+          code: "CITY_NOT_FOUND",
+          message: "Diffs are not available until PR cities are wired up.",
+        });
         break;
       default: {
         const exhaustiveCommand: never = decoded.data;
