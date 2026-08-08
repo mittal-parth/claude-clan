@@ -104,12 +104,14 @@ describe("protocol contracts", () => {
       type: "session.prompt",
       prompt: "add an endpoint",
       permissionMode: "auto",
+      contextPaths: ["src/index.ts", "packages/protocol/src/index.ts"],
     });
 
     expect(command).toEqual({
       type: "session.prompt",
       prompt: "add an endpoint",
       permissionMode: "auto",
+      contextPaths: ["src/index.ts", "packages/protocol/src/index.ts"],
     });
 
     const started = GameEventSchema.parse({

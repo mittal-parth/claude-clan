@@ -68,6 +68,11 @@ export class WorldScene extends Phaser.Scene {
   private selectionMarker?: Phaser.GameObjects.Sprite;
   private selectedPath?: string;
   private selectionListener?: (building?: Building) => void;
+  private buildingDragListener?: (building: Building) => void;
+  private pressedBuilding?: Building;
+  private draggingBuilding?: Building;
+  private dragPreview?: Phaser.GameObjects.Sprite;
+  private dragPreviewOffset?: { x: number; y: number };
 
   private dragOrigin?: { x: number; y: number };
   private pressOrigin?: { x: number; y: number };
@@ -104,10 +109,87 @@ export class WorldScene extends Phaser.Scene {
       sky: SKY_DEPTH,
     });
     this.bindCamera();
+    this.events.once("shutdown", () => this.clearDragPreview());
   }
 
   setSelectionListener(listener: (building?: Building) => void): void {
     this.selectionListener = listener;
+  }
+
+  setBuildingDragListener(listener: (building: Building) => void): void {
+    this.buildingDragListener = listener;
+  }
+
+  getBuildingPreviewSource(building: Building): string | undefined {
+    const view = this.views.get(building.path);
+    if (!view) {
+      return undefined;
+    }
+
+    const source = view.sprite.texture.getSourceImage();
+    if (
+      typeof HTMLCanvasElement !== "undefined" &&
+      source instanceof HTMLCanvasElement
+    ) {
+      return source.toDataURL();
+    }
+    if (
+      typeof HTMLImageElement !== "undefined" &&
+      source instanceof HTMLImageElement
+    ) {
+      return source.currentSrc || source.src;
+    }
+    return undefined;
+  }
+
+  cancelBuildingDrag(): void {
+    this.clearDragPreview();
+    this.dragOrigin = undefined;
+    this.pressOrigin = undefined;
+    this.pressedBuilding = undefined;
+    this.draggingBuilding = undefined;
+  }
+
+  private clearDragPreview(): void {
+    this.dragPreview?.destroy();
+    this.dragPreview = undefined;
+    this.dragPreviewOffset = undefined;
+  }
+
+  private beginDragPreview(
+    building: Building,
+    pointer: Phaser.Input.Pointer,
+  ): void {
+    const view = this.views.get(building.path);
+    if (!view) {
+      return;
+    }
+
+    this.clearDragPreview();
+    const pointerWorld = this.cameras.main.getWorldPoint(pointer.x, pointer.y);
+    this.dragPreviewOffset = {
+      x: view.sprite.x - pointerWorld.x,
+      y: view.sprite.y - pointerWorld.y,
+    };
+    this.dragPreview = this.add
+      .sprite(view.sprite.x, view.sprite.y, view.sprite.texture.key)
+      .setOrigin(view.sprite.originX, view.sprite.originY)
+      .setAlpha(0.48)
+      .setDepth(SKY_DEPTH + 1);
+    this.moveDragPreview(pointer);
+  }
+
+  private moveDragPreview(pointer: Phaser.Input.Pointer): void {
+    if (!this.dragPreview) {
+      return;
+    }
+
+    const pointerWorld = this.cameras.main.getWorldPoint(pointer.x, pointer.y);
+    const offset = this.dragPreviewOffset ?? { x: 0, y: 0 };
+    this.dragPreview.setPosition(
+      pointerWorld.x + offset.x,
+      pointerWorld.y + offset.y,
+    );
   }
 
   /** Pan and zoom the camera onto a building, then select it. */
@@ -332,7 +414,7 @@ export class WorldScene extends Phaser.Scene {
     // A tall building is drawn many tiles above the plot it stands on, so
     // picking by tile would make you click empty ground north of the tower.
     // Pixel-perfect hit testing matches what the player actually sees.
-    sprite.setInteractive({ pixelPerfect: true });
+    sprite.setInteractive({ pixelPerfect: true, useHandCursor: true });
     sprite.setData("path", building.path);
 
     this.ambient?.attachSmoke(sprite, baked.smokeAnchor);
@@ -431,13 +513,19 @@ export class WorldScene extends Phaser.Scene {
     this.input.on("pointerdown", (pointer: Phaser.Input.Pointer) => {
       this.dragOrigin = { x: pointer.x, y: pointer.y };
       this.pressOrigin = { x: pointer.x, y: pointer.y };
+      this.pressedBuilding = this.buildingAtPointer(pointer);
+      this.draggingBuilding = undefined;
     });
 
     const endDrag = (pointer: Phaser.Input.Pointer): void => {
       const press = this.pressOrigin;
+      const draggedBuilding = this.draggingBuilding;
+      this.clearDragPreview();
       this.dragOrigin = undefined;
       this.pressOrigin = undefined;
-      if (!press) {
+      this.pressedBuilding = undefined;
+      this.draggingBuilding = undefined;
+      if (!press || draggedBuilding) {
         return;
       }
       const travel = Phaser.Math.Distance.Between(
@@ -461,6 +549,27 @@ export class WorldScene extends Phaser.Scene {
 
     this.input.on("pointermove", (pointer: Phaser.Input.Pointer) => {
       if (pointer.isDown && this.dragOrigin) {
+        const travel = Phaser.Math.Distance.Between(
+          this.pressOrigin?.x ?? pointer.x,
+          this.pressOrigin?.y ?? pointer.y,
+          pointer.x,
+          pointer.y,
+        );
+        if (
+          !this.draggingBuilding &&
+          this.pressedBuilding &&
+          travel > CLICK_SLOP
+        ) {
+          this.draggingBuilding = this.pressedBuilding;
+          this.beginDragPreview(this.draggingBuilding, pointer);
+          this.buildingDragListener?.(this.draggingBuilding);
+        }
+        if (this.draggingBuilding) {
+          this.moveDragPreview(pointer);
+          this.moveHighlight(pointer);
+          return;
+        }
+
         const camera = this.cameras.main;
         camera.scrollX -= (pointer.x - this.dragOrigin.x) / camera.zoom;
         camera.scrollY -= (pointer.y - this.dragOrigin.y) / camera.zoom;
