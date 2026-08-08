@@ -2,8 +2,10 @@ import {
   GameEventSchema,
   ServerMessageSchema,
   type Building,
+  type EffortLevel,
   type GameEvent,
   type MayorCommand,
+  type PermissionMode,
   type WorldSnapshot,
 } from "@sudo-city/protocol";
 import { FormEvent, useEffect, useRef, useState } from "react";
@@ -37,8 +39,22 @@ import {
 } from "@/components/ui/8bit/resizable";
 import {
   GameCanvas,
+  type CanvasDragPreview,
   type CanvasFileChange,
+  type CanvasPointerPosition,
+  type GameCanvasHandle,
 } from "./components/GameCanvas";
+import CrewSelectDialog, {
+  type CrewSelection,
+} from "./components/CrewSelectDialog";
+import {
+  DEFAULT_CREW_ID,
+  DEFAULT_EFFORT,
+  crewSpriteUrl,
+  effortLabel,
+  findCrewByModel,
+  getCrewMember,
+} from "./crew/catalog";
 
 type ConnectionState = "connecting" | "online" | "offline";
 
@@ -61,6 +77,16 @@ const RESCAN_DEBOUNCE_MS = 1_200;
  * that takes 40ms still leaves something up long enough to notice.
  */
 const CONSTRUCTION_GRACE_MS = 6_000;
+
+function fileBasename(path: string): string {
+  const slash = path.lastIndexOf("/");
+  return slash >= 0 ? path.slice(slash + 1) : path;
+}
+
+function fileDirname(path: string): string {
+  const slash = path.lastIndexOf("/");
+  return slash >= 0 ? path.slice(0, slash) : ".";
+}
 
 const EVENTS_STORAGE_KEY = "sudo-city:events";
 
@@ -92,12 +118,22 @@ function statusLabel(status: ConnectionState): string {
   }
 }
 
+function permissionModeLabel(mode: PermissionMode): string {
+  return mode === "auto" ? "Don’t Disturb Mayor" : "Mayor approval";
+}
+
+function sessionCrewLabel(model: string, effort: EffortLevel): string {
+  const crew = findCrewByModel(model);
+  const name = crew?.name ?? model;
+  return `${name} · ${effortLabel(effort)} effort`;
+}
+
 function eventLabel(event: GameEvent): string {
   switch (event.type) {
     case "world.ready":
       return `${event.snapshot.buildings.length} structures surveyed`;
     case "session.started":
-      return `${event.model} crew dispatched`;
+      return `${sessionCrewLabel(event.model, event.effort)} · ${permissionModeLabel(event.permissionMode)}`;
     case "session.message":
       return `${event.role}: ${event.text}`;
     case "session.usage":
@@ -156,7 +192,7 @@ function timelineContentForEvent(
       };
     case "session.started":
       return {
-        label: `${event.model} crew dispatched`,
+        label: `${sessionCrewLabel(event.model, event.effort)} · ${permissionModeLabel(event.permissionMode)}`,
       };
     case "subagent.changed":
       return {
@@ -414,12 +450,43 @@ function findPendingPermit(
   return undefined;
 }
 
+function pointIsInside(
+  element: HTMLElement | null,
+  position: CanvasPointerPosition,
+): boolean {
+  if (!element) {
+    return false;
+  }
+
+  const bounds = element.getBoundingClientRect();
+  return (
+    position.clientX >= bounds.left &&
+    position.clientX <= bounds.right &&
+    position.clientY >= bounds.top &&
+    position.clientY <= bounds.bottom
+  );
+}
+
 export default function App() {
   const { sfxEnabled, toggleSfx } = useAudio();
   const socketRef = useRef<WebSocket>(null);
+  const canvasRef = useRef<GameCanvasHandle>(null);
+  const orderFormRef = useRef<HTMLFormElement>(null);
   const [connection, setConnection] =
     useState<ConnectionState>("connecting");
   const [events, setEvents] = useState<GameEvent[]>(loadStoredEvents);
+  const [draggingBuilding, setDraggingBuilding] = useState<Building>();
+  const [dragPreview, setDragPreview] = useState<CanvasDragPreview>();
+  const [dragPosition, setDragPosition] =
+    useState<CanvasPointerPosition>();
+  const [contextPaths, setContextPaths] = useState<string[]>([]);
+  const [orderPermissionMode, setOrderPermissionMode] =
+    useState<PermissionMode>("default");
+  const [crewSelection, setCrewSelection] = useState<CrewSelection>({
+    crewId: DEFAULT_CREW_ID,
+    effort: DEFAULT_EFFORT,
+  });
+  const [crewDialogOpen, setCrewDialogOpen] = useState(false);
   const [prompt, setPrompt] = useState("");
   const [commandOpen, setCommandOpen] = useState(false);
   const [world, setWorld] = useState<WorldSnapshot>();
@@ -441,10 +508,26 @@ export default function App() {
     .slice()
     .reverse()
     .find((event) => event.type === "session.started");
-  const agentModel =
+  const selectedCrew = getCrewMember(crewSelection.crewId);
+  const activeCrew =
     startedSession?.type === "session.started"
-      ? startedSession.model
-      : "Engineer";
+      ? (findCrewByModel(startedSession.model) ?? selectedCrew)
+      : selectedCrew;
+  const activeEffort =
+    startedSession?.type === "session.started"
+      ? startedSession.effort
+      : crewSelection.effort;
+  const crewAvatarSrc = crewSpriteUrl(activeCrew.id, activeEffort);
+  const crewDialogueTitle = activeCrew.name;
+  const crewDialogueDescription = pendingPermit
+    ? "Awaiting permit stamp"
+    : `${effortLabel(activeEffort)} effort · ${activeCrew.title}`;
+  const showDragPreview = Boolean(
+    draggingBuilding &&
+      dragPreview?.src &&
+      dragPosition &&
+      pointIsInside(orderFormRef.current, dragPosition),
+  );
 
   useEffect(() => {
     const socket = new WebSocket(websocketUrl);
@@ -536,18 +619,78 @@ export default function App() {
     }
   }
 
+  function handleBuildingDragStart(
+    building: Building,
+    preview?: CanvasDragPreview,
+  ): void {
+    setDraggingBuilding(building);
+    setDragPreview(preview);
+    setDragPosition(undefined);
+  }
+
+  function handleBuildingDragMove(position: CanvasPointerPosition): void {
+    setDragPosition(position);
+  }
+
+  function handleBuildingDrop(
+    building: Building,
+    position: CanvasPointerPosition,
+  ): void {
+    setDraggingBuilding(undefined);
+    setDragPreview(undefined);
+    setDragPosition(undefined);
+    if (!pointIsInside(orderFormRef.current, position)) {
+      return;
+    }
+
+    setContextPaths((current) =>
+      current.includes(building.path) ? current : [...current, building.path],
+    );
+  }
+
+  function removeContextPath(path: string): void {
+    setContextPaths((current) => current.filter((item) => item !== path));
+  }
+
   function submitPrompt(event: FormEvent<HTMLFormElement>): void {
     event.preventDefault();
     const nextPrompt = prompt.trim();
     if (!nextPrompt) {
       return;
     }
-    send({ type: "session.prompt", prompt: nextPrompt });
+    send({
+      type: "session.prompt",
+      prompt: nextPrompt,
+      permissionMode: orderPermissionMode,
+      model: getCrewMember(crewSelection.crewId).model,
+      effort: crewSelection.effort,
+      contextPaths,
+    });
     setPrompt("");
+    setContextPaths([]);
+    setOrderPermissionMode("default");
   }
 
   return (
     <div className="flex h-dvh min-h-[36rem] flex-col bg-background">
+      {showDragPreview && dragPreview && dragPosition ? (
+        <img
+          src={dragPreview.src}
+          alt=""
+          aria-hidden="true"
+          draggable={false}
+          className="pointer-events-none fixed z-[100] select-none"
+          style={{
+            left: dragPosition.clientX,
+            top: dragPosition.clientY,
+            transform: "translate(-50%, -100%)",
+            opacity: 0.48,
+            width: 32,
+            height: "auto",
+            imageRendering: "pixelated",
+          }}
+        />
+      ) : null}
       <header className="flex items-center justify-between border-b-4 border-foreground px-4 py-3 dark:border-ring">
         <div className="flex min-w-0 items-center gap-3">
           <span className="retro flex size-9 shrink-0 items-center justify-center border-2 border-foreground bg-primary text-xs text-primary-foreground dark:border-ring">
@@ -590,10 +733,14 @@ export default function App() {
           <div className="flex h-full min-h-0 flex-col">
             <section className="relative min-h-0 flex-1 overflow-hidden">
               <GameCanvas
+                ref={canvasRef}
                 world={world}
                 fileChange={fileChange}
                 buildingPaths={buildingPaths}
                 onSelectBuilding={setSelected}
+                onBuildingDragStart={handleBuildingDragStart}
+                onBuildingDragMove={handleBuildingDragMove}
+                onBuildingDragEnd={handleBuildingDrop}
               />
               <div className="pointer-events-none absolute left-4 top-4 border-2 border-foreground bg-card px-3 py-2 dark:border-ring">
                 <span className="retro block text-[10px] text-primary">
@@ -643,7 +790,10 @@ export default function App() {
             </section>
 
             <form
-              className="border-t-4 border-foreground p-4 dark:border-ring"
+              ref={orderFormRef}
+              className={`border-t-4 border-foreground p-4 dark:border-ring ${
+                draggingBuilding ? "bg-primary/5 ring-2 ring-inset ring-primary" : ""
+              }`}
               onSubmit={submitPrompt}
             >
               <label
@@ -652,6 +802,102 @@ export default function App() {
               >
                 Mayor&apos;s order
               </label>
+              {draggingBuilding ? (
+                <div className="mb-2 border-2 border-primary bg-primary/10 px-2 py-1">
+                  <span className="retro text-[8px] text-primary">
+                    Drop to attach context:
+                  </span>{" "}
+                  <code className="break-all text-[9px] text-foreground">
+                    {draggingBuilding.path}
+                  </code>
+                </div>
+              ) : null}
+              {contextPaths.length > 0 ? (
+                <div className="mb-3 flex flex-wrap items-center gap-1.5">
+                  <span className="retro text-[8px] text-muted-foreground">
+                    Context:
+                  </span>
+                  {contextPaths.map((path) => (
+                    <button
+                      key={path}
+                      type="button"
+                      title={`Remove ${path} from context`}
+                      onClick={() => removeContextPath(path)}
+                      className="retro inline-flex max-w-full items-center gap-1 border border-foreground bg-card px-2 py-1 text-left text-[8px] text-foreground hover:bg-primary hover:text-primary-foreground dark:border-ring"
+                    >
+                      <span className="max-w-[16rem] truncate">{path}</span>
+                      <span aria-hidden="true">×</span>
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+              <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                <span className="retro text-[9px] text-muted-foreground">
+                  Crew for this order
+                </span>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  disabled={connection !== "online"}
+                  onClick={() => setCrewDialogOpen(true)}
+                  className="retro h-auto justify-start gap-2 px-2 py-1.5 text-left"
+                >
+                  <img
+                    src={crewSpriteUrl(crewSelection.crewId, crewSelection.effort)}
+                    alt=""
+                    className="size-8 object-contain [image-rendering:pixelated]"
+                  />
+                  <span className="min-w-0">
+                    <span className="block text-[8px] text-primary">
+                      {getCrewMember(crewSelection.crewId).name}
+                    </span>
+                    <span className="block text-[8px] text-muted-foreground">
+                      {effortLabel(crewSelection.effort)} effort
+                    </span>
+                  </span>
+                </Button>
+              </div>
+              <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                <span className="retro text-[9px] text-muted-foreground">
+                  Permission&apos;s for this order
+                </span>
+                <div
+                  className="grid grid-cols-2 gap-1"
+                  role="group"
+                  aria-label="Permission mode for this order"
+                >
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant={
+                      orderPermissionMode === "default" ? "default" : "outline"
+                    }
+                    aria-pressed={orderPermissionMode === "default"}
+                    onClick={() => setOrderPermissionMode("default")}
+                    disabled={connection !== "online"}
+                  >
+                    Ask Mayor
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant={
+                      orderPermissionMode === "auto" ? "default" : "outline"
+                    }
+                    aria-pressed={orderPermissionMode === "auto"}
+                    onClick={() => setOrderPermissionMode("auto")}
+                    disabled={connection !== "online"}
+                  >
+                    Don&apos;t Disturb
+                  </Button>
+                </div>
+              </div>
+              <p className="retro mb-2 text-[8px] text-muted-foreground">
+                {orderPermissionMode === "auto"
+                  ? "Auto mode applies only to this order."
+                  : "Default mode pauses for your approval."}
+              </p>
               <div className="flex flex-col gap-2 sm:flex-row">
                 <Input
                   id="mayor-prompt"
@@ -694,13 +940,10 @@ export default function App() {
             <div className="flex min-h-0 flex-1 flex-col gap-4 p-4">
               <div className="shrink-0 space-y-4">
                 <Dialogue
-                  avatarFallback={agentModel.slice(0, 1).toUpperCase()}
-                  title={agentModel}
-                  description={
-                    pendingPermit
-                      ? "Awaiting permit stamp"
-                      : "Awaiting orders"
-                  }
+                  avatarSrc={crewAvatarSrc}
+                  avatarFallback={activeCrew.name.slice(0, 1)}
+                  title={crewDialogueTitle}
+                  description={crewDialogueDescription}
                 />
 
                 <div className="space-y-3">
@@ -769,10 +1012,37 @@ export default function App() {
         </ResizablePanel>
       </ResizablePanelGroup>
 
+      <CrewSelectDialog
+        open={crewDialogOpen}
+        onOpenChange={setCrewDialogOpen}
+        value={crewSelection}
+        onConfirm={setCrewSelection}
+      />
+
       <CommandDialog open={commandOpen} onOpenChange={setCommandOpen}>
-        <CommandInput placeholder="Type a mayor command..." />
+        <CommandInput placeholder="Search files or mayor commands..." />
         <CommandList>
-          <CommandEmpty>No command found.</CommandEmpty>
+          <CommandEmpty>No file or command found.</CommandEmpty>
+          {world?.buildings.length ? (
+            <CommandGroup heading="Files">
+              {world.buildings.map((building) => (
+                <CommandItem
+                  key={building.path}
+                  value={building.path}
+                  onSelect={() => {
+                    canvasRef.current?.focusBuilding(building.path);
+                    setSelected(building);
+                    setCommandOpen(false);
+                  }}
+                >
+                  <span className="truncate">{fileBasename(building.path)}</span>
+                  <span className="text-muted-foreground ml-2 truncate text-xs">
+                    {fileDirname(building.path)}
+                  </span>
+                </CommandItem>
+              ))}
+            </CommandGroup>
+          ) : null}
           <CommandGroup heading="Mayor">
             <CommandItem
               onSelect={() => {

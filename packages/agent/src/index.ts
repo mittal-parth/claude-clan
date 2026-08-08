@@ -8,7 +8,11 @@ import {
   type SDKAssistantMessage,
   type SDKMessage,
 } from "@anthropic-ai/claude-agent-sdk";
-import type { GameEvent } from "@sudo-city/protocol";
+import type {
+  EffortLevel,
+  GameEvent,
+  PermissionMode as MayorPermissionMode,
+} from "@sudo-city/protocol";
 
 type AgentEvent<Event extends GameEvent = GameEvent> = Event extends GameEvent
   ? Omit<Event, "id" | "sessionId" | "sequence" | "timestamp">
@@ -25,7 +29,14 @@ export interface AgentSessionOptions {
   maxBudgetUsd?: number;
   maxTurns?: number;
   model?: string;
+  effort?: EffortLevel;
   safeTools?: readonly string[];
+}
+
+export interface AgentStartOptions {
+  model?: string;
+  effort?: EffortLevel;
+  contextPaths?: readonly string[];
 }
 
 export class AgentSessionManager {
@@ -35,6 +46,7 @@ export class AgentSessionManager {
   private readonly maxTurns: number;
   private readonly safeTools: Set<string>;
   private model: string;
+  private effort: EffortLevel;
   private activeQuery?: Query;
   private abortController?: AbortController;
   private readonly pendingPermits = new Map<string, PendingPermit>();
@@ -45,26 +57,44 @@ export class AgentSessionManager {
     this.maxBudgetUsd = options.maxBudgetUsd ?? 1;
     this.maxTurns = options.maxTurns ?? 12;
     this.model = options.model ?? "sonnet";
+    this.effort = options.effort ?? "high";
     this.safeTools = new Set(options.safeTools ?? ["Read", "Glob", "Grep"]);
   }
 
-  async start(prompt: string): Promise<void> {
+  async start(
+    prompt: string,
+    permissionMode: MayorPermissionMode = "default",
+    options?: AgentStartOptions,
+  ): Promise<void> {
     await this.interrupt();
+    const contextPaths = options?.contextPaths ?? [];
+    if (options?.model) {
+      this.model = options.model;
+    }
+    if (options?.effort) {
+      this.effort = options.effort;
+    }
     const abortController = new AbortController();
     this.abortController = abortController;
-    this.emit({ type: "session.started", model: this.model });
+    this.emit({
+      type: "session.started",
+      model: this.model,
+      effort: this.effort,
+      permissionMode,
+    });
 
     const activeQuery = query({
-      prompt,
+      prompt: promptWithContext(prompt, contextPaths),
       options: {
         abortController,
         canUseTool: this.canUseTool,
         cwd: this.cwd,
+        effort: this.effort,
         hooks: this.createHooks(),
         maxBudgetUsd: this.maxBudgetUsd,
         maxTurns: this.maxTurns,
         model: this.model,
-        permissionMode: "default",
+        permissionMode,
       },
     });
     this.activeQuery = activeQuery;
@@ -335,6 +365,22 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function normalizePath(path: string): string {
   return sep === "/" ? path : path.split(sep).join("/");
+}
+
+function promptWithContext(
+  prompt: string,
+  contextPaths: readonly string[],
+): string {
+  if (contextPaths.length === 0) {
+    return prompt;
+  }
+
+  return [
+    prompt,
+    "",
+    "Read these repository files before acting; they were attached as context for this order:",
+    ...contextPaths.map((path) => `- ${path}`),
+  ].join("\n");
 }
 
 export type { AgentEvent };
