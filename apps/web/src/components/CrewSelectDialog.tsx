@@ -1,7 +1,7 @@
 import type { EffortLevel } from "@sudo-city/protocol";
 import { useEffect, useState } from "react";
 
-import { Button } from "@/components/ui/8bit/button";
+import HudButton from "@/components/hud/HudButton";
 import {
   CREW_MEMBERS,
   EFFORT_LEVELS,
@@ -140,17 +140,17 @@ export default function CrewSelectDialog({
                 aria-label="Thinking effort"
               >
                 {EFFORT_LEVELS.map((effort) => (
-                  <Button
+                  <HudButton
                     key={effort}
                     type="button"
                     size="sm"
-                    variant={draftEffort === effort ? "default" : "outline"}
+                    variant={draftEffort === effort ? "primary" : "outline"}
                     aria-pressed={draftEffort === effort}
                     onClick={() => setDraftEffort(effort)}
                     className="retro text-[8px]"
                   >
                     {effortLabel(effort)}
-                  </Button>
+                  </HudButton>
                 ))}
               </div>
               <p className="retro text-[8px] leading-relaxed text-muted-foreground">
@@ -161,16 +161,16 @@ export default function CrewSelectDialog({
         </div>
 
         <DialogFooter className="border-t-4 border-foreground px-5 py-4 dark:border-ring">
-          <Button
+          <HudButton
             type="button"
             variant="outline"
             onClick={() => onOpenChange(false)}
           >
             Cancel
-          </Button>
-          <Button type="button" onClick={handleConfirm}>
+          </HudButton>
+          <HudButton type="button" onClick={handleConfirm}>
             Confirm crew
-          </Button>
+          </HudButton>
         </DialogFooter>
       </DialogContent>
     </Dialog>
