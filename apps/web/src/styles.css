@@ -1,0 +1,79 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+}
+
+:root {
+  --radius: 0rem;
+  --background: oklch(0.16 0.025 235);
+  --foreground: oklch(0.94 0.02 88);
+  --card: oklch(0.21 0.035 230);
+  --card-foreground: oklch(0.94 0.02 88);
+  --popover: oklch(0.21 0.035 230);
+  --popover-foreground: oklch(0.94 0.02 88);
+  --primary: oklch(0.79 0.16 74);
+  --primary-foreground: oklch(0.11 0.025 240);
+  --secondary: oklch(0.28 0.04 225);
+  --secondary-foreground: oklch(0.94 0.02 88);
+  --muted: oklch(0.28 0.04 225);
+  --muted-foreground: oklch(0.72 0.03 225);
+  --accent: oklch(0.79 0.16 74);
+  --accent-foreground: oklch(0.11 0.025 240);
+  --destructive: oklch(0.65 0.2 25);
+  --border: oklch(0.39 0.045 225);
+  --input: oklch(0.39 0.045 225);
+  --ring: oklch(0.84 0.15 87);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+
+  html,
+  body,
+  #root {
+    @apply min-h-full;
+  }
+
+  html,
+  body {
+    overflow-x: clip;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+  }
+}
+
+.game-canvas {
+  @apply absolute inset-0;
+}
+
+.game-canvas canvas {
+  display: block;
+}
