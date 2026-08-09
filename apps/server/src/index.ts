@@ -66,6 +66,7 @@ interface ClientState {
   workspaceKey: string;
   cityId: CityId;
   userId?: number;
+  githubToken?: string;
 }
 
 /** Every connected socket, keyed by itself, carrying which workspace+city it's currently viewing. */
@@ -241,7 +242,7 @@ app.get("/ws", { websocket: true }, (socket) => {
         send(socket, { kind: "error", code: "AUTH_INVALID", message: "Session is invalid or expired." });
         return;
       }
-      clients.set(socket, { ...state, userId: session.userId });
+      clients.set(socket, { ...state, userId: session.userId, githubToken: session.tokens.accessToken });
       return;
     }
 
@@ -268,7 +269,26 @@ app.get("/ws", { websocket: true }, (socket) => {
       // repo.select must be paired with a prior /api/repos/import (which
       // has the bearer token) unless the workspace is already open.
       const existingKey = `${currentState.userId}:${data.repoKey}`;
-      const existing = workspaces.get(existingKey);
+      let existing = workspaces.get(existingKey);
+      
+      if (!existing && currentState.githubToken && authContext) {
+        const clonePath = await authContext.db.clonePathFor(currentState.userId, data.repoKey);
+        if (clonePath) {
+          try {
+            existing = await workspaces.openUserRepo({
+              userId: currentState.userId,
+              owner,
+              name,
+              repoKey: data.repoKey,
+              githubToken: currentState.githubToken,
+            });
+          } catch {
+            // A missing directory or failed clone is handled by falling through
+            // to the REPO_NOT_IMPORTED error below.
+          }
+        }
+      }
+
       if (!existing) {
         send(socket, {
           kind: "error",
