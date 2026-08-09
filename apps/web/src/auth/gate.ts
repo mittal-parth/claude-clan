@@ -89,3 +89,63 @@ export function writeStoredToken(token: string | undefined): void {
     // A failed write only costs persistence across a reload, not the session.
   }
 }
+
+export interface StoredActiveRepo {
+  repoKey: string;
+  userId?: number;
+}
+
+const ACTIVE_REPO_STORAGE_KEY = "sudo-city:active-repo";
+
+export function readStoredActiveRepo(): StoredActiveRepo | undefined {
+  if (typeof localStorage === "undefined") {
+    return undefined;
+  }
+  try {
+    const raw = localStorage.getItem(ACTIVE_REPO_STORAGE_KEY);
+    if (!raw) return undefined;
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== "object") return undefined;
+    const value = parsed as { repoKey?: unknown; userId?: unknown };
+    if (typeof value.repoKey !== "string" || value.repoKey.length === 0) {
+      return undefined;
+    }
+    if (value.userId !== undefined && typeof value.userId !== "number") {
+      return undefined;
+    }
+    return {
+      repoKey: value.repoKey,
+      ...(value.userId === undefined ? {} : { userId: value.userId }),
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+export function writeStoredActiveRepo(repoKey: string, userId?: number): void {
+  if (typeof localStorage === "undefined") {
+    return;
+  }
+  try {
+    localStorage.setItem(
+      ACTIVE_REPO_STORAGE_KEY,
+      JSON.stringify({
+        repoKey,
+        ...(userId === undefined ? {} : { userId }),
+      }),
+    );
+  } catch {
+    // A failed write only costs persistence across a reload.
+  }
+}
+
+export function clearStoredActiveRepo(): void {
+  if (typeof localStorage === "undefined") {
+    return;
+  }
+  try {
+    localStorage.removeItem(ACTIVE_REPO_STORAGE_KEY);
+  } catch {
+    // Storage may be disabled; the in-memory navigation still works.
+  }
+}
