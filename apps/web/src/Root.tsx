@@ -1,5 +1,5 @@
 import type { RepoSummary } from "@sudo-city/protocol";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import App from "./App";
 import { fetchRepos, fetchSession, importRepo, logout } from "@/auth/api";
 import {
@@ -11,14 +11,11 @@ import {
 } from "@/auth/gate";
 import LoginScreen from "@/components/LoginScreen";
 import RepoPicker from "@/components/RepoPicker";
+import type { CanvasAirportTravel } from "@/components/GameCanvas";
 
 const DEMO_REPO_KEY = "demo";
 
-/**
- * Owns the login/repo-picker/city gate that App itself has no notion of --
- * App only ever knows "which repo is active right now", never how the
- * visitor got there.
- */
+/** Owns login, repository selection, and the cross-repository airport journey. */
 export default function Root() {
   const [token, setToken] = useState<string | undefined>(() => readStoredToken());
   const [session, setSession] = useState<AuthSession>({ authenticated: false });
@@ -28,12 +25,24 @@ export default function Root() {
   const [reposLoading, setReposLoading] = useState(false);
   const [reposError, setReposError] = useState<string>();
   const [importing, setImporting] = useState<{ repoKey: string; startedAt: number }>();
-  const [switchOpen, setSwitchOpen] = useState(false);
+  const [airportOpen, setAirportOpen] = useState(false);
+  const [airportTravel, setAirportTravel] = useState<CanvasAirportTravel>();
+  const [airportArrival, setAirportArrival] = useState<CanvasAirportTravel>();
+  const [repoConnectionGeneration, setRepoConnectionGeneration] = useState(0);
 
-  // The GitHub callback hands the session id back in the URL fragment,
-  // never a query string, so it never reaches Render's access logs on that
-  // hop -- read it once, persist it to sessionStorage, then strip the hash
-  // so a reload or a copied URL doesn't re-carry it.
+  const activeRepoRef = useRef(activeRepoKey);
+  const airportTravelRef = useRef(airportTravel);
+  const airportArrivalRef = useRef(airportArrival);
+  const importingRef = useRef(importing);
+  const importRequestRef = useRef(0);
+  const authEpochRef = useRef(1);
+  const repoLoadRequestRef = useRef(0);
+  const repoLoadInFlightRef = useRef<number | undefined>(undefined);
+  activeRepoRef.current = activeRepoKey;
+  airportTravelRef.current = airportTravel;
+  airportArrivalRef.current = airportArrival;
+  importingRef.current = importing;
+
   useEffect(() => {
     const { token: hashToken, error } = readSessionFromHash(window.location.hash);
     if (hashToken) {
@@ -49,24 +58,19 @@ export default function Root() {
     let cancelled = false;
     fetchSession(token)
       .then((result) => {
-        if (cancelled) {
-          return;
+        if (!cancelled) {
+          setSession(
+            result.authenticated && result.user
+              ? { authenticated: true, user: result.user }
+              : { authenticated: false },
+          );
         }
-        setSession(
-          result.authenticated && result.user
-            ? { authenticated: true, user: result.user }
-            : { authenticated: false },
-        );
       })
       .catch(() => {
-        if (!cancelled) {
-          setSession({ authenticated: false });
-        }
+        if (!cancelled) setSession({ authenticated: false });
       })
       .finally(() => {
-        if (!cancelled) {
-          setSessionChecked(true);
-        }
+        if (!cancelled) setSessionChecked(true);
       });
     return () => {
       cancelled = true;
@@ -74,68 +78,126 @@ export default function Root() {
   }, [token]);
 
   const loadRepos = useCallback(() => {
-    if (!token) {
-      return;
-    }
+    if (!token || repoLoadInFlightRef.current !== undefined) return;
+    const requestId = ++repoLoadRequestRef.current;
+    const authEpoch = authEpochRef.current;
+    repoLoadInFlightRef.current = requestId;
+    const current = (): boolean =>
+      requestId === repoLoadRequestRef.current && authEpoch === authEpochRef.current;
     setReposLoading(true);
     setReposError(undefined);
     fetchRepos(token)
-      .then(setRepos)
-      .catch((error: unknown) => {
-        setReposError(error instanceof Error ? error.message : "Failed to load repositories");
+      .then((nextRepos) => {
+        if (current()) setRepos(nextRepos);
       })
-      .finally(() => setReposLoading(false));
+      .catch((error: unknown) => {
+        if (current()) {
+          setReposError(error instanceof Error ? error.message : "Failed to load repositories");
+        }
+      })
+      .finally(() => {
+        if (repoLoadInFlightRef.current === requestId) {
+          repoLoadInFlightRef.current = undefined;
+        }
+        if (current()) setReposLoading(false);
+      });
   }, [token]);
 
   useEffect(() => {
-    if (session.authenticated) {
-      loadRepos();
-    }
+    if (session.authenticated) loadRepos();
   }, [session.authenticated, loadRepos]);
 
+  function beginAirportJourney(destinationKey: string): void {
+    const sourceKey = activeRepoRef.current;
+    if (!sourceKey) {
+      activeRepoRef.current = destinationKey;
+      setActiveRepoKey(destinationKey);
+      return;
+    }
+    if (
+      destinationKey === sourceKey ||
+      airportTravelRef.current ||
+      airportArrivalRef.current
+    ) {
+      setAirportOpen(false);
+      return;
+    }
+
+    const travel: CanvasAirportTravel = {
+      id: `${sourceKey}:${destinationKey}:${Date.now()}`,
+      sourceKey,
+      destinationKey,
+    };
+    airportTravelRef.current = travel;
+    setAirportOpen(false);
+    setAirportTravel(travel);
+  }
+
   function handleImportOrSelect(repo: RepoSummary): void {
+    if (airportTravelRef.current || airportArrivalRef.current || importingRef.current) return;
     if (repo.imported) {
-      setActiveRepoKey(repo.key);
-      setSwitchOpen(false);
+      beginAirportJourney(repo.key);
       return;
     }
-    if (!token) {
-      return;
-    }
-    setImporting({ repoKey: repo.key, startedAt: Date.now() });
+    if (!token) return;
+
+    const requestId = ++importRequestRef.current;
+    const pending = { repoKey: repo.key, startedAt: Date.now() };
+    importingRef.current = pending;
+    setImporting(pending);
+    setReposError(undefined);
+
+    const authEpoch = authEpochRef.current;
+    const importIsCurrent = (): boolean =>
+      requestId === importRequestRef.current && authEpoch === authEpochRef.current;
     importRepo(token, repo.fullName)
       .then(() => {
+        if (!importIsCurrent()) return;
+        repoLoadRequestRef.current += 1;
+        repoLoadInFlightRef.current = undefined;
+        importingRef.current = undefined;
+        setImporting(undefined);
         setRepos((current) =>
-          current.map((entry) => (entry.key === repo.key ? { ...entry, imported: true } : entry)),
+          current.map((entry) =>
+            entry.key === repo.key ? { ...entry, imported: true } : entry,
+          ),
         );
-        setActiveRepoKey(repo.key);
-        setSwitchOpen(false);
+        beginAirportJourney(repo.key);
       })
       .catch((error: unknown) => {
+        if (!importIsCurrent()) return;
+        importingRef.current = undefined;
+        setImporting(undefined);
         setReposError(error instanceof Error ? error.message : "Import failed");
-      })
-      .finally(() => setImporting(undefined));
+      });
   }
 
   function handleLogout(): void {
+    authEpochRef.current += 1;
+    importRequestRef.current += 1;
+    repoLoadRequestRef.current += 1;
+    repoLoadInFlightRef.current = undefined;
+    airportTravelRef.current = undefined;
+    airportArrivalRef.current = undefined;
+    importingRef.current = undefined;
     void logout(token);
     writeStoredToken(undefined);
     setToken(undefined);
     setSession({ authenticated: false });
     setActiveRepoKey(undefined);
     setRepos([]);
+    setImporting(undefined);
+    setAirportOpen(false);
+    setAirportTravel(undefined);
+    setAirportArrival(undefined);
   }
 
-  if (!sessionChecked) {
-    return null;
-  }
+  if (!sessionChecked) return null;
 
   const gate = gateFor(session, activeRepoKey);
-
   if (gate === "login") {
     return <LoginScreen onSeeDemo={() => setActiveRepoKey(DEMO_REPO_KEY)} />;
   }
-
   if (gate === "repos") {
     return (
       <RepoPicker
@@ -156,9 +218,31 @@ export default function Root() {
         activeRepoKey={activeRepoKey!}
         sessionToken={session.authenticated ? token : undefined}
         user={session.authenticated ? session.user : undefined}
-        onSwitchRepo={() => {
+        repoConnectionGeneration={repoConnectionGeneration}
+        airportTravel={airportTravel}
+        airportArrival={airportArrival}
+        onOpenAirport={() => {
+          if (airportTravelRef.current || airportArrivalRef.current) return;
           loadRepos();
-          setSwitchOpen(true);
+          setAirportOpen(true);
+        }}
+        onAirportTravelCovered={(travel) => {
+          if (airportTravelRef.current?.id !== travel.id) return;
+          airportTravelRef.current = undefined;
+          airportArrivalRef.current = travel;
+          activeRepoRef.current = travel.destinationKey;
+          setAirportTravel(undefined);
+          setAirportArrival(travel);
+          setActiveRepoKey(travel.destinationKey);
+        }}
+        onAirportArrivalComplete={(travel) => {
+          if (airportArrivalRef.current?.id !== travel.id) return;
+          airportArrivalRef.current = undefined;
+          setAirportArrival(undefined);
+        }}
+        onRetryAirportArrival={(travel) => {
+          if (airportArrivalRef.current?.id !== travel.id) return;
+          setRepoConnectionGeneration((generation) => generation + 1);
         }}
         onLogout={handleLogout}
         onSignIn={() => setActiveRepoKey(undefined)}
@@ -170,14 +254,27 @@ export default function Root() {
           error={reposError}
           importing={importing}
           onImportOrSelect={handleImportOrSelect}
-          onSeeDemo={() => {
-            setActiveRepoKey(DEMO_REPO_KEY);
-            setSwitchOpen(false);
-          }}
+          onSeeDemo={() => beginAirportJourney(DEMO_REPO_KEY)}
           onRefresh={loadRepos}
-          dialog={{ open: switchOpen, onOpenChange: setSwitchOpen }}
+          activeRepoKey={activeRepoKey}
+          dialog={{ open: airportOpen, onOpenChange: setAirportOpen }}
         />
-      ) : null}
+      ) : (
+        <RepoPicker
+          repos={[]}
+          loading={false}
+          onImportOrSelect={() => undefined}
+          onSeeDemo={() => setAirportOpen(false)}
+          onRefresh={() => undefined}
+          activeRepoKey={activeRepoKey}
+          authenticationRequired
+          onSignIn={() => {
+            setAirportOpen(false);
+            setActiveRepoKey(undefined);
+          }}
+          dialog={{ open: airportOpen, onOpenChange: setAirportOpen }}
+        />
+      )}
     </>
   );
 }
