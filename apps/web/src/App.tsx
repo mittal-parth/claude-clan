@@ -67,6 +67,9 @@ import CrewSelectDialog, {
   type CrewSelection,
 } from "./components/CrewSelectDialog";
 import IssueShopDialog from "@/components/IssueShopDialog";
+import ShareCityCard from "./components/ShareCityCard";
+import ShareCityModal from "./components/ShareCityModal";
+import ShutterFlash from "./components/ShutterFlash";
 import {
   DEFAULT_CREW_ID,
   DEFAULT_EFFORT,
@@ -802,6 +805,26 @@ export default function App({
   const [airportArrivalDelayed, setAirportArrivalDelayed] = useState(false);
   const [initialRevealReady, setInitialRevealReady] = useState(false);
   const [initialRevealComplete, setInitialRevealComplete] = useState(false);
+  const [shareModalOpen, setShareModalOpen] = useState(false);
+  const [screenshotUrl, setScreenshotUrl] = useState<string | null>(null);
+  const [isCapturingSnapshot, setIsCapturingSnapshot] = useState(false);
+  const [isFlashingShutter, setIsFlashingShutter] = useState(false);
+
+  const handleTakeSnapshot = async () => {
+    if (isCapturingSnapshot || !canvasRef.current) return;
+    setIsCapturingSnapshot(true);
+    setIsFlashingShutter(true);
+
+    try {
+      const url = await canvasRef.current.captureScreenshot();
+      setScreenshotUrl(url);
+      setShareModalOpen(true);
+    } catch (err) {
+      console.error("Failed to capture screenshot:", err);
+    } finally {
+      setIsCapturingSnapshot(false);
+    }
+  };
 
   const events = eventsByCity[activeCityId] ?? [];
   const world = worldRepoKey === activeRepoKey ? worldByCity[activeCityId] : undefined;
@@ -1461,6 +1484,12 @@ export default function App({
             </div>
           </HudWindow>
 
+          {/* Share Repo City card right under City scan card */}
+          <ShareCityCard
+            onSnapshot={handleTakeSnapshot}
+            isCapturing={isCapturingSnapshot}
+          />
+
           <div className="flex-1" />
 
           {selected ? (
@@ -2036,6 +2065,18 @@ export default function App({
           </CommandGroup>
         </CommandList>
       </CommandDialog>
+
+      <ShutterFlash
+        isFlashing={isFlashingShutter}
+        onAnimationEnd={() => setIsFlashingShutter(false)}
+      />
+
+      <ShareCityModal
+        isOpen={shareModalOpen}
+        onClose={() => setShareModalOpen(false)}
+        screenshotUrl={screenshotUrl}
+        activeRepoKey={activeRepoKey}
+      />
     </div>
   );
 }

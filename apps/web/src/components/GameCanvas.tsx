@@ -44,6 +44,7 @@ export interface CanvasDragPreview {
 
 export type GameCanvasHandle = {
   focusBuilding: (path: string) => boolean;
+  captureScreenshot: () => Promise<string>;
 };
 
 interface GameCanvasProps {
@@ -290,6 +291,49 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
       () => ({
         focusBuilding: (path: string) =>
           sceneRef.current?.focusBuilding(path) ?? false,
+        captureScreenshot: (): Promise<string> => {
+          return new Promise((resolve, reject) => {
+            const game = gameRef.current;
+            if (!game) {
+              reject(new Error("Game canvas not ready"));
+              return;
+            }
+
+            try {
+              const renderer = game.renderer as any;
+              if (renderer && typeof renderer.snapshot === "function") {
+                renderer.snapshot((img: HTMLImageElement | string) => {
+                  if (typeof img === "string") {
+                    resolve(img);
+                  } else if (img && img.src) {
+                    resolve(img.src);
+                  } else {
+                    const canvas = game.canvas || hostRef.current?.querySelector("canvas");
+                    if (canvas) {
+                      resolve(canvas.toDataURL("image/png"));
+                    } else {
+                      reject(new Error("Failed to extract canvas data"));
+                    }
+                  }
+                });
+              } else {
+                const canvas = game.canvas || hostRef.current?.querySelector("canvas");
+                if (canvas) {
+                  resolve(canvas.toDataURL("image/png"));
+                } else {
+                  reject(new Error("Canvas element not found"));
+                }
+              }
+            } catch (err) {
+              const canvas = game.canvas || hostRef.current?.querySelector("canvas");
+              if (canvas) {
+                resolve(canvas.toDataURL("image/png"));
+              } else {
+                reject(err);
+              }
+            }
+          });
+        },
       }),
       [],
     );
@@ -332,6 +376,7 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
           antialias: false,
           pixelArt: true,
           roundPixels: true,
+          preserveDrawingBuffer: true,
         },
       });
       gameRef.current = game;
