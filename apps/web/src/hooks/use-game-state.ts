@@ -52,6 +52,13 @@ import {
 } from "@/crew/catalog";
 import { type CrewSelection } from "@/components/CrewSelectDialog";
 import { demoGatedAction, type DemoAction } from "@/auth/demo-gate";
+import {
+  trackBuildingInspected,
+  trackMayorOrderDispatched,
+  trackMayorOrderHalted,
+  trackPermitDecision,
+  trackRepoSelected,
+} from "@/lib/analytics";
 
 /** Everything on duty until the server's policy message says otherwise. */
 const UNRESTRICTED_POLICY: CrewPolicy = {
@@ -515,6 +522,26 @@ export function useGameState({
     if (socketRef.current?.readyState === WebSocket.OPEN) {
       socketRef.current.send(JSON.stringify(command));
     }
+    if (command.type === "session.prompt") {
+      trackMayorOrderDispatched({
+        promptLength: command.prompt.length,
+        effort: command.effort,
+        model: command.model,
+        repoKey: activeRepoKey,
+        cityId: command.cityId,
+      });
+    } else if (command.type === "session.interrupt") {
+      trackMayorOrderHalted({ repoKey: activeRepoKey, cityId: command.cityId });
+    } else if (command.type === "permit.resolve") {
+      trackPermitDecision({
+        decision: command.decision,
+        toolCallId: command.toolCallId,
+        repoKey: activeRepoKey,
+        cityId: activeCityId,
+      });
+    } else if (command.type === "repo.select") {
+      trackRepoSelected({ repoKey: command.repoKey });
+    }
   }
 
   function clearTransmissions(): void {
@@ -680,6 +707,13 @@ export function useGameState({
   function selectBuilding(building?: Building): void {
     setSelected(building);
     setDiff(undefined);
+    if (building) {
+      trackBuildingInspected({
+        path: building.path,
+        fileType: building.language,
+        lines: building.loc,
+      });
+    }
     const change = building
       ? overlay?.files.find((file) => file.path === building.path)
       : undefined;
