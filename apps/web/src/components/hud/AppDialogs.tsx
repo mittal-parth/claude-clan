@@ -2,6 +2,7 @@ import IssueShopDialog from "../IssueShopDialog";
 import PrShopDialog from "../PrShopDialog";
 import WorktreeShopDialog from "../WorktreeShopDialog";
 import CrewSelectDialog from "@/components/CrewSelectDialog";
+import { trackCrewChanged } from "@/lib/analytics";
 import SignInDialog from "@/components/SignInDialog";
 import {
   CommandDialog,
@@ -92,7 +93,12 @@ export function AppDialogs({ state, activeRepoKey }: AppDialogsProps) {
         onOpenChange={setCrewDialogOpen}
         value={crewSelection}
         policy={state.crewPolicy}
-        onConfirm={setCrewSelection}
+        onConfirm={(selection) => {
+          if (selection.crewId !== crewSelection.crewId) {
+            trackCrewChanged({ model: selection.crewId, prevModel: crewSelection.crewId, repoKey: activeRepoKey });
+          }
+          setCrewSelection(selection);
+        }}
       />
 
       <SignInDialog

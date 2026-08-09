@@ -9,6 +9,7 @@ import { AppHud } from "@/components/hud/AppHud";
 import { AppDialogs } from "@/components/hud/AppDialogs";
 import { crewSpriteUrl } from "@/crew/catalog";
 import type { BillboardRepo, BillboardTarget } from "@/game/layouts/billboards";
+import { trackIssueShopOpened } from "@/lib/analytics";
 
 export interface AppProps {
   /** "demo", or an owner/name repo key the signed-in user imported. */
@@ -161,6 +162,7 @@ export default function App(props: AppProps) {
         onIssueShopClick={() => {
           state.setSelected(undefined);
           state.setDiff(undefined);
+          trackIssueShopOpened();
           state.setIssueShopOpen(true);
         }}
         onBillboardClick={openBillboardTarget}

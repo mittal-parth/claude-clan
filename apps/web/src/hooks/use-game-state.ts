@@ -59,6 +59,11 @@ import {
   trackPermitDecision,
   trackRepoSelected,
   trackIssueTaken,
+  trackCitySnapshotTaken,
+  trackCityConnected,
+  trackCityConnectionFailed,
+  trackCommandPaletteOpened,
+  trackFastTravelInitiated,
 } from "@/lib/analytics";
 
 /** Everything on duty until the server's policy message says otherwise. */
@@ -162,6 +167,7 @@ export function useGameState({
     if (isCapturingSnapshot || !canvasRef.current) return;
     setIsCapturingSnapshot(true);
     setIsFlashingShutter(true);
+    trackCitySnapshotTaken({ repoKey: activeRepoKey, cityId: activeCityId });
 
     try {
       const url = await canvasRef.current.captureScreenshot();
@@ -287,6 +293,7 @@ export function useGameState({
         attempt = 0;
         setReconnectAttempt(0);
         setConnection("online");
+        trackCityConnected({ repoKey: activeRepoKey, cityId: activeCityId });
 
         function sendRepoSelect(): void {
           if (torndown || socket !== ws) return;
@@ -342,9 +349,13 @@ export function useGameState({
           RECONNECT_BASE_DELAY_MS * 2 ** (attempt - 1),
           RECONNECT_MAX_DELAY_MS,
         );
+        trackCityConnectionFailed({ repoKey: activeRepoKey, cityId: activeCityId, error: "Connection closed" });
         reconnectTimer = setTimeout(connect, delay);
       });
-      ws.addEventListener("error", () => ws.close());
+      ws.addEventListener("error", () => {
+        trackCityConnectionFailed({ repoKey: activeRepoKey, cityId: activeCityId, error: "WebSocket error" });
+        ws.close();
+      });
       ws.addEventListener("message", (message) => {
         if (torndown || socket !== ws) return;
         const decoded = ServerMessageSchema.safeParse(
@@ -508,7 +519,10 @@ export function useGameState({
     const onKeyDown = (event: KeyboardEvent): void => {
       if (event.key === "k" && (event.metaKey || event.ctrlKey)) {
         event.preventDefault();
-        setCommandOpen((open) => !open);
+        setCommandOpen((open) => {
+          if (!open) trackCommandPaletteOpened();
+          return !open;
+        });
       }
     };
     document.addEventListener("keydown", onKeyDown);
@@ -574,6 +588,7 @@ export function useGameState({
     if (blockedByDemoGate({ action: "travel", cityId })) {
       return;
     }
+    trackFastTravelInitiated({ destinationCityId: cityId });
     setActiveCityId(cityId);
     setSelected(undefined);
     setDiff(undefined);
