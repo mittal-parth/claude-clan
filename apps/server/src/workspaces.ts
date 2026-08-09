@@ -6,8 +6,8 @@ import { cloneRepo } from "./clone.js";
 import { Workspace } from "./workspace.js";
 
 const DEMO_KEY = "demo";
-const GLOBAL_WORKSPACE_CAP = 6;
-const PER_USER_WORKSPACE_CAP = 2;
+const GLOBAL_WORKSPACE_CAP = 80;
+const PER_USER_WORKSPACE_CAP = 4;
 
 export interface WorkspaceEventSink {
   onEvent: (workspaceKey: string, cityId: CityId, event: GameEvent) => void;
