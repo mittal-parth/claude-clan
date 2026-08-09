@@ -20,6 +20,7 @@ import {
   trackPageView,
   trackRepoImported,
   trackRepoSelected,
+  trackLogout,
 } from "@/lib/analytics";
 
 const DEMO_REPO_KEY = "demo";
@@ -272,6 +273,7 @@ export default function Root() {
   }
 
   function handleLogout(): void {
+    trackLogout();
     authEpochRef.current += 1;
     importRequestRef.current += 1;
     repoLoadRequestRef.current += 1;
