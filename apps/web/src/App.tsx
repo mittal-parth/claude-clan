@@ -661,6 +661,7 @@ export default function App({
   const [issueBeingFixed, setIssueBeingFixed] = useState<Issue>();
   const [airportArrivalDelayed, setAirportArrivalDelayed] = useState(false);
   const [initialRevealReady, setInitialRevealReady] = useState(false);
+  const [initialRevealComplete, setInitialRevealComplete] = useState(false);
 
   const events = eventsByCity[activeCityId] ?? [];
   const world = worldRepoKey === activeRepoKey ? worldByCity[activeCityId] : undefined;
@@ -677,6 +678,7 @@ export default function App({
       return;
     }
 
+    setInitialRevealComplete(false);
     return () => {
       if (initialRevealTimerRef.current !== undefined) {
         clearTimeout(initialRevealTimerRef.current);
@@ -693,8 +695,9 @@ export default function App({
     initialRevealReadyCallbackRef.current?.();
     initialRevealTimerRef.current = setTimeout(() => {
       initialRevealTimerRef.current = undefined;
+      setInitialRevealComplete(true);
       initialRevealCompleteCallbackRef.current?.();
-    }, 900);
+    }, 1_100);
   }
   const activeCity = cities.find((city) => city.id === activeCityId);
   const selectedChange = selected
@@ -1097,6 +1100,7 @@ export default function App({
       className={cn(
         "hud-root",
         loginBackground && "hud-root--login-background",
+        initialRevealComplete && "hud-root--reveal-complete",
         initialReveal && !initialRevealReady && "hud-root--handoff-loading",
         initialReveal && initialRevealReady && "hud-root--initializing",
         initialReveal && initialRevealReady && world && "hud-root--revealing",

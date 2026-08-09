@@ -918,6 +918,10 @@
   }
 }
 
+.hud-root--reveal-complete .hud-window {
+  animation: none;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .hud-window__reveal,
   .hud-window__toggle svg {
