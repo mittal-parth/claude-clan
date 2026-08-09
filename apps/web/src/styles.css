@@ -912,6 +912,22 @@
   }
 }
 
+@keyframes shutter-flash {
+  0% {
+    opacity: 0.95;
+  }
+  25% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+.animate-shutter-flash {
+  animation: shutter-flash 380ms ease-out forwards;
+}
+
 @media (prefers-reduced-motion: no-preference) {
   .hud-window {
     animation: hud-rise 420ms var(--hud-ease) both;

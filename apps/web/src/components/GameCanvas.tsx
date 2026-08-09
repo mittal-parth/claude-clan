@@ -44,6 +44,7 @@ export interface CanvasDragPreview {
 
 export type GameCanvasHandle = {
   focusBuilding: (path: string) => boolean;
+  captureScreenshot: () => Promise<string>;
 };
 
 interface GameCanvasProps {
@@ -290,6 +291,57 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
       () => ({
         focusBuilding: (path: string) =>
           sceneRef.current?.focusBuilding(path) ?? false,
+        captureScreenshot: (): Promise<string> => {
+          return new Promise((resolve, reject) => {
+            const game = gameRef.current;
+            const scene = sceneRef.current;
+            if (!game || !scene) {
+              reject(new Error("Game canvas not ready"));
+              return;
+            }
+
+            try {
+              // 1. Save user's current camera state
+              const camera = scene.cameras.main;
+              const savedScrollX = camera.scrollX;
+              const savedScrollY = camera.scrollY;
+              const savedZoom = camera.zoom;
+              const savedZoomTarget = (scene as any).zoomTarget;
+
+              // 2. Center and fit camera to the full city island
+              scene.fitCamera();
+
+              const restoreCamera = () => {
+                camera.setZoom(savedZoom);
+                camera.scrollX = savedScrollX;
+                camera.scrollY = savedScrollY;
+                if (savedZoomTarget !== undefined) {
+                  (scene as any).zoomTarget = savedZoomTarget;
+                }
+              };
+
+              // 3. Wait for the game loop to render a frame with the new camera state
+              game.events.once("postrender", () => {
+                try {
+                  const canvas = game.canvas || hostRef.current?.querySelector("canvas");
+                  if (canvas) {
+                    const dataUrl = canvas.toDataURL("image/png");
+                    restoreCamera();
+                    resolve(dataUrl);
+                  } else {
+                    restoreCamera();
+                    reject(new Error("Canvas element not found"));
+                  }
+                } catch (err) {
+                  restoreCamera();
+                  reject(err);
+                }
+              });
+            } catch (err) {
+              reject(err);
+            }
+          });
+        },
       }),
       [],
     );
@@ -332,6 +384,7 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
           antialias: false,
           pixelArt: true,
           roundPixels: true,
+          preserveDrawingBuffer: true,
         },
       });
       gameRef.current = game;
