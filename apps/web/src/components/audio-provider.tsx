@@ -10,6 +10,7 @@ import {
 } from "react";
 
 import { readSfxEnabled, SFX_STORAGE_KEY } from "@/lib/audio-preferences";
+import { trackAudioToggled } from "@/lib/analytics";
 
 const THEME_TRACK_URL = "/audio/theme.mp3";
 const THEME_VOLUME = 0.25;
@@ -31,6 +32,7 @@ export function AudioProvider({ children }: { children: ReactNode }) {
   const setSfxEnabled = useCallback((enabled: boolean) => {
     setSfxEnabledState(enabled);
     localStorage.setItem(SFX_STORAGE_KEY, String(enabled));
+    trackAudioToggled({ enabled });
   }, []);
 
   const toggleSfx = useCallback(() => {

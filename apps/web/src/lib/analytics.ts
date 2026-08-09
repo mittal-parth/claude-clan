@@ -112,3 +112,68 @@ export function trackBuildingInspected(properties: { path: string; fileType?: st
 export function trackIssueTaken(properties: { issueNumber: number; repoKey?: string; cityId?: string }): void {
   trackEvent("issue_taken", properties);
 }
+
+/** Track when a user takes a snapshot of their city. */
+export function trackCitySnapshotTaken(properties: { repoKey?: string; cityId?: string }): void {
+  trackEvent("city_snapshot_taken", properties);
+}
+
+/** Track when a user shares their city snapshot to social media. */
+export function trackCityShared(properties: { platform: "twitter" | "linkedin" | "copy" | "download"; repoKey?: string; cityId?: string }): void {
+  trackEvent("city_shared", properties);
+}
+
+/** Track when a user toggles the audio theme. */
+export function trackAudioToggled(properties: { enabled: boolean }): void {
+  trackEvent("audio_toggled", properties);
+}
+
+/** Track when a user changes their active agent crew. */
+export function trackCrewChanged(properties: { model: string; prevModel?: string; repoKey?: string }): void {
+  trackEvent("crew_changed", properties);
+}
+
+/** Track when a WebSocket connection to a city succeeds. */
+export function trackCityConnected(properties: { repoKey?: string; cityId: string }): void {
+  trackEvent("city_connected", properties);
+}
+
+/** Track when a WebSocket connection to a city fails or disconnects unexpectedly. */
+export function trackCityConnectionFailed(properties: { repoKey?: string; cityId: string; error?: string }): void {
+  trackEvent("city_connection_failed", properties);
+}
+
+/** Track when a user initiates the login flow. */
+export function trackLoginStarted(): void {
+  trackEvent("login_started");
+}
+
+/** Track when a user logs out. */
+export function trackLogout(): void {
+  trackEvent("user_logged_out");
+}
+
+/** Track when a user begins the unauthenticated demo. */
+export function trackDemoStarted(): void {
+  trackEvent("demo_started");
+}
+
+/** Track when the command palette is opened. */
+export function trackCommandPaletteOpened(): void {
+  trackEvent("command_palette_opened");
+}
+
+/** Track when the issue shop is opened. */
+export function trackIssueShopOpened(): void {
+  trackEvent("issue_shop_opened");
+}
+
+/** Track when the user hits refresh on the repo list. */
+export function trackRepoListRefreshed(): void {
+  trackEvent("repo_list_refreshed");
+}
+
+/** Track when the user initiates fast travel to a different city. */
+export function trackFastTravelInitiated(properties: { destinationCityId: string }): void {
+  trackEvent("fast_travel_initiated", properties);
+}
