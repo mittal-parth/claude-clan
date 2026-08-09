@@ -12,7 +12,17 @@ import {
   type WorldSnapshot,
 } from "@sudo-city/protocol";
 import { FormEvent, useEffect, useRef, useState } from "react";
-import { Command, ShieldAlert, Volume2, VolumeX, X } from "lucide-react";
+import {
+  Command,
+  LogOut,
+  Plane,
+  RefreshCw,
+  ShieldAlert,
+  Volume2,
+  VolumeX,
+  X,
+} from "lucide-react";
+import type { AuthUser } from "@/auth/gate";
 import { useAudio } from "@/components/audio-provider";
 import { Markdown } from "@/components/markdown";
 import { ConstructionTracker } from "@/lib/construction-tracker";
@@ -47,6 +57,7 @@ import {
   GameCanvas,
   type CanvasDragPreview,
   type CanvasFileChange,
+  type CanvasAirportTravel,
   type CanvasPointerPosition,
   type CanvasTravelRequest,
   type GameCanvasHandle,
@@ -79,6 +90,14 @@ const RESCAN_DEBOUNCE_MS = 1_200;
 const EVENTS_STORAGE_PREFIX = "sudo-city:events:";
 /** The full quest log for a city; generous since each city keeps its own. */
 const EVENTS_PER_CITY_CAP = 200;
+
+/** Two repos can both have a "pr-42" city, so the transcript key is namespaced by repo, not just city id. */
+function eventsStorageKey(repoKey: string, cityId: string): string {
+  return `${EVENTS_STORAGE_PREFIX}${repoKey}:${cityId}`;
+}
+
+const RECONNECT_BASE_DELAY_MS = 1_000;
+const RECONNECT_MAX_DELAY_MS = 15_000;
 
 function promptForIssue(issue: Issue): string {
   return [
@@ -155,9 +174,9 @@ function colorWithAlpha(color: number, alpha: number): string {
     .padStart(2, "0")}`;
 }
 
-function loadStoredEvents(cityId: string): GameEvent[] {
+function loadStoredEvents(repoKey: string, cityId: string): GameEvent[] {
   try {
-    const raw = localStorage.getItem(EVENTS_STORAGE_PREFIX + cityId);
+    const raw = localStorage.getItem(eventsStorageKey(repoKey, cityId));
     if (!raw) return [];
     const parsed = JSON.parse(raw) as unknown[];
     return parsed.filter(
@@ -176,14 +195,18 @@ function cityLabel(city: CitySummary): string {
   return city.kind === "main" ? "main" : city.title;
 }
 
-function statusLabel(status: ConnectionState): string {
+function statusLabel(status: ConnectionState, reconnectAttempt: number): string {
   switch (status) {
     case "connecting":
       return "Linking";
     case "online":
       return "Live";
     case "offline":
-      return "Offline";
+      // A free-tier server dyno spinning back up looks identical to a
+      // dropped connection from the client's side -- reconnectAttempt only
+      // climbs once a retry is already scheduled, so this reads as
+      // deliberate progress rather than a stuck error.
+      return reconnectAttempt > 0 ? "Waking the city…" : "Offline";
     default: {
       const exhaustiveStatus: never = status;
       return exhaustiveStatus;
@@ -675,22 +698,73 @@ function pointIsInside(
   );
 }
 
-export default function App() {
+export interface AppProps {
+  /** "demo", or an owner/name repo key the signed-in user imported. */
+  activeRepoKey: string;
+  /** The sealed session token, sent as the WS's first frame; absent in demo mode. */
+  sessionToken?: string;
+  user?: AuthUser;
+  repoConnectionGeneration: number;
+  /** Keeps the real demo canvas mounted behind the login card. */
+  loginBackground?: boolean;
+  /** Keeps the city visually staged while the login cover hands off to it. */
+  initialReveal?: boolean;
+  onInitialRevealReady?: () => void;
+  onInitialRevealComplete?: () => void;
+  airportTravel?: CanvasAirportTravel;
+  airportArrival?: CanvasAirportTravel;
+  onOpenAirport: () => void;
+  onAirportTravelCovered: (travel: CanvasAirportTravel) => void;
+  onAirportArrivalComplete: (travel: CanvasAirportTravel) => void;
+  onRetryAirportArrival: (travel: CanvasAirportTravel) => void;
+  onLogout: () => void;
+  onSignIn: () => void;
+}
+
+export default function App({
+  activeRepoKey,
+  sessionToken,
+  user,
+  repoConnectionGeneration,
+  loginBackground = false,
+  initialReveal = false,
+  onInitialRevealReady,
+  onInitialRevealComplete,
+  airportTravel,
+  airportArrival,
+  onOpenAirport,
+  onAirportTravelCovered,
+  onAirportArrivalComplete,
+  onRetryAirportArrival,
+  onLogout,
+  onSignIn,
+}: AppProps) {
   const { sfxEnabled, toggleSfx } = useAudio();
   const socketRef = useRef<WebSocket>(null);
   const canvasRef = useRef<GameCanvasHandle>(null);
   const orderFormRef = useRef<HTMLFormElement>(null);
+  const initialRevealReadyRef = useRef(false);
+  const initialRevealTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(
+    undefined,
+  );
+  const initialRevealReadyCallbackRef = useRef(onInitialRevealReady);
+  const initialRevealCompleteCallbackRef = useRef(onInitialRevealComplete);
+  initialRevealReadyCallbackRef.current = onInitialRevealReady;
+  initialRevealCompleteCallbackRef.current = onInitialRevealComplete;
   const [connection, setConnection] =
     useState<ConnectionState>("connecting");
+  const [reconnectAttempt, setReconnectAttempt] = useState(0);
   const [cities, setCities] = useState<CitySummary[]>([]);
   const [issues, setIssues] = useState<Issue[]>([]);
   const [activeCityId, setActiveCityId] = useState("main");
   const [eventsByCity, setEventsByCity] = useState<
     Record<string, GameEvent[]>
-  >(() => ({ main: loadStoredEvents("main") }));
+  >(() => ({ main: loadStoredEvents(activeRepoKey, "main") }));
   const [worldByCity, setWorldByCity] = useState<
     Record<string, WorldSnapshot>
   >({});
+  /** Prevents an outgoing repository's cached map from being revealed as an arrival. */
+  const [worldRepoKey, setWorldRepoKey] = useState<string>();
   const [overlayByCity, setOverlayByCity] = useState<
     Record<string, PullRequestOverlay>
   >({});
@@ -724,10 +798,46 @@ export default function App() {
   const [issueTravelRequest, setIssueTravelRequest] =
     useState<CanvasTravelRequest>();
   const [issueBeingFixed, setIssueBeingFixed] = useState<Issue>();
+  const [airportArrivalDelayed, setAirportArrivalDelayed] = useState(false);
+  const [initialRevealReady, setInitialRevealReady] = useState(false);
+  const [initialRevealComplete, setInitialRevealComplete] = useState(false);
 
   const events = eventsByCity[activeCityId] ?? [];
-  const world = worldByCity[activeCityId];
+  const world = worldRepoKey === activeRepoKey ? worldByCity[activeCityId] : undefined;
   const overlay = overlayByCity[activeCityId];
+
+  useEffect(() => {
+    if (!initialReveal) {
+      initialRevealReadyRef.current = false;
+      setInitialRevealReady(false);
+      if (initialRevealTimerRef.current !== undefined) {
+        clearTimeout(initialRevealTimerRef.current);
+        initialRevealTimerRef.current = undefined;
+      }
+      return;
+    }
+
+    setInitialRevealComplete(false);
+    return () => {
+      if (initialRevealTimerRef.current !== undefined) {
+        clearTimeout(initialRevealTimerRef.current);
+        initialRevealTimerRef.current = undefined;
+      }
+    };
+  }, [initialReveal]);
+
+  function notifyInitialRevealReady(): void {
+    if (!initialReveal || initialRevealReadyRef.current) return;
+
+    initialRevealReadyRef.current = true;
+    setInitialRevealReady(true);
+    initialRevealReadyCallbackRef.current?.();
+    initialRevealTimerRef.current = setTimeout(() => {
+      initialRevealTimerRef.current = undefined;
+      setInitialRevealComplete(true);
+      initialRevealCompleteCallbackRef.current?.();
+    }, 1_100);
+  }
   const activeCity = cities.find((city) => city.id === activeCityId);
   const selectedChange = selected
     ? overlay?.files.find((file) => file.path === selected.path)
@@ -792,8 +902,37 @@ export default function App() {
           : "linking";
 
   useEffect(() => {
-    const socket = new WebSocket(websocketUrl);
-    socketRef.current = socket;
+    // A repo switch is a full reconnect: the previous socket was viewing a
+    // different workspace entirely, and every city-keyed piece of state
+    // (cities, issues, worlds, overlays, the active city itself) belongs to
+    // that departing repo, not this one.
+    setCities([]);
+    setIssues([]);
+    setWorldByCity({});
+    setWorldRepoKey(undefined);
+    setOverlayByCity({});
+    setActiveCityId("main");
+    setSelected(undefined);
+    setDiff(undefined);
+    setFileChange(undefined);
+    setBuildingPaths([]);
+    setShipHover(undefined);
+    setShipTravelTargetId(undefined);
+    setIssueShopOpen(false);
+    setIssueTravelRequest(undefined);
+    setIssueBeingFixed(undefined);
+    setDraggingBuilding(undefined);
+    setDragPreview(undefined);
+    setDragPosition(undefined);
+    setContextPaths([]);
+    setEventsByCity({ main: loadStoredEvents(activeRepoKey, "main") });
+    setConnection("connecting");
+    setReconnectAttempt(0);
+
+    let torndown = false;
+    let socket: WebSocket | undefined;
+    let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+    let attempt = 0;
     // Every city rescans on its own schedule -- an edit burst in one city
     // must not delay or coalesce with another city's rescan.
     const rescanTimers: Record<string, ReturnType<typeof setTimeout>> = {};
@@ -802,154 +941,197 @@ export default function App() {
       onChange: setBuildingPaths,
     });
 
-    // The agent edits in bursts; one rescan after the burst settles is enough,
-    // and the scene diffs the result so standing buildings do not flicker.
-    const scheduleRescan = (cityId: string): void => {
-      clearTimeout(rescanTimers[cityId]);
-      rescanTimers[cityId] = setTimeout(() => {
-        if (socket.readyState === WebSocket.OPEN) {
-          socket.send(
-            JSON.stringify({
-              type: "world.request",
-              cityId,
-            } satisfies MayorCommand),
-          );
-        }
-      }, RESCAN_DEBOUNCE_MS);
-    };
-
     function appendEvent(cityId: string, event: GameEvent): void {
       setEventsByCity((current) => {
         const bucket = current[cityId] ?? [];
         return {
           ...current,
-          [cityId]: [
-            ...bucket.slice(-(EVENTS_PER_CITY_CAP - 1)),
-            event,
-          ],
+          [cityId]: [...bucket.slice(-(EVENTS_PER_CITY_CAP - 1)), event],
         };
       });
     }
 
-    socket.addEventListener("open", () => setConnection("online"));
-    socket.addEventListener("close", () => setConnection("offline"));
-    socket.addEventListener("error", () => setConnection("offline"));
-    socket.addEventListener("message", (message) => {
-      const decoded = ServerMessageSchema.safeParse(
-        JSON.parse(String(message.data)) as unknown,
-      );
-      if (!decoded.success) {
+    function connect(): void {
+      if (torndown) {
         return;
       }
+      const ws = new WebSocket(websocketUrl);
+      socket = ws;
+      socketRef.current = ws;
 
-      if (decoded.data.kind === "cities") {
-        setCities(decoded.data.cities);
-        return;
-      }
+      // The agent edits in bursts; one rescan after the burst settles is
+      // enough, and the scene diffs the result so standing buildings don't
+      // flicker.
+      const scheduleRescan = (cityId: string): void => {
+        clearTimeout(rescanTimers[cityId]);
+        rescanTimers[cityId] = setTimeout(() => {
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: "world.request", cityId } satisfies MayorCommand));
+          }
+        }, RESCAN_DEBOUNCE_MS);
+      };
 
-      if (decoded.data.kind === "issues") {
-        setIssues(decoded.data.issues);
-        return;
-      }
-
-      if (decoded.data.kind === "overlay") {
-        const overlay = decoded.data.overlay;
-        setOverlayByCity((current) => ({
-          ...current,
-          [overlay.cityId]: overlay,
-        }));
-        return;
-      }
-
-      if (decoded.data.kind === "diff") {
-        setDiff(decoded.data);
-        return;
-      }
-
-      if (decoded.data.kind === "error") {
-        if (
-          decoded.data.code === "PERMIT_NOT_FOUND" &&
-          decoded.data.toolCallId
-        ) {
-          const toolCallId = decoded.data.toolCallId;
-          setEventsByCity((current) => {
-            for (const [cityId, bucket] of Object.entries(current)) {
-              if (
-                bucket.some(
-                  (event) =>
-                    event.type === "permit.requested" &&
-                    event.toolCallId === toolCallId,
-                )
-              ) {
-                return {
-                  ...current,
-                  [cityId]: [
-                    ...bucket,
-                    createLocalPermitDismissal(cityId, toolCallId, bucket),
-                  ],
-                };
-              }
-            }
-            return current;
-          });
+      ws.addEventListener("open", () => {
+        attempt = 0;
+        setReconnectAttempt(0);
+        setConnection("online");
+        if (sessionToken) {
+          ws.send(JSON.stringify({ type: "session.auth", token: sessionToken } satisfies MayorCommand));
         }
-        return;
-      }
+        ws.send(JSON.stringify({ type: "repo.select", repoKey: activeRepoKey } satisfies MayorCommand));
+      });
+      // Render's free tier spins the dyno down after inactivity, so the
+      // first visit after a quiet period drops the socket -- reconnect with
+      // backoff rather than treating "offline" as final.
+      ws.addEventListener("close", () => {
+        if (torndown) {
+          return;
+        }
+        setConnection("offline");
+        attempt += 1;
+        setReconnectAttempt(attempt);
+        const delay = Math.min(
+          RECONNECT_BASE_DELAY_MS * 2 ** (attempt - 1),
+          RECONNECT_MAX_DELAY_MS,
+        );
+        reconnectTimer = setTimeout(connect, delay);
+      });
+      ws.addEventListener("error", () => ws.close());
+      ws.addEventListener("message", (message) => {
+        if (torndown || socket !== ws) return;
+        const decoded = ServerMessageSchema.safeParse(
+          JSON.parse(String(message.data)) as unknown,
+        );
+        if (!decoded.success) {
+          return;
+        }
 
-      if (decoded.data.kind !== "event") {
-        return;
-      }
+        if (decoded.data.kind === "cities") {
+          setCities(decoded.data.cities);
+          return;
+        }
 
-      const event = decoded.data.event;
-      appendEvent(event.cityId, event);
-      if (event.type === "world.ready") {
-        setWorldByCity((current) => ({
-          ...current,
-          [event.cityId]: event.snapshot,
-        }));
-      }
-      if (event.type === "file.changed") {
-        setFileChange({
-          id: event.id,
-          cityId: event.cityId,
-          path: event.path,
-          change: event.change,
-        });
-        // Covers a change with no tool behind it; a tool-driven one is
-        // already held open by its own hold.
-        sites.start(event.path);
-        scheduleRescan(event.cityId);
-      }
-      // A tool's target is the earliest signal that work has started — the
-      // crane goes up before the file is written, and stays up while the tool
-      // runs. Targets that are not a building path (a shell command, say)
-      // simply match no building.
-      if (event.type === "tool.started" && event.target) {
-        sites.start(event.target, event.toolCallId);
-      }
-      if (event.type === "tool.completed") {
-        sites.finish(event.toolCallId);
-      }
-    });
+        if (decoded.data.kind === "issues") {
+          setIssues(decoded.data.issues);
+          return;
+        }
+
+        if (decoded.data.kind === "error") {
+          if (
+            decoded.data.code === "PERMIT_NOT_FOUND" &&
+            decoded.data.toolCallId
+          ) {
+            const toolCallId = decoded.data.toolCallId;
+            setEventsByCity((current) => {
+              for (const [cityId, bucket] of Object.entries(current)) {
+                if (
+                  bucket.some(
+                    (event) =>
+                      event.type === "permit.requested" &&
+                      event.toolCallId === toolCallId,
+                  )
+                ) {
+                  return {
+                    ...current,
+                    [cityId]: [
+                      ...bucket,
+                      createLocalPermitDismissal(cityId, toolCallId, bucket),
+                    ],
+                  };
+                }
+              }
+              return current;
+            });
+          }
+          return;
+        }
+
+        if (decoded.data.kind === "overlay") {
+          const overlay = decoded.data.overlay;
+          setOverlayByCity((current) => ({
+            ...current,
+            [overlay.cityId]: overlay,
+          }));
+          return;
+        }
+
+        if (decoded.data.kind === "diff") {
+          setDiff(decoded.data);
+          return;
+        }
+
+        if (decoded.data.kind !== "event") {
+          return;
+        }
+
+        const event = decoded.data.event;
+        appendEvent(event.cityId, event);
+        if (event.type === "world.ready") {
+          setWorldByCity((current) => ({
+            ...current,
+            [event.cityId]: event.snapshot,
+          }));
+          setWorldRepoKey(activeRepoKey);
+        }
+        if (event.type === "file.changed") {
+          setFileChange({
+            id: event.id,
+            cityId: event.cityId,
+            path: event.path,
+            change: event.change,
+          });
+          // Covers a change with no tool behind it; a tool-driven one is
+          // already held open by its own hold.
+          sites.start(event.path);
+          scheduleRescan(event.cityId);
+        }
+        // A tool's target is the earliest signal that work has started — the
+        // crane goes up before the file is written, and stays up while the
+        // tool runs. Targets that are not a building path (a shell command,
+        // say) simply match no building.
+        if (event.type === "tool.started" && event.target) {
+          sites.start(event.target, event.toolCallId);
+        }
+        if (event.type === "tool.completed") {
+          sites.finish(event.toolCallId);
+        }
+      });
+    }
+
+    connect();
 
     return () => {
+      torndown = true;
+      clearTimeout(reconnectTimer);
       for (const timer of Object.values(rescanTimers)) {
         clearTimeout(timer);
       }
       sites.dispose();
-      socket.close();
+      socket?.close();
       socketRef.current = null;
     };
-  }, []);
+  }, [activeRepoKey, sessionToken, repoConnectionGeneration]);
+
+  useEffect(() => {
+    setAirportArrivalDelayed(false);
+    if (!airportArrival || world) return;
+    const timer = window.setTimeout(() => setAirportArrivalDelayed(true), 12_000);
+    return () => window.clearTimeout(timer);
+  }, [airportArrival, world]);
 
   useEffect(() => {
     for (const [cityId, bucket] of Object.entries(eventsByCity)) {
-      localStorage.setItem(
-        EVENTS_STORAGE_PREFIX + cityId,
-        JSON.stringify(bucket),
-      );
+      try {
+        localStorage.setItem(eventsStorageKey(activeRepoKey, cityId), JSON.stringify(bucket));
+      } catch {
+        // A world.ready event carries the full building list, so a large
+        // enough repo can blow the quota on its own -- losing the on-disk
+        // transcript for this tick isn't worth crashing the render tree
+        // over (uncaught here, this throw propagates out of the effect and
+        // takes down the whole component with no error boundary to catch it).
+      }
     }
-  }, [eventsByCity]);
+  }, [activeRepoKey, eventsByCity]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
@@ -989,7 +1171,7 @@ export default function App() {
     setSelected(undefined);
     setDiff(undefined);
     setEventsByCity((current) =>
-      cityId in current ? current : { ...current, [cityId]: loadStoredEvents(cityId) },
+      cityId in current ? current : { ...current, [cityId]: loadStoredEvents(activeRepoKey, cityId) },
     );
     send({ type: "city.travel", cityId });
   }
@@ -1002,7 +1184,7 @@ export default function App() {
     setSelected(undefined);
     setDiff(undefined);
     setEventsByCity((current) =>
-      cityId in current ? current : { ...current, [cityId]: loadStoredEvents(cityId) },
+      cityId in current ? current : { ...current, [cityId]: loadStoredEvents(activeRepoKey, cityId) },
     );
     send({ type: "city.travel", cityId });
   }
@@ -1091,7 +1273,16 @@ export default function App() {
     setOrderPermissionMode("default");
   }
   return (
-    <div className="hud-root">
+    <div
+      className={cn(
+        "hud-root",
+        loginBackground && "hud-root--login-background",
+        initialRevealComplete && "hud-root--reveal-complete",
+        initialReveal && !initialRevealReady && "hud-root--handoff-loading",
+        initialReveal && initialRevealReady && "hud-root--initializing",
+        initialReveal && initialRevealReady && world && "hud-root--revealing",
+      )}
+    >
       {showDragPreview && dragPreview && dragPosition ? (
         <img
           src={dragPreview.src}
@@ -1113,7 +1304,11 @@ export default function App() {
       <GameCanvas
         ref={canvasRef}
         cityId={activeCityId}
+        worldKey={activeRepoKey}
         world={world}
+        onInitialWorldReady={
+          initialReveal ? notifyInitialRevealReady : undefined
+        }
         overlay={overlay}
         travelCityId={shipTravelTargetId}
         travelWorld={
@@ -1128,9 +1323,17 @@ export default function App() {
         crewSprite={crewAvatarSrc}
         issues={issues}
         travelRequest={issueTravelRequest}
+        airportTravel={airportTravel}
+        airportArrival={airportArrival}
         onTravelRequest={requestShipTravel}
         onTravelComplete={completeShipTravel}
         onTravelTransitionChange={setShipTransitioning}
+        onAirportTravelCovered={onAirportTravelCovered}
+        onAirportArrivalComplete={onAirportArrivalComplete}
+        onAirportClick={() => {
+          if (!shipTransitioning) onOpenAirport();
+        }}
+        onAirportHover={setShipHover}
         onIssueShopClick={() => {
           setSelected(undefined);
           setDiff(undefined);
@@ -1196,14 +1399,45 @@ export default function App() {
 
       {shipHover ? (
         <div
-          className="retro pointer-events-none absolute z-30 -translate-x-1/2 -translate-y-full whitespace-nowrap border-2 border-foreground bg-card px-2 py-1 text-[10px] text-foreground dark:border-ring"
+          className="pointer-events-none absolute z-30 min-w-max -translate-x-1/2 -translate-y-full border border-white/20 bg-[#081923]/95 px-3 py-2 text-left text-white shadow-xl backdrop-blur-sm"
           style={{ left: shipHover.screenX, top: shipHover.screenY - 12 }}
         >
-          {shipHover.action}
+          <span className="retro block text-[8px] text-amber-200">{shipHover.title}</span>
+          <span className="mt-1 block text-[10px] text-sky-100/65">{shipHover.action}</span>
         </div>
       ) : null}
 
       <div aria-hidden="true" className="hud-vignette" />
+
+      {airportArrival && !world ? (
+        <div className="pointer-events-none absolute inset-x-0 bottom-8 z-40 flex justify-center px-4">
+          <div className="pointer-events-auto flex max-w-md items-center gap-3 border border-sky-100/20 bg-[#081923]/92 px-4 py-3 text-white shadow-2xl backdrop-blur-md">
+            <span className="airport-icon-grid shrink-0">
+              <Plane className="size-4 animate-pulse" aria-hidden="true" />
+            </span>
+            <div className="min-w-0 flex-1">
+              <p className="retro truncate text-[8px] text-amber-200">
+                ARRIVING · {airportArrival.destinationKey}
+              </p>
+              <p className="mt-1 text-[10px] text-sky-100/60">
+                {airportArrivalDelayed
+                  ? "The destination survey is taking longer than expected."
+                  : "Cloud cover holding while the destination city is surveyed…"}
+              </p>
+            </div>
+            {airportArrivalDelayed ? (
+              <HudButton
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={() => onRetryAirportArrival(airportArrival)}
+              >
+                <RefreshCw className="mr-1 size-3" aria-hidden="true" /> retry
+              </HudButton>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
 
       {/* The canvas whiteout owns the screen while a ship is sailing; the
           HUD would otherwise float over clouds describing the city being
@@ -1588,11 +1822,34 @@ export default function App() {
                     connection === "online" && "hud-dot--live",
                   )}
                 />
-                {statusLabel(connection)}
+                {statusLabel(connection, reconnectAttempt)}
               </span>
             }
             actions={
               <>
+                {user ? (
+                  <>
+                    <img
+                      src={user.avatarUrl}
+                      alt={user.login}
+                      title={user.login}
+                      className="size-5 rounded-none border-2 border-foreground dark:border-ring"
+                    />
+                    <button
+                      type="button"
+                      className="hud-icon-button"
+                      aria-label="Sign out"
+                      title="Sign out"
+                      onClick={onLogout}
+                    >
+                      <LogOut className="size-3" aria-hidden="true" />
+                    </button>
+                  </>
+                ) : (
+                  <button type="button" className="hud-pill retro" onClick={onSignIn}>
+                    SIGN IN
+                  </button>
+                )}
                 <button
                   type="button"
                   className="hud-icon-button"
@@ -1630,7 +1887,7 @@ export default function App() {
               </div>
             }
           >
-            <div className="hud-masthead">
+            <div className="hud-masthead justify-between">
               <div className="min-w-0">
                 <h1 className="hud-masthead__name retro">{cityName}</h1>
                 <p className="hud-masthead__sub retro">

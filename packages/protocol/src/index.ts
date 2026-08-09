@@ -108,6 +108,24 @@ export const CitySummarySchema = z.object({
   detail: z.string().optional(),
 });
 
+/** A repo the caller's GitHub App installation(s) grant access to -- `key` (lowercased `owner/name`) namespaces that repo's cities/workspace. */
+export const RepoSummarySchema = z.object({
+  key: z.string().min(1),
+  fullName: z.string().min(1),
+  owner: z.string().min(1),
+  name: z.string().min(1),
+  private: z.boolean(),
+  defaultBranch: z.string().min(1),
+  imported: z.boolean(),
+});
+
+export const RepoStatusPhaseSchema = z.enum([
+  "cloning",
+  "scanning",
+  "ready",
+  "failed",
+]);
+
 export const FileChangeKindSchema = z.enum(["added", "modified", "deleted"]);
 
 // Deleted files are absent from the PR worktree, so they carry main's plot
@@ -242,6 +260,14 @@ export const MayorCommandSchema = z.discriminatedUnion("type", [
     cityId: CityIdSchema,
     path: z.string().min(1),
   }),
+  z.object({
+    type: z.literal("session.auth"),
+    token: z.string().min(1),
+  }),
+  z.object({
+    type: z.literal("repo.select"),
+    repoKey: z.string().min(1),
+  }),
 ]);
 
 export const ServerMessageSchema = z.discriminatedUnion("kind", [
@@ -273,6 +299,18 @@ export const ServerMessageSchema = z.discriminatedUnion("kind", [
     message: z.string().min(1),
     toolCallId: z.string().min(1).optional(),
   }),
+  z.object({
+    kind: z.literal("repos"),
+    repos: z.array(RepoSummarySchema),
+    activeRepoKey: z.string().min(1).optional(),
+  }),
+  z.object({
+    kind: z.literal("repo.status"),
+    repoKey: z.string().min(1),
+    phase: RepoStatusPhaseSchema,
+    percent: z.number().min(0).max(100).optional(),
+    message: z.string().optional(),
+  }),
 ]);
 
 export type EffortLevel = z.infer<typeof EffortLevelSchema>;
@@ -290,6 +328,8 @@ export type MayorCommand = z.infer<typeof MayorCommandSchema>;
 export type PermissionMode = z.infer<typeof PermissionModeSchema>;
 export type Plot = z.infer<typeof PlotSchema>;
 export type PullRequestOverlay = z.infer<typeof PullRequestOverlaySchema>;
+export type RepoStatusPhase = z.infer<typeof RepoStatusPhaseSchema>;
+export type RepoSummary = z.infer<typeof RepoSummarySchema>;
 export type ServerMessage = z.infer<typeof ServerMessageSchema>;
 export type SourceFile = z.infer<typeof SourceFileSchema>;
 export type WorldMap = z.infer<typeof WorldMapSchema>;

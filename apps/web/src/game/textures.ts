@@ -190,6 +190,22 @@ const ISSUE_SHOP_HALF = 1;
  */
 export const ISSUE_SHOP_ANCHOR_Y = ISSUE_SHOP_HALF * TILE_HEIGHT;
 
+/** Cohesive landmark kit for the southwest repository airport. */
+export const AIRPORT_TERMINAL_KEY = "fx:airport-terminal";
+export const AIRPORT_TERMINAL_ANCHOR_Y = 58;
+export const AIRPORT_TOWER_KEY = "fx:airport-tower";
+export const AIRPORT_TOWER_ANCHOR_Y = 16;
+export const AIRPORT_APRON_KEY = "fx:airport-apron";
+export const AIRPORT_TAXIWAY_VERTICAL_KEY = "fx:airport-taxiway-v";
+export const AIRPORT_TAXIWAY_JUNCTION_KEY = "fx:airport-taxiway-junction";
+export const AIRPORT_RUNWAY_TILE_KEY = "fx:airport-runway-tile";
+export const AIRPORT_RUNWAY_THRESHOLD_KEY = "fx:airport-runway-threshold";
+export const AIRPORT_WINDSOCK_KEY = "fx:airport-windsock";
+
+/** Compact commuter aircraft plus a separate shadow for real altitude cues. */
+export const AIRPLANE_KEY = "fx:airplane";
+export const AIRPLANE_SHADOW_KEY = "fx:airplane-shadow";
+
 const GRASS_VARIANTS = TERRAIN_COLORS.grass.length;
 const PARK_VARIANTS = 2;
 const SAND_VARIANTS = 2;
@@ -249,6 +265,16 @@ export function bakeTerrainTextures(scene: Phaser.Scene): void {
   CAR_KEYS.forEach((key, index) => bakeCar(baker, key, index));
   bakeShip(baker);
   bakeIssueShop(baker);
+  bakeAirportApron(baker);
+  bakeAirportTaxiway(baker, AIRPORT_TAXIWAY_VERTICAL_KEY, false);
+  bakeAirportTaxiway(baker, AIRPORT_TAXIWAY_JUNCTION_KEY, true);
+  bakeAirportRunwayTile(baker);
+  bakeAirportRunwayThreshold(baker);
+  bakeAirportTerminal(baker);
+  bakeAirportTower(baker);
+  bakeAirportWindsock(baker);
+  bakeAirplane(baker);
+  bakeAirplaneShadow(baker);
 
   bakeCrane(baker);
   bakeHook(baker);
@@ -906,6 +932,552 @@ function bakeIssueShop(baker: Baker): void {
   drawGithubBadge(baker, originX, originY, badgeZ);
 
   baker.finish(ISSUE_SHOP_KEY, width, height);
+}
+
+/** Airport palette shared by every surface and structure. */
+const AIRPORT = {
+  asphalt: 0x1b2830,
+  asphaltEdge: 0x0d171d,
+  asphaltWear: 0x33434b,
+  concrete: 0x9ba9ad,
+  concreteLight: 0xc2ccce,
+  concreteDark: 0x67777d,
+  ink: 0x10232e,
+  glass: 0x68c9df,
+  glassLight: 0xb7f1f7,
+  glassDark: 0x26748d,
+  gold: 0xf6bd60,
+  goldDark: 0xb9782f,
+  white: 0xf5f7f2,
+  red: 0xf05d68,
+  green: 0x6ee7b7,
+} as const;
+
+function drawAirportLabel(
+  baker: Baker,
+  value: string,
+  x: number,
+  y: number,
+  scale = 2,
+): void {
+  const glyphs: Record<string, readonly string[]> = {
+    C: ["111", "100", "100", "100", "111"],
+    X: ["101", "101", "010", "101", "101"],
+    "0": ["111", "101", "101", "101", "111"],
+    "1": ["010", "110", "010", "010", "111"],
+    "9": ["111", "101", "111", "001", "111"],
+  };
+  const letters = [...value];
+  const width = letters.length * 4 * scale - scale;
+  baker.graphics.fillStyle(AIRPORT.gold, 1);
+  letters.forEach((letter, letterIndex) => {
+    const rows = glyphs[letter] ?? glyphs.C!;
+    rows.forEach((row, rowIndex) => {
+      [...row].forEach((pixel, columnIndex) => {
+        if (pixel === "1") {
+          baker.graphics.fillRect(
+            Math.round(x - width / 2 + letterIndex * 4 * scale + columnIndex * scale),
+            Math.round(y + rowIndex * scale),
+            scale,
+            scale,
+          );
+        }
+      });
+    });
+  });
+}
+
+/** A broad concrete apron makes the terminal, stand and taxi route one campus. */
+function bakeAirportApron(baker: Baker): void {
+  const width = 384;
+  const height = 192;
+  const originX = width / 2;
+  const originY = height / 2;
+  const halfU = 2.25;
+  const halfV = 1.45;
+  const slab: Point3[] = [
+    [-halfU, -halfV, 0],
+    [halfU, -halfV, 0],
+    [halfU, halfV, 0],
+    [-halfU, halfV, 0],
+  ];
+
+  fillFace(
+    baker,
+    TERRAIN_COLORS.shadow,
+    0.24,
+    slab.map(([u, v]) => [u + 0.08, v + 0.12, 0] as Point3),
+    originX,
+    originY,
+  );
+  fillFace(baker, AIRPORT.concrete, 1, slab, originX, originY);
+  strokeFace(baker, AIRPORT.concreteDark, 0.9, 2, slab, originX, originY);
+
+  // Expansion joints make the large slab read as poured concrete rather than
+  // a single flat polygon.
+  baker.graphics.lineStyle(1, AIRPORT.concreteDark, 0.42);
+  for (const u of [-1.45, -0.65, 0.15, 0.95, 1.75]) {
+    const from = baker.at([u, -halfV, 1], originX, originY);
+    const to = baker.at([u, halfV, 1], originX, originY);
+    baker.graphics.lineBetween(from.x, from.y, to.x, to.y);
+  }
+  for (const v of [-0.72, 0.05, 0.82]) {
+    const from = baker.at([-halfU, v, 1], originX, originY);
+    const to = baker.at([halfU, v, 1], originX, originY);
+    baker.graphics.lineBetween(from.x, from.y, to.x, to.y);
+  }
+
+  // Gate stand lead-in and stop bars.
+  baker.graphics.lineStyle(3, AIRPORT.gold, 0.96);
+  const lead = [
+    baker.at([2.1, 0.62, 2], originX, originY),
+    baker.at([0.75, 0.62, 2], originX, originY),
+    baker.at([0.15, 0.18, 2], originX, originY),
+    baker.at([-0.6, 0.18, 2], originX, originY),
+  ];
+  baker.graphics.strokePoints(lead, false);
+  for (const u of [-0.72, -0.54, -0.36]) {
+    const a = baker.at([u, -0.2, 2], originX, originY);
+    const b = baker.at([u, 0.52, 2], originX, originY);
+    baker.graphics.lineBetween(a.x, a.y, b.x, b.y);
+  }
+
+  // Baggage/service lane and pedestrian hatch beside the terminal doors.
+  baker.graphics.lineStyle(2, AIRPORT.white, 0.58);
+  for (let u = -1.9; u < 0.9; u += 0.42) {
+    const a = baker.at([u, -1.12, 2], originX, originY);
+    const b = baker.at([u + 0.2, -0.92, 2], originX, originY);
+    baker.graphics.lineBetween(a.x, a.y, b.x, b.y);
+  }
+  baker.finish(AIRPORT_APRON_KEY, width, height);
+}
+
+function bakeAirportTaxiway(baker: Baker, key: string, junction: boolean): void {
+  const width = 120;
+  const height = 64;
+  const originX = width / 2;
+  const originY = height / 2;
+  // Taxiway slabs that sit on the terminal apron use the same poured-concrete
+  // palette as the surrounding tarmac. Only the dedicated runway textures use
+  // dark asphalt; this avoids a lone runway-black diamond on the grey apron.
+  fillFace(baker, AIRPORT.concrete, 1, diamond(0.5), originX, originY);
+  strokeFace(
+    baker,
+    AIRPORT.concreteDark,
+    0.72,
+    1,
+    diamond(0.46),
+    originX,
+    originY,
+  );
+
+  baker.graphics.lineStyle(3, AIRPORT.gold, 1);
+  const v1 = baker.at([0, -0.5, 2], originX, originY);
+  const v2 = baker.at([0, 0.5, 2], originX, originY);
+  baker.graphics.lineBetween(v1.x, v1.y, v2.x, v2.y);
+  if (junction) {
+    const u1 = baker.at([-0.5, 0, 2], originX, originY);
+    const u2 = baker.at([0.5, 0, 2], originX, originY);
+    baker.graphics.lineBetween(u1.x, u1.y, u2.x, u2.y);
+  }
+
+  for (const [u, v] of [[-0.34, -0.34], [0.34, 0.34]] as const) {
+    const lamp = baker.at([u, v, 3], originX, originY);
+    baker.graphics.fillStyle(0x70d6ff, 1);
+    baker.graphics.fillCircle(lamp.x, lamp.y, 2);
+  }
+  baker.finish(key, width, height);
+}
+
+function drawRunwayBase(baker: Baker, originX: number, originY: number): void {
+  const slab: Point3[] = [
+    [-0.52, -0.76, 0],
+    [0.52, -0.76, 0],
+    [0.52, 0.76, 0],
+    [-0.52, 0.76, 0],
+  ];
+  fillFace(baker, AIRPORT.asphaltEdge, 1, slab, originX, originY);
+  fillFace(
+    baker,
+    AIRPORT.asphalt,
+    1,
+    [
+      [-0.52, -0.68, 1],
+      [0.52, -0.68, 1],
+      [0.52, 0.68, 1],
+      [-0.52, 0.68, 1],
+    ],
+    originX,
+    originY,
+  );
+
+  baker.graphics.lineStyle(2, AIRPORT.white, 0.88);
+  for (const v of [-0.61, 0.61]) {
+    const a = baker.at([-0.52, v, 2], originX, originY);
+    const b = baker.at([0.52, v, 2], originX, originY);
+    baker.graphics.lineBetween(a.x, a.y, b.x, b.y);
+  }
+  // Subtle rubber/wear patches keep repeated slabs from reading like pristine tiles.
+  baker.graphics.lineStyle(2, AIRPORT.asphaltWear, 0.42);
+  const wearA = baker.at([-0.38, -0.16, 2], originX, originY);
+  const wearB = baker.at([0.3, -0.16, 2], originX, originY);
+  baker.graphics.lineBetween(wearA.x, wearA.y, wearB.x, wearB.y);
+}
+
+function bakeAirportRunwayTile(baker: Baker): void {
+  const width = 144;
+  const height = 72;
+  const originX = width / 2;
+  const originY = height / 2;
+  drawRunwayBase(baker, originX, originY);
+
+  fillFace(
+    baker,
+    AIRPORT.white,
+    0.96,
+    [
+      [-0.29, -0.045, 3],
+      [0.29, -0.045, 3],
+      [0.29, 0.045, 3],
+      [-0.29, 0.045, 3],
+    ],
+    originX,
+    originY,
+  );
+  for (const v of [-0.72, 0.72]) {
+    const lamp = baker.at([0, v, 3], originX, originY);
+    baker.graphics.fillStyle(0x8de7f7, 1);
+    baker.graphics.fillCircle(lamp.x, lamp.y, 2.2);
+  }
+  baker.finish(AIRPORT_RUNWAY_TILE_KEY, width, height);
+}
+
+function bakeAirportRunwayThreshold(baker: Baker): void {
+  const width = 144;
+  const height = 72;
+  const originX = width / 2;
+  const originY = height / 2;
+  drawRunwayBase(baker, originX, originY);
+
+  for (const v of [-0.45, -0.27, -0.09, 0.09, 0.27, 0.45]) {
+    fillFace(
+      baker,
+      AIRPORT.white,
+      0.96,
+      [
+        [-0.42, v - 0.045, 3],
+        [0.28, v - 0.045, 3],
+        [0.28, v + 0.045, 3],
+        [-0.42, v + 0.045, 3],
+      ],
+      originX,
+      originY,
+    );
+  }
+  for (const v of [-0.72, 0.72]) {
+    const lamp = baker.at([0, v, 3], originX, originY);
+    baker.graphics.fillStyle(v < 0 ? AIRPORT.red : AIRPORT.green, 1);
+    baker.graphics.fillCircle(lamp.x, lamp.y, 2.5);
+  }
+  baker.finish(AIRPORT_RUNWAY_THRESHOLD_KEY, width, height);
+}
+
+/** Low modern terminal: stone plinth, luminous hall, canopy and solar roof. */
+function bakeAirportTerminal(baker: Baker): void {
+  const width = 300;
+  const height = 222;
+  const originX = width / 2;
+  const originY = height - AIRPORT_TERMINAL_ANCHOR_Y;
+  const halfU = 1.55;
+  const halfV = 0.82;
+  const plinth = 9;
+  const roof = 72;
+
+  fillFace(
+    baker,
+    TERRAIN_COLORS.shadow,
+    0.24,
+    [
+      [-halfU - 0.08, -halfV - 0.08, 0],
+      [halfU + 0.14, -halfV - 0.08, 0],
+      [halfU + 0.14, halfV + 0.14, 0],
+      [-halfU - 0.08, halfV + 0.14, 0],
+    ],
+    originX,
+    originY,
+  );
+  // Pale stone base.
+  fillFace(
+    baker,
+    AIRPORT.concreteLight,
+    1,
+    [[-halfU, halfV, plinth], [halfU, halfV, plinth], [halfU, halfV, 0], [-halfU, halfV, 0]],
+    originX,
+    originY,
+  );
+  fillFace(
+    baker,
+    AIRPORT.concreteDark,
+    1,
+    [[halfU, halfV, plinth], [halfU, -halfV, plinth], [halfU, -halfV, 0], [halfU, halfV, 0]],
+    originX,
+    originY,
+  );
+
+  // Curtain-wall hall on both visible faces.
+  fillFace(
+    baker,
+    AIRPORT.glass,
+    1,
+    [[-halfU, halfV, roof], [halfU, halfV, roof], [halfU, halfV, plinth], [-halfU, halfV, plinth]],
+    originX,
+    originY,
+  );
+  fillFace(
+    baker,
+    AIRPORT.glassDark,
+    1,
+    [[halfU, halfV, roof], [halfU, -halfV, roof], [halfU, -halfV, plinth], [halfU, halfV, plinth]],
+    originX,
+    originY,
+  );
+
+  // Mullions and warm interior bays.
+  for (const u of [-1.18, -0.78, -0.38, 0.02, 0.42, 0.82, 1.22]) {
+    const top = baker.at([u, halfV + 0.01, roof - 7], originX, originY);
+    const bottom = baker.at([u, halfV + 0.01, plinth + 5], originX, originY);
+    baker.graphics.lineStyle(2, AIRPORT.ink, 0.62);
+    baker.graphics.lineBetween(top.x, top.y, bottom.x, bottom.y);
+  }
+  for (const z of [29, 51]) {
+    const left = baker.at([-halfU, halfV + 0.01, z], originX, originY);
+    const right = baker.at([halfU, halfV + 0.01, z], originX, originY);
+    baker.graphics.lineStyle(1, AIRPORT.glassLight, 0.45);
+    baker.graphics.lineBetween(left.x, left.y, right.x, right.y);
+  }
+
+  // Deep roof and gold fascia make the silhouette readable at fit zoom.
+  fillFace(
+    baker,
+    AIRPORT.ink,
+    1,
+    [[-1.68, -0.94, roof], [1.68, -0.94, roof], [1.68, 0.94, roof], [-1.68, 0.94, roof]],
+    originX,
+    originY,
+  );
+  strokeFace(
+    baker,
+    AIRPORT.glassLight,
+    0.34,
+    1,
+    [[-1.68, -0.94, roof + 1], [1.68, -0.94, roof + 1], [1.68, 0.94, roof + 1], [-1.68, 0.94, roof + 1]],
+    originX,
+    originY,
+  );
+  fillFace(
+    baker,
+    AIRPORT.gold,
+    1,
+    [[-1.68, 0.94, roof], [1.68, 0.94, roof], [1.68, 0.94, roof - 7], [-1.68, 0.94, roof - 7]],
+    originX,
+    originY,
+  );
+
+  // Solar skylights on the roof.
+  for (const u of [-0.92, -0.3, 0.32, 0.94]) {
+    fillFace(
+      baker,
+      AIRPORT.glassDark,
+      1,
+      [[u - 0.23, -0.54, roof + 2], [u + 0.23, -0.54, roof + 2], [u + 0.23, 0.25, roof + 2], [u - 0.23, 0.25, roof + 2]],
+      originX,
+      originY,
+    );
+    strokeFace(
+      baker,
+      AIRPORT.glassLight,
+      0.38,
+      1,
+      [[u - 0.23, -0.54, roof + 3], [u + 0.23, -0.54, roof + 3], [u + 0.23, 0.25, roof + 3], [u - 0.23, 0.25, roof + 3]],
+      originX,
+      originY,
+    );
+  }
+
+  // Entrance canopy, doors and a crisp CCX identifier.
+  fillFace(
+    baker,
+    AIRPORT.ink,
+    1,
+    [[-0.72, 1.18, 27], [0.72, 1.18, 27], [0.72, 0.82, 27], [-0.72, 0.82, 27]],
+    originX,
+    originY,
+  );
+  const sign = baker.at([0.15, halfV + 0.03, 55], originX, originY);
+  baker.graphics.fillStyle(AIRPORT.ink, 0.94);
+  baker.graphics.fillRoundedRect(sign.x - 31, sign.y - 8, 62, 17, 2);
+  drawAirportLabel(baker, "CCX", sign.x, sign.y - 5, 2);
+
+  const doorCenter = baker.at([0, halfV + 0.02, 19], originX, originY);
+  baker.graphics.fillStyle(0x173d4d, 1);
+  baker.graphics.fillRect(doorCenter.x - 13, doorCenter.y - 18, 26, 21);
+  baker.graphics.lineStyle(1, AIRPORT.glassLight, 0.7);
+  baker.graphics.lineBetween(doorCenter.x, doorCenter.y - 18, doorCenter.x, doorCenter.y + 3);
+
+  baker.finish(AIRPORT_TERMINAL_KEY, width, height);
+}
+
+function bakeAirportTower(baker: Baker): void {
+  const width = 128;
+  const height = 246;
+  const originX = width / 2;
+  const originY = height - AIRPORT_TOWER_ANCHOR_Y;
+  const shaftTop = 132;
+  const cabTop = 166;
+
+  fillFace(baker, TERRAIN_COLORS.shadow, 0.22, diamond(0.38), originX, originY);
+  fillFace(
+    baker,
+    AIRPORT.concrete,
+    1,
+    [[-0.2, 0.2, shaftTop], [0.2, 0.2, shaftTop], [0.28, 0.28, 0], [-0.28, 0.28, 0]],
+    originX,
+    originY,
+  );
+  fillFace(
+    baker,
+    AIRPORT.concreteDark,
+    1,
+    [[0.2, 0.2, shaftTop], [0.2, -0.2, shaftTop], [0.28, -0.28, 0], [0.28, 0.28, 0]],
+    originX,
+    originY,
+  );
+  fillFace(
+    baker,
+    AIRPORT.glassLight,
+    1,
+    [[-0.46, 0.46, cabTop], [0.46, 0.46, cabTop], [0.34, 0.34, shaftTop], [-0.34, 0.34, shaftTop]],
+    originX,
+    originY,
+  );
+  fillFace(
+    baker,
+    AIRPORT.glassDark,
+    1,
+    [[0.46, 0.46, cabTop], [0.46, -0.46, cabTop], [0.34, -0.34, shaftTop], [0.34, 0.34, shaftTop]],
+    originX,
+    originY,
+  );
+  fillFace(baker, AIRPORT.ink, 1, diamond(0.52, cabTop + 2), originX, originY);
+  strokeFace(baker, AIRPORT.gold, 0.8, 2, diamond(0.52, cabTop + 3), originX, originY);
+
+  const mast = baker.at([0, 0, cabTop + 2], originX, originY);
+  baker.graphics.lineStyle(2, AIRPORT.concreteLight, 0.9);
+  baker.graphics.lineBetween(mast.x, mast.y, mast.x, mast.y - 25);
+  baker.graphics.fillStyle(AIRPORT.red, 1);
+  baker.graphics.fillCircle(mast.x, mast.y - 28, 4);
+  baker.finish(AIRPORT_TOWER_KEY, width, height);
+}
+
+function bakeAirportWindsock(baker: Baker): void {
+  const width = 72;
+  const height = 92;
+  const originX = width / 2;
+  const originY = height - TILE_ANCHOR_Y;
+  const base = baker.at([0, 0, 0], originX, originY);
+  baker.graphics.fillStyle(TERRAIN_COLORS.shadow, 0.22);
+  baker.graphics.fillEllipse(base.x + 4, base.y + 2, 28, 8);
+  baker.graphics.lineStyle(3, AIRPORT.white, 1);
+  baker.graphics.lineBetween(base.x, base.y, base.x, base.y - 54);
+  baker.graphics.fillStyle(AIRPORT.red, 1);
+  baker.graphics.fillTriangle(base.x, base.y - 52, base.x + 35, base.y - 45, base.x, base.y - 37);
+  baker.graphics.fillStyle(AIRPORT.white, 1);
+  baker.graphics.fillTriangle(base.x + 12, base.y - 49, base.x + 22, base.y - 47, base.x + 12, base.y - 41);
+  baker.finish(AIRPORT_WINDSOCK_KEY, width, height);
+}
+
+/** Compact twin-prop commuter aircraft, authored nose-first along grid +x. */
+function bakeAirplane(baker: Baker): void {
+  const width = 128;
+  const height = 96;
+  const originX = width / 2;
+  const originY = height / 2;
+  const point = (forward: number, side: number, lift = 0): Phaser.Math.Vector2 =>
+    new Phaser.Math.Vector2(
+      originX + forward * 0.89 - side * 0.46,
+      originY + forward * 0.46 + side * 0.89 - lift,
+    );
+  const polygon = (
+    color: number,
+    points: ReadonlyArray<readonly [number, number]>,
+    alpha = 1,
+  ): void => {
+    baker.graphics.fillStyle(color, alpha);
+    baker.graphics.fillPoints(points.map(([forward, side]) => point(forward, side)), true);
+  };
+
+  // High wing and tailplane first, then the fuselage gives a clean silhouette.
+  polygon(0xc3d6da, [[10, -6], [-5, -10], [-18, -42], [-26, -43], [-16, -7], [-16, 7], [-26, 43], [-18, 42], [-5, 10], [10, 6]]);
+  polygon(0x8faeb7, [[-4, -10], [-18, -42], [-26, -43], [-19, -28], [0, -7], [0, 7], [-19, 28], [-26, 43], [-18, 42], [-4, 10]]);
+  polygon(0xb8cdd2, [[-28, -5], [-38, -22], [-44, -21], [-40, -4], [-40, 4], [-44, 21], [-38, 22], [-28, 5]]);
+  polygon(AIRPORT.white, [[46, 0], [39, -6], [15, -7], [-34, -7], [-43, -3], [-43, 3], [-34, 7], [15, 7], [39, 6]]);
+  polygon(0xd4e3e3, [[39, -6], [15, -7], [-34, -7], [-43, -3], [-34, 0], [15, 0]]);
+
+  // Navy belly, gold cheatline and tail livery.
+  polygon(0x163b52, [[29, -7], [8, -8], [-31, -7], [-38, -4], [-31, -2], [8, -3], [29, -2]]);
+  polygon(AIRPORT.gold, [[18, -8], [8, -8], [-28, -7], [-33, -5], [-28, -4], [8, -5], [18, -5]]);
+  polygon(0x173e56, [[-29, -5], [-40, -4], [-44, 0], [-40, 4], [-29, 5], [-23, 0]]);
+
+  // Cockpit and four passenger windows stay legible at the small in-world scale.
+  const cockpit = point(38, 0, 1);
+  baker.graphics.fillStyle(AIRPORT.glass, 1);
+  baker.graphics.fillCircle(cockpit.x, cockpit.y, 4.5);
+  for (let forward = 20; forward >= -17; forward -= 10) {
+    const window = point(forward, -6.8, 1);
+    baker.graphics.fillStyle(AIRPORT.glassLight, 1);
+    baker.graphics.fillCircle(window.x, window.y, 1.8);
+  }
+
+  // Engine nacelles and translucent propeller discs identify it as a small flight.
+  for (const side of [-23, 23]) {
+    const engine = point(-2, side, 1);
+    baker.graphics.fillStyle(AIRPORT.ink, 1);
+    baker.graphics.fillCircle(engine.x, engine.y, 5.5);
+    const prop = point(5, side, 1);
+    baker.graphics.fillStyle(AIRPORT.glassLight, 0.32);
+    baker.graphics.fillCircle(prop.x, prop.y, 8);
+    baker.graphics.lineStyle(1, AIRPORT.white, 0.72);
+    baker.graphics.lineBetween(prop.x - 7, prop.y, prop.x + 7, prop.y);
+    baker.graphics.lineBetween(prop.x, prop.y - 7, prop.x, prop.y + 7);
+  }
+
+  const port = point(-19, -43, 2);
+  const starboard = point(-19, 43, 2);
+  baker.graphics.fillStyle(AIRPORT.red, 1);
+  baker.graphics.fillCircle(port.x, port.y, 2.4);
+  baker.graphics.fillStyle(AIRPORT.green, 1);
+  baker.graphics.fillCircle(starboard.x, starboard.y, 2.4);
+  baker.finish(AIRPLANE_KEY, width, height);
+}
+
+function bakeAirplaneShadow(baker: Baker): void {
+  const width = 104;
+  const height = 62;
+  const originX = width / 2;
+  const originY = height / 2;
+  const point = (forward: number, side: number): Phaser.Math.Vector2 =>
+    new Phaser.Math.Vector2(
+      originX + forward * 0.89 - side * 0.46,
+      originY + forward * 0.46 + side * 0.89,
+    );
+  baker.graphics.fillStyle(0x071116, 0.3);
+  baker.graphics.fillPoints(
+    [[38, 0], [27, -8], [-27, -10], [-38, -4], [-38, 4], [-27, 10], [27, 8]].map(
+      ([forward, side]) => point(forward!, side!),
+    ),
+    true,
+  );
+  baker.finish(AIRPLANE_SHADOW_KEY, width, height);
 }
 
 /**

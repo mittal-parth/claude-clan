@@ -7,3 +7,4 @@ node_modules/
 playwright-report/
 test-results/
 .gstack/
+supabase/.temp/

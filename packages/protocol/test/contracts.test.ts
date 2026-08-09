@@ -243,4 +243,43 @@ describe("protocol contracts", () => {
 
     expect(overlay.files[1]?.plot).toEqual({ x: 3, y: 5 });
   });
+
+  it("parses session.auth and repo.select commands", () => {
+    expect(
+      MayorCommandSchema.parse({ type: "session.auth", token: "sealed-token" }),
+    ).toEqual({ type: "session.auth", token: "sealed-token" });
+    expect(
+      MayorCommandSchema.parse({ type: "repo.select", repoKey: "octocat/hello-world" }),
+    ).toEqual({ type: "repo.select", repoKey: "octocat/hello-world" });
+  });
+
+  it("parses a repos roster message and a repo.status update", () => {
+    const repos = ServerMessageSchema.parse({
+      kind: "repos",
+      repos: [
+        {
+          key: "octocat/hello-world",
+          fullName: "octocat/hello-world",
+          owner: "octocat",
+          name: "hello-world",
+          private: false,
+          defaultBranch: "main",
+          imported: true,
+        },
+      ],
+      activeRepoKey: "octocat/hello-world",
+    });
+    if (repos.kind !== "repos") {
+      throw new Error("expected a repos message");
+    }
+    expect(repos.repos[0]?.key).toBe("octocat/hello-world");
+
+    const status = ServerMessageSchema.parse({
+      kind: "repo.status",
+      repoKey: "octocat/hello-world",
+      phase: "cloning",
+      percent: 40,
+    });
+    expect(status).toMatchObject({ phase: "cloning", percent: 40 });
+  });
 });

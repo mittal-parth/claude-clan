@@ -10,6 +10,14 @@ import { AmbientLife, prefersReducedMotion } from "./ambient";
 import { ConstructionSites, type ConstructionTarget } from "./construction";
 import { playUiClickSound } from "@/lib/play-ui-click";
 import { hashCoords, hashText, pickIndex, unitFloat } from "./hash";
+import {
+  airportLayoutKey,
+  connectAirportToRoad,
+  createAirportLayout,
+  runwayExitPoint,
+  type AirportLayout,
+  type AirportPoint,
+} from "./airport";
 import { createIsoProjection } from "./iso";
 import { markerFor, rubbleMarkers } from "./overlay";
 import { archetypeFor, tierFor } from "./palette";
@@ -18,6 +26,10 @@ import {
   buildTerrain,
   COUNTRYSIDE_RING,
   COAST_RING,
+  ROAD_EAST,
+  ROAD_NORTH,
+  ROAD_SOUTH,
+  ROAD_WEST,
   type TerrainCell,
   type TerrainGrid,
 } from "./terrain";
@@ -28,6 +40,19 @@ import {
   HIGHLIGHT_KEY,
   ISSUE_SHOP_ANCHOR_Y,
   ISSUE_SHOP_KEY,
+  AIRPORT_TERMINAL_KEY,
+  AIRPORT_TERMINAL_ANCHOR_Y,
+  AIRPORT_TOWER_KEY,
+  AIRPORT_TOWER_ANCHOR_Y,
+  AIRPORT_APRON_KEY,
+  AIRPORT_TAXIWAY_VERTICAL_KEY,
+  AIRPORT_TAXIWAY_JUNCTION_KEY,
+  AIRPORT_RUNWAY_TILE_KEY,
+  AIRPORT_RUNWAY_THRESHOLD_KEY,
+  AIRPORT_WINDSOCK_KEY,
+  AIRPLANE_KEY,
+  AIRPLANE_SHADOW_KEY,
+  SMOKE_KEY,
   RUBBLE_KEY,
   ADDED_MARKER_KEY,
   SELECT_KEY,
@@ -91,6 +116,9 @@ export const OPEN_WATER = 0x2e9fe0;
 /** Keep the map white long enough for the voyage to feel intentional. */
 const WHITEOUT_HOLD_MS = 500;
 const WHITEOUT_ALPHA = 0.9;
+const AIRCRAFT_GROUND_SCALE = 0.58;
+const AIRCRAFT_GROUND_LIFT = 7;
+const AIRCRAFT_ART_HEADING = Math.atan2(0.46, 0.89);
 
 export type FileChange = "added" | "modified" | "deleted";
 
@@ -110,6 +138,60 @@ export interface ShipHoverInfo {
 
 /** How far apart, in tiles, two moored ships sit. */
 const SHIP_SPACING = 3;
+
+interface ScreenPoint {
+  x: number;
+  y: number;
+}
+
+interface AircraftTweenOptions {
+  groundAt: (progress: number) => ScreenPoint;
+  altitudeAt?: (progress: number) => number;
+  scaleAt?: (progress: number) => number;
+  alphaAt?: (progress: number) => number;
+  rotationAt?: (progress: number) => number;
+  duration: number;
+  ease: string;
+  onProgress?: (progress: number, point: ScreenPoint, altitude: number) => void;
+}
+
+function lerp(from: number, to: number, progress: number): number {
+  return from + (to - from) * progress;
+}
+
+function linePath(from: ScreenPoint, to: ScreenPoint): (progress: number) => ScreenPoint {
+  return (progress) => ({
+    x: lerp(from.x, to.x, progress),
+    y: lerp(from.y, to.y, progress),
+  });
+}
+
+function cubicPath(
+  from: ScreenPoint,
+  controlA: ScreenPoint,
+  controlB: ScreenPoint,
+  to: ScreenPoint,
+): (progress: number) => ScreenPoint {
+  return (progress) => {
+    const inverse = 1 - progress;
+    return {
+      x:
+        inverse ** 3 * from.x +
+        3 * inverse ** 2 * progress * controlA.x +
+        3 * inverse * progress ** 2 * controlB.x +
+        progress ** 3 * to.x,
+      y:
+        inverse ** 3 * from.y +
+        3 * inverse ** 2 * progress * controlA.y +
+        3 * inverse * progress ** 2 * controlB.y +
+        progress ** 3 * to.y,
+    };
+  };
+}
+
+function aircraftRotation(from: ScreenPoint, to: ScreenPoint): number {
+  return Math.atan2(to.y - from.y, to.x - from.x) - AIRCRAFT_ART_HEADING;
+}
 
 export class WorldScene extends Phaser.Scene {
   private terrain?: TerrainGrid;
@@ -143,8 +225,10 @@ export class WorldScene extends Phaser.Scene {
   /** Continuous zoom, accumulated across wheel events. */
   private zoomTarget = 1;
   private focusTween?: Phaser.Tweens.Tween;
-  /** Which city's snapshot the scene currently holds, if any. */
+  /** Which repository/city snapshot the scene currently holds, if any. */
   private currentCityId?: string;
+  private currentWorldKey?: string;
+  private travelTransitionActive = false;
 
   private overlay?: PullRequestOverlay;
   /** Scaffold ring markers for added buildings, keyed by path. */
@@ -167,6 +251,21 @@ export class WorldScene extends Phaser.Scene {
   private issues: Issue[] = [];
   private issueShop?: Phaser.GameObjects.Sprite;
   private issueShopClickListener?: () => void;
+
+  /** Connected southwest airport campus and its animated aircraft. */
+  private airportTerminal?: Phaser.GameObjects.Sprite;
+  private airportTower?: Phaser.GameObjects.Sprite;
+  private airportSurfaceSprites: Phaser.GameObjects.Sprite[] = [];
+  private airportDecorationSprites: Phaser.GameObjects.Sprite[] = [];
+  private airportLayoutSignature?: string;
+  private parkedAirplane?: Phaser.GameObjects.Sprite;
+  private parkedAirplaneShadow?: Phaser.GameObjects.Sprite;
+  private activeFlight?: Phaser.GameObjects.Sprite;
+  private activeFlightShadow?: Phaser.GameObjects.Sprite;
+  private flightEffects = new Set<Phaser.GameObjects.Sprite>();
+  private airportBeacon?: Phaser.GameObjects.Arc;
+  private airportHoverListener?: (info?: ShipHoverInfo) => void;
+  private airportClickListener?: () => void;
 
   constructor() {
     super("world");
@@ -212,6 +311,46 @@ export class WorldScene extends Phaser.Scene {
 
   setShipClickListener(listener: (cityId: string) => void): void {
     this.shipClickListener = listener;
+  }
+
+  setAirportHoverListener(listener: (info?: ShipHoverInfo) => void): void {
+    this.airportHoverListener = listener;
+  }
+
+  setAirportClickListener(listener: () => void): void {
+    this.airportClickListener = listener;
+  }
+
+  setTravelTransitionActive(active: boolean): void {
+    this.travelTransitionActive = active;
+    if (active) {
+      this.cancelBuildingDrag();
+      this.dragOrigin = undefined;
+      this.pressOrigin = undefined;
+      this.highlight?.setVisible(false);
+      this.shipHoverListener?.(undefined);
+      this.airportHoverListener?.(undefined);
+    }
+  }
+
+  resizeTravelCover(width: number, height: number): void {
+    this.transitionCloudVeil?.setSize(width, height).setDisplaySize(width, height);
+  }
+
+  /**
+   * Phaser can receive its final RESIZE viewport after the first world has
+   * already been fitted. Refit only while the camera is untouched; after a
+   * user pan/zoom, a browser or panel resize must preserve their framing.
+   */
+  resizeViewport(width: number, height: number): void {
+    this.resizeTravelCover(width, height);
+    if (
+      this.snapshot &&
+      !this.focusTween &&
+      this.lastCameraInputAt === Number.NEGATIVE_INFINITY
+    ) {
+      this.fitCamera();
+    }
   }
 
   setIssueShopClickListener(listener: () => void): void {
@@ -522,19 +661,23 @@ export class WorldScene extends Phaser.Scene {
    * city's buildings -- diffing two unrelated cities by path would treat
    * every building as a coincidental match or a stale ghost.
    */
-  setWorld(snapshot: WorldSnapshot, cityId: string): void {
+  setWorld(snapshot: WorldSnapshot, cityId: string, worldKey = cityId): void {
     if (!this.scene?.isActive()) {
       if (this.events) {
         this.events.once(Phaser.Scenes.Events.CREATE, () =>
-          this.setWorld(snapshot, cityId),
+          this.setWorld(snapshot, cityId, worldKey),
         );
       }
       return;
     }
 
-    if (this.currentCityId !== undefined && this.currentCityId !== cityId) {
+    if (
+      this.currentWorldKey !== undefined &&
+      (this.currentWorldKey !== worldKey || this.currentCityId !== cityId)
+    ) {
       this.resetWorld();
     }
+    this.currentWorldKey = worldKey;
     this.currentCityId = cityId;
 
     const previous = this.snapshot;
@@ -559,6 +702,7 @@ export class WorldScene extends Phaser.Scene {
 
     this.layoutShips();
     this.layoutIssueShop();
+    this.layoutAirport();
 
     // hasFitCamera is reset to false by resetWorld() above, so this also
     // refits the camera for every newly-arrived city, not just the first
@@ -739,9 +883,13 @@ export class WorldScene extends Phaser.Scene {
     this.issueShop?.destroy();
     this.issueShop = undefined;
 
+    this.clearAirport();
+
     this.select(undefined);
     this.snapshot = undefined;
     this.terrain = undefined;
+    this.currentCityId = undefined;
+    this.currentWorldKey = undefined;
     this.hasFitCamera = false;
     this.dragOrigin = undefined;
     this.pressOrigin = undefined;
@@ -975,29 +1123,47 @@ export class WorldScene extends Phaser.Scene {
    */
   private fitCamera(): void {
     const snapshot = this.snapshot;
-    if (!snapshot) {
-      return;
-    }
+    if (!snapshot) return;
     const camera = this.cameras.main;
     const margin = 4;
-    const minX = -margin;
-    const minY = -margin;
-    const maxX = snapshot.size.width - 1 + margin;
-    const maxY = snapshot.size.height - 1 + margin;
-
-    const width = projection.project(maxX, minY).x - projection.project(minX, maxY).x;
-    const height =
-      projection.project(maxX, maxY).y - projection.project(minX, minY).y;
+    const cityMinX = -margin;
+    const cityMinY = -margin;
+    const cityMaxX = snapshot.size.width - 1 + margin;
+    const cityMaxY = snapshot.size.height - 1 + margin;
+    const airport = this.airportLayout();
+    const points = [
+      projection.project(cityMinX, cityMinY),
+      projection.project(cityMaxX, cityMinY),
+      projection.project(cityMaxX, cityMaxY),
+      projection.project(cityMinX, cityMaxY),
+      projection.project(airport.runwayStart.x - 0.8, airport.runwayStart.y + 0.9),
+      projection.project(airport.runwayEnd.x + 0.8, airport.runwayEnd.y - 0.9),
+      projection.project(airport.apron.x - 2.4, airport.apron.y + 1.6),
+    ];
+    const terminal = projection.project(airport.terminal.x, airport.terminal.y);
+    const tower = projection.project(airport.tower.x, airport.tower.y);
+    const left = Math.min(...points.map((point) => point.x)) - 40;
+    const right = Math.max(...points.map((point) => point.x)) + 40;
+    const top = Math.min(
+      ...points.map((point) => point.y),
+      terminal.y - 175,
+      tower.y - 232,
+    ) - 24;
+    const bottom = Math.max(...points.map((point) => point.y)) + 44;
+    const width = Math.max(TILE_WIDTH, right - left);
+    const height = Math.max(TILE_HEIGHT, bottom - top);
+    const viewportPadding = 40;
 
     this.zoomTarget = Phaser.Math.Clamp(
-      Math.min(camera.width / width, camera.height / height),
+      Math.min(
+        Math.max(1, camera.width - viewportPadding * 2) / width,
+        Math.max(1, camera.height - viewportPadding * 2) / height,
+      ),
       MIN_ZOOM,
       MAX_ZOOM,
     );
     camera.setZoom(this.zoomTarget);
-
-    const center = projection.project((minX + maxX) / 2, (minY + maxY) / 2);
-    camera.centerOn(center.x, center.y);
+    camera.centerOn((left + right) / 2, (top + bottom) / 2);
   }
 
   /**
@@ -1013,6 +1179,7 @@ export class WorldScene extends Phaser.Scene {
 
   private bindCamera(): void {
     this.input.on("pointerdown", (pointer: Phaser.Input.Pointer) => {
+      if (this.travelTransitionActive) return;
       this.dragOrigin = { x: pointer.x, y: pointer.y };
       this.pressOrigin = { x: pointer.x, y: pointer.y };
       this.pressedBuilding = this.buildingAtPointer(pointer);
@@ -1020,6 +1187,11 @@ export class WorldScene extends Phaser.Scene {
     });
 
     const endDrag = (pointer: Phaser.Input.Pointer): void => {
+      if (this.travelTransitionActive) {
+        this.dragOrigin = undefined;
+        this.pressOrigin = undefined;
+        return;
+      }
       const press = this.pressOrigin;
       const draggedBuilding = this.draggingBuilding;
       this.clearDragPreview();
@@ -1050,6 +1222,7 @@ export class WorldScene extends Phaser.Scene {
     this.input.on("pointerupoutside", endDrag);
 
     this.input.on("pointermove", (pointer: Phaser.Input.Pointer) => {
+      if (this.travelTransitionActive) return;
       if (pointer.isDown && this.dragOrigin) {
         const travel = Phaser.Math.Distance.Between(
           this.pressOrigin?.x ?? pointer.x,
@@ -1090,6 +1263,7 @@ export class WorldScene extends Phaser.Scene {
         _deltaX: number,
         deltaY: number,
       ) => {
+        if (this.travelTransitionActive) return;
         const camera = this.cameras.main;
         this.noteCameraInput();
         // Anchor the zoom on the cursor: keep whatever world point is under
@@ -1277,6 +1451,7 @@ export class WorldScene extends Phaser.Scene {
       this.shipHoverListener?.(undefined);
     });
     sprite.on("pointerdown", () => {
+      if (this.travelTransitionActive) return;
       playUiClickSound();
       this.shipHoverListener?.(undefined);
       this.shipClickListener?.(cityId);
@@ -1292,24 +1467,20 @@ export class WorldScene extends Phaser.Scene {
     this.shipHoverListener?.(undefined);
   }
 
-  /**
-   * Places the issue marketplace beside the main city's harbour district.
-   * The building spans a 2x2 block of tiles, anchored at (gx, gy) as its
-   * north-west corner, so it's positioned and depth-sorted from the block's
-   * centre and its farthest (south-east) corner rather than a single cell.
-   */
+  /** Places the issue market on the marked grass plot behind the airport. */
   private layoutIssueShop(): void {
     if (this.currentCityId !== "main" || !this.snapshot) {
       this.issueShop?.destroy();
       this.issueShop = undefined;
       return;
     }
-    const { width, height } = this.snapshot.size;
-    // gx/gy is the block's north-west tile; +1 in each axis must stay on the
-    // grid, so this clamps to width-2/height-2 instead of the single-tile
-    // width-1/height-1 the old 1x1 placement used.
-    const gx = Math.max(0, Math.min(1, width - 2));
-    const gy = Math.max(0, height - 2);
+    const { height } = this.snapshot.size;
+    // The screenshot's red mark is immediately behind/screen-right of the
+    // terminal, just outside the western city road. gx/gy is the northwest
+    // corner of this 2x2 landmark, so its visual centre is (-1.5, h - 6.5).
+    // Its smaller grid-depth also guarantees it draws behind the terminal.
+    const gx = -2;
+    const gy = Math.max(0, height - 7);
     const point = projection.project(gx + 0.5, gy + 0.5);
     if (!this.issueShop) {
       const shop = this.add
@@ -1317,6 +1488,7 @@ export class WorldScene extends Phaser.Scene {
         .setOrigin(0.5, 1)
         .setInteractive({ pixelPerfect: true, useHandCursor: true });
       shop.on("pointerdown", () => {
+        if (this.travelTransitionActive) return;
         playUiClickSound();
         this.issueShopClickListener?.();
       });
@@ -1327,6 +1499,560 @@ export class WorldScene extends Phaser.Scene {
       .setDepth(projection.depth(gx + 1, gy + 1) + 1)
       .setVisible(true);
     this.issueShop.setData("issueCount", this.issues.length);
+  }
+
+  /** Builds one connected terminal, apron, taxiway, runway and city access road. */
+  private layoutAirport(): void {
+    if (!this.snapshot) {
+      this.clearAirportStatic();
+      return;
+    }
+    const airport = this.airportLayout();
+    const accessRoad = connectAirportToRoad(
+      airport.accessRoadStart,
+      this.terrain?.roads ?? [],
+    );
+    const signature = `${airportLayoutKey(airport)}:${accessRoad
+      .map((cell) => `${cell.x},${cell.y}`)
+      .join(";")}`;
+    if (signature === this.airportLayoutSignature && this.airportTerminal) {
+      return;
+    }
+    this.clearAirportStatic();
+    this.airportLayoutSignature = signature;
+
+    const addSurface = (
+      point: AirportPoint,
+      key: string,
+      depthOffset = 2,
+    ): Phaser.GameObjects.Sprite => {
+      const projected = projection.project(point.x, point.y);
+      const sprite = this.add
+        .sprite(projected.x, projected.y, key)
+        .setOrigin(0.5, 0.5)
+        .setDepth(projection.depth(point.x, point.y) + depthOffset)
+        .setInteractive({ pixelPerfect: true, useHandCursor: true });
+      this.bindAirportInteractions(sprite);
+      this.airportSurfaceSprites.push(sprite);
+      return sprite;
+    };
+
+    addSurface(airport.apron, AIRPORT_APRON_KEY, 3);
+    airport.taxiway.forEach((tile) => {
+      addSurface(
+        tile,
+        tile.kind === "junction"
+          ? AIRPORT_TAXIWAY_JUNCTION_KEY
+          : AIRPORT_TAXIWAY_VERTICAL_KEY,
+        4,
+      );
+    });
+
+    for (let index = 0; index < airport.runwayLength; index += 1) {
+      addSurface(
+        { x: airport.runwayStart.x + index, y: airport.runwayStart.y },
+        index === 0 || index === airport.runwayLength - 1
+          ? AIRPORT_RUNWAY_THRESHOLD_KEY
+          : AIRPORT_RUNWAY_TILE_KEY,
+        5,
+      );
+    }
+
+    const connectedRoadCells = new Set(
+      [...accessRoad, ...(this.terrain?.roads ?? [])].map(
+        (cell) => `${Math.round(cell.x)}:${Math.round(cell.y)}`,
+      ),
+    );
+    accessRoad.forEach((cell, index) => {
+      const hasRoad = (x: number, y: number): boolean =>
+        connectedRoadCells.has(`${x}:${y}`);
+      let mask =
+        (hasRoad(cell.x, cell.y - 1) ? ROAD_NORTH : 0) |
+        (hasRoad(cell.x + 1, cell.y) ? ROAD_EAST : 0) |
+        (hasRoad(cell.x, cell.y + 1) ? ROAD_SOUTH : 0) |
+        (hasRoad(cell.x - 1, cell.y) ? ROAD_WEST : 0);
+      // The first tile's south arm visibly enters the terminal forecourt.
+      if (index === 0) mask |= ROAD_SOUTH;
+      const point = projection.project(cell.x, cell.y);
+      const road = this.add
+        .sprite(
+          point.x,
+          point.y + TILE_ANCHOR_Y,
+          TERRAIN_ATLAS_KEY,
+          roadTextureKey(mask),
+        )
+        .setOrigin(0.5, 1)
+        .setDepth(projection.depth(cell.x, cell.y) + 4)
+        .setInteractive({ useHandCursor: true });
+      this.bindAirportInteractions(road);
+      this.airportSurfaceSprites.push(road);
+    });
+
+    const terminalPoint = projection.project(airport.terminal.x, airport.terminal.y);
+    this.airportTerminal = this.add
+      .sprite(
+        terminalPoint.x,
+        terminalPoint.y + AIRPORT_TERMINAL_ANCHOR_Y,
+        AIRPORT_TERMINAL_KEY,
+      )
+      .setOrigin(0.5, 1)
+      .setDepth(projection.depth(airport.terminal.x + 1.55, airport.terminal.y + 0.82) + 12)
+      .setInteractive({ pixelPerfect: true, useHandCursor: true });
+    this.bindAirportInteractions(this.airportTerminal);
+
+    const towerPoint = projection.project(airport.tower.x, airport.tower.y);
+    this.airportTower = this.add
+      .sprite(
+        towerPoint.x,
+        towerPoint.y + AIRPORT_TOWER_ANCHOR_Y,
+        AIRPORT_TOWER_KEY,
+      )
+      .setOrigin(0.5, 1)
+      .setDepth(projection.depth(airport.tower.x + 0.5, airport.tower.y + 0.5) + 14)
+      .setInteractive({ pixelPerfect: true, useHandCursor: true });
+    this.bindAirportInteractions(this.airportTower);
+
+    const windsockGrid = { x: airport.apron.x + 1.72, y: airport.apron.y + 0.7 };
+    const windsockPoint = projection.project(windsockGrid.x, windsockGrid.y);
+    const windsock = this.add
+      .sprite(windsockPoint.x, windsockPoint.y + TILE_ANCHOR_Y, AIRPORT_WINDSOCK_KEY)
+      .setOrigin(0.5, 1)
+      .setDepth(projection.depth(windsockGrid.x, windsockGrid.y) + 18)
+      .setInteractive({ pixelPerfect: true, useHandCursor: true });
+    this.bindAirportInteractions(windsock);
+    this.airportDecorationSprites.push(windsock);
+
+    const gatePoint = projection.project(airport.gate.x, airport.gate.y);
+    const parkedRotation = this.parkedAircraftRotation(airport);
+    this.parkedAirplaneShadow = this.add
+      .sprite(gatePoint.x + 4, gatePoint.y + 4, AIRPLANE_SHADOW_KEY)
+      .setOrigin(0.5)
+      .setScale(AIRCRAFT_GROUND_SCALE)
+      .setRotation(parkedRotation)
+      .setDepth(projection.depth(airport.gate.x, airport.gate.y) + 96);
+    this.parkedAirplane = this.add
+      .sprite(gatePoint.x, gatePoint.y - AIRCRAFT_GROUND_LIFT, AIRPLANE_KEY)
+      .setOrigin(0.5)
+      .setScale(AIRCRAFT_GROUND_SCALE)
+      .setRotation(parkedRotation)
+      .setDepth(projection.depth(airport.gate.x, airport.gate.y) + 100)
+      .setInteractive({ pixelPerfect: true, useHandCursor: true });
+    this.bindAirportInteractions(this.parkedAirplane);
+
+    this.airportBeacon = this.add
+      .circle(towerPoint.x, towerPoint.y - 217, 3.5, 0xff5d6c, 0.25)
+      .setDepth(SKY_DEPTH - 2)
+      .setBlendMode(Phaser.BlendModes.ADD);
+    this.tweens.add({
+      targets: this.airportBeacon,
+      alpha: 1,
+      scale: 2,
+      duration: 620,
+      yoyo: true,
+      repeat: -1,
+      ease: "Sine.easeInOut",
+    });
+  }
+
+  private airportLayout(): AirportLayout {
+    const size = this.snapshot?.size ?? { width: 8, height: 8 };
+    return createAirportLayout(size.width, size.height);
+  }
+
+  private parkedAircraftRotation(airport: AirportLayout): number {
+    const gate = projection.project(airport.gate.x, airport.gate.y);
+    const standApproach = projection.project(
+      airport.gate.x + 0.2,
+      airport.gate.y + 0.52,
+    );
+    return aircraftRotation(standApproach, gate);
+  }
+
+  private clearAirportStatic(): void {
+    this.airportTerminal?.destroy();
+    this.airportTerminal = undefined;
+    this.airportTower?.destroy();
+    this.airportTower = undefined;
+    for (const sprite of this.airportSurfaceSprites) sprite.destroy();
+    for (const sprite of this.airportDecorationSprites) sprite.destroy();
+    this.airportSurfaceSprites = [];
+    this.airportDecorationSprites = [];
+    this.parkedAirplane?.destroy();
+    this.parkedAirplane = undefined;
+    this.parkedAirplaneShadow?.destroy();
+    this.parkedAirplaneShadow = undefined;
+    if (this.airportBeacon) {
+      this.tweens.killTweensOf(this.airportBeacon);
+      this.airportBeacon.destroy();
+      this.airportBeacon = undefined;
+    }
+    this.airportLayoutSignature = undefined;
+    this.airportHoverListener?.(undefined);
+  }
+
+  private clearAirport(): void {
+    this.clearAirportStatic();
+    if (this.activeFlight) {
+      this.tweens.killTweensOf(this.activeFlight);
+      this.activeFlight.destroy();
+      this.activeFlight = undefined;
+    }
+    if (this.activeFlightShadow) {
+      this.tweens.killTweensOf(this.activeFlightShadow);
+      this.activeFlightShadow.destroy();
+      this.activeFlightShadow = undefined;
+    }
+    for (const effect of this.flightEffects) {
+      this.tweens.killTweensOf(effect);
+      effect.destroy();
+    }
+    this.flightEffects.clear();
+  }
+
+  private bindAirportInteractions(sprite: Phaser.GameObjects.Sprite): void {
+    sprite.on("pointerover", () => {
+      if (this.travelTransitionActive) return;
+      const camera = this.cameras.main;
+      this.airportHoverListener?.({
+        cityId: "airport",
+        title: "CLAUDE CITY AIRPORT · CCX",
+        action: "Open departures · choose repository city",
+        screenX: (sprite.x - camera.scrollX) * camera.zoom,
+        screenY: (sprite.y - camera.scrollY) * camera.zoom,
+      });
+    });
+    sprite.on("pointerout", () => this.airportHoverListener?.(undefined));
+    sprite.on("pointerdown", () => {
+      if (this.travelTransitionActive) return;
+      playUiClickSound();
+      this.airportHoverListener?.(undefined);
+      this.airportClickListener?.();
+    });
+  }
+
+  private createActiveAircraft(start: ScreenPoint): {
+    flight: Phaser.GameObjects.Sprite;
+    shadow: Phaser.GameObjects.Sprite;
+  } {
+    this.parkedAirplane?.setVisible(false);
+    this.parkedAirplaneShadow?.setVisible(false);
+    const shadow = this.add
+      .sprite(start.x + 4, start.y + 4, AIRPLANE_SHADOW_KEY)
+      .setOrigin(0.5)
+      .setScale(AIRCRAFT_GROUND_SCALE)
+      .setDepth(SKY_DEPTH - 7);
+    const flight = this.add
+      .sprite(start.x, start.y - AIRCRAFT_GROUND_LIFT, AIRPLANE_KEY)
+      .setOrigin(0.5)
+      .setScale(AIRCRAFT_GROUND_SCALE)
+      .setDepth(SKY_DEPTH - 5);
+    this.activeFlight = flight;
+    this.activeFlightShadow = shadow;
+    return { flight, shadow };
+  }
+
+  private animateAircraft(
+    flight: Phaser.GameObjects.Sprite,
+    shadow: Phaser.GameObjects.Sprite,
+    options: AircraftTweenOptions,
+  ): Promise<void> {
+    const cursor = { progress: 0 };
+    const altitudeAt = options.altitudeAt ?? (() => 0);
+    const scaleAt = options.scaleAt ?? (() => AIRCRAFT_GROUND_SCALE);
+    const alphaAt = options.alphaAt ?? (() => 1);
+
+    const setPose = (progress: number): void => {
+      const point = options.groundAt(progress);
+      const altitude = altitudeAt(progress);
+      const sampleDistance = 0.004;
+      const fromT = progress > 1 - sampleDistance ? progress - sampleDistance : progress;
+      const toT = progress > 1 - sampleDistance ? progress : progress + sampleDistance;
+      const fromGround = options.groundAt(Math.max(0, fromT));
+      const toGround = options.groundAt(Math.min(1, toT));
+      const fromAltitude = altitudeAt(Math.max(0, fromT));
+      const toAltitude = altitudeAt(Math.min(1, toT));
+      const pathRotation = aircraftRotation(
+        { x: fromGround.x, y: fromGround.y - fromAltitude },
+        { x: toGround.x, y: toGround.y - toAltitude },
+      );
+      const rotation = options.rotationAt?.(progress) ?? pathRotation;
+      const groundRotation = options.rotationAt?.(progress) ??
+        aircraftRotation(fromGround, toGround);
+      const scale = scaleAt(progress);
+      const alpha = alphaAt(progress);
+
+      flight
+        .setPosition(point.x, point.y - altitude - AIRCRAFT_GROUND_LIFT)
+        .setRotation(rotation)
+        .setScale(scale)
+        .setAlpha(alpha);
+      const altitudeFade = 1 - Math.min(0.86, altitude / 420);
+      shadow
+        .setPosition(point.x + 4, point.y + 4)
+        .setRotation(groundRotation)
+        .setScale(scale * (1 + altitude / 720))
+        .setAlpha(0.34 * altitudeFade * alpha);
+      options.onProgress?.(progress, point, altitude);
+    };
+
+    setPose(0);
+    if (prefersReducedMotion()) {
+      setPose(1);
+      return Promise.resolve();
+    }
+    return new Promise((resolve) => {
+      this.tweens.add({
+        targets: cursor,
+        progress: 1,
+        duration: options.duration,
+        ease: options.ease,
+        onUpdate: () => setPose(cursor.progress),
+        onComplete: () => {
+          setPose(1);
+          resolve();
+        },
+      });
+    });
+  }
+
+  private rotateAircraft(
+    flight: Phaser.GameObjects.Sprite,
+    shadow: Phaser.GameObjects.Sprite,
+    targetRotation: number,
+    duration: number,
+  ): Promise<void> {
+    const start = flight.rotation;
+    const delta = Phaser.Math.Angle.Wrap(targetRotation - start);
+    if (prefersReducedMotion()) {
+      flight.setRotation(start + delta);
+      shadow.setRotation(start + delta);
+      return Promise.resolve();
+    }
+    const cursor = { progress: 0 };
+    return new Promise((resolve) => {
+      this.tweens.add({
+        targets: cursor,
+        progress: 1,
+        duration,
+        ease: "Sine.easeInOut",
+        onUpdate: () => {
+          const rotation = start + delta * cursor.progress;
+          flight.setRotation(rotation);
+          shadow.setRotation(rotation);
+        },
+        onComplete: () => resolve(),
+      });
+    });
+  }
+
+  /** Gate → apron taxi → back-taxi → full-runway acceleration → straight climb. */
+  private async playFlightTakeoff(): Promise<void> {
+    const airport = this.airportLayout();
+    const gate = projection.project(airport.gate.x, airport.gate.y);
+    const threshold = projection.project(
+      airport.departureThreshold.x,
+      airport.departureThreshold.y,
+    );
+    const runwayEnd = projection.project(
+      airport.runwayEnd.x - 0.35,
+      airport.runwayEnd.y,
+    );
+    const runwayHeading = aircraftRotation(threshold, runwayEnd);
+    const camera = this.cameras.main;
+    // Continue on the same grid-y as every runway slab. The long extension is
+    // viewport-derived so the aircraft always clears the frame at any zoom.
+    const exitTiles = Phaser.Math.Clamp(
+      Math.ceil(camera.width / Math.max(1, camera.zoom * (TILE_WIDTH / 2))) + 8,
+      18,
+      64,
+    );
+    const climbExit = runwayExitPoint(airport, exitTiles);
+    const climbGround = projection.project(climbExit.x, climbExit.y);
+    const { flight, shadow } = this.createActiveAircraft(gate);
+
+    const parkedRotation = this.parkedAircraftRotation(airport);
+    const pushback = projection.project(
+      airport.gate.x + 0.2,
+      airport.gate.y + 0.52,
+    );
+    flight.setRotation(parkedRotation);
+    shadow.setRotation(parkedRotation);
+    await this.animateAircraft(flight, shadow, {
+      groundAt: linePath(gate, pushback),
+      rotationAt: () => parkedRotation,
+      duration: 520,
+      ease: "Sine.easeInOut",
+    });
+
+    // Departures turn screen-left immediately from the apron and follow one
+    // broad taxi curve to the first threshold. They no longer turn right to
+    // the middle connector, U-turn, and backtrack along the runway.
+    const leftTurnControl = projection.project(
+      airport.gate.x - 0.55,
+      airport.gate.y + 1.15,
+    );
+    const thresholdApproach = projection.project(
+      airport.departureThreshold.x + 0.8,
+      airport.departureThreshold.y - 0.25,
+    );
+    await this.rotateAircraft(
+      flight,
+      shadow,
+      aircraftRotation(pushback, leftTurnControl),
+      360,
+    );
+    const taxiToThreshold = cubicPath(
+      pushback,
+      leftTurnControl,
+      thresholdApproach,
+      threshold,
+    );
+    await this.animateAircraft(flight, shadow, {
+      groundAt: taxiToThreshold,
+      duration: 1_900,
+      ease: "Sine.easeInOut",
+    });
+    await this.wait(180);
+    await this.rotateAircraft(flight, shadow, runwayHeading, 520);
+    await this.wait(260);
+
+    // Quad.easeIn gives a restrained roll away from the threshold followed by
+    // continuous, believable acceleration over the entire authored runway.
+    let nextDust = 0.14;
+    const takeoffDuration = 2_850 + (airport.runwayLength - 18) * 90;
+    await this.animateAircraft(flight, shadow, {
+      groundAt: linePath(threshold, runwayEnd),
+      rotationAt: () => runwayHeading,
+      scaleAt: (progress) => lerp(AIRCRAFT_GROUND_SCALE, 0.61, progress),
+      duration: takeoffDuration,
+      ease: "Quad.easeIn",
+      onProgress: (progress, point) => {
+        if (progress >= nextDust) {
+          this.spawnFlightDust(
+            point.x - 12,
+            point.y - 3,
+            0.32 + progress * 0.2,
+          );
+          nextDust += 0.12;
+        }
+      },
+    });
+
+    // Ground x/y remains exactly on the runway's tile axis from threshold to
+    // off-screen. Only altitude and shadow separation change after rotation;
+    // locking the nose to runwayHeading prevents the climb reading as a turn.
+    await this.animateAircraft(flight, shadow, {
+      groundAt: linePath(runwayEnd, climbGround),
+      altitudeAt: (progress) => 1030 * progress ** 1.3,
+      rotationAt: () => runwayHeading,
+      scaleAt: (progress) => lerp(0.61, 0.47, progress),
+      alphaAt: (progress) => {
+        const fade = Math.max(0, (progress - 0.72) / 0.28);
+        return 1 - fade * fade;
+      },
+      duration: 1_700,
+      ease: "Sine.easeIn",
+    });
+    flight.destroy();
+    shadow.destroy();
+    this.activeFlight = undefined;
+    this.activeFlightShadow = undefined;
+  }
+
+  /** Cloud approach → aligned touchdown → rollout → curved taxi to gate. */
+  private async playFlightLanding(): Promise<void> {
+    const airport = this.airportLayout();
+    // Approach from beyond the far threshold on precisely the same grid-y as
+    // the runway. Altitude is the only coordinate that changes independently.
+    const approachGrid = runwayExitPoint(airport, 18);
+    const approachGround = projection.project(approachGrid.x, approachGrid.y);
+    const touchdown = projection.project(airport.runwayEnd.x - 0.48, airport.runwayEnd.y);
+    const landingHeading = aircraftRotation(approachGround, touchdown);
+    const entry = projection.project(airport.runwayEntry.x, airport.runwayEntry.y);
+    const gate = projection.project(airport.gate.x, airport.gate.y);
+    const { flight, shadow } = this.createActiveAircraft(approachGround);
+
+    await this.animateAircraft(flight, shadow, {
+      groundAt: linePath(approachGround, touchdown),
+      altitudeAt: (progress) => 430 * (1 - progress) ** 1.3,
+      rotationAt: () => landingHeading,
+      scaleAt: (progress) => lerp(0.4, AIRCRAFT_GROUND_SCALE, progress),
+      alphaAt: (progress) => lerp(0.18, 1, Math.min(1, progress * 1.8)),
+      duration: 2_250,
+      ease: "Sine.easeInOut",
+    });
+    const touchdownTrail = linePath(touchdown, approachGround);
+    for (let index = 0; index < 4; index += 1) {
+      const point = touchdownTrail((index + 1) * 0.014);
+      this.spawnFlightDust(
+        point.x,
+        point.y + 3,
+        0.58 - index * 0.06,
+        { x: 14, y: 7 },
+      );
+    }
+
+    await this.animateAircraft(flight, shadow, {
+      groundAt: linePath(touchdown, entry),
+      altitudeAt: (progress) => Math.max(0, 2.5 * (1 - progress) * Math.sin(progress * Math.PI * 3)),
+      duration: 1_850,
+      ease: "Cubic.easeOut",
+    });
+    await this.wait(130);
+
+    const taxi = cubicPath(
+      entry,
+      projection.project(airport.runwayEntry.x - 0.05, airport.runwayEntry.y - 0.58),
+      projection.project(airport.gate.x + 0.2, airport.gate.y + 0.52),
+      gate,
+    );
+    await this.animateAircraft(flight, shadow, {
+      groundAt: taxi,
+      duration: 1_520,
+      ease: "Sine.easeInOut",
+    });
+
+    const parkedRotation = this.parkedAircraftRotation(airport);
+    flight.setRotation(parkedRotation);
+    shadow.setRotation(parkedRotation);
+    flight.destroy();
+    shadow.destroy();
+    this.activeFlight = undefined;
+    this.activeFlightShadow = undefined;
+    this.parkedAirplane?.setVisible(true).setRotation(parkedRotation);
+    this.parkedAirplaneShadow?.setVisible(true).setRotation(parkedRotation);
+  }
+
+  private spawnFlightDust(
+    x: number,
+    y: number,
+    scale: number,
+    drift: ScreenPoint = { x: -14, y: -7 },
+  ): void {
+    const puff = this.add
+      .sprite(x, y, SMOKE_KEY)
+      .setScale(scale)
+      .setAlpha(0.34)
+      .setDepth(SKY_DEPTH - 6);
+    this.flightEffects.add(puff);
+    this.tweens.add({
+      targets: puff,
+      alpha: 0,
+      scale: scale * 1.9,
+      x: x + drift.x,
+      y: y + drift.y,
+      duration: 520,
+      ease: "Sine.easeOut",
+      onComplete: () => {
+        this.flightEffects.delete(puff);
+        puff.destroy();
+      },
+    });
+  }
+
+  private wait(duration: number): Promise<void> {
+    if (prefersReducedMotion()) return Promise.resolve();
+    return new Promise((resolve) => this.time.delayedCall(duration, resolve));
   }
 
   /** Sails the clicked ship away from the island and out of view. */
@@ -1429,13 +2155,15 @@ export class WorldScene extends Phaser.Scene {
     });
   }
 
-  /**
-   * Departs the clicked ship, then covers the screen in cloud. Resolves once
-   * fully covered -- the caller swaps to the new city's snapshot at that
-   * point, hidden behind the cover, then calls revealAfterTravel.
-   */
+  /** Covers an in-workspace ship voyage; airport traffic is deliberately separate. */
   async coverForTravel(cityId: string): Promise<void> {
     await this.playShipDeparture(cityId);
+    await this.playCoverTransition();
+  }
+
+  /** Covers a cross-repository journey after the aircraft has departed. */
+  async coverForAirportTravel(): Promise<void> {
+    await this.playFlightTakeoff();
     await this.playCoverTransition();
   }
 
@@ -1465,8 +2193,24 @@ export class WorldScene extends Phaser.Scene {
     );
   }
 
-  /** Parts the cloud cover to reveal whatever city has landed underneath. */
+  /** Parts clouds after an in-workspace ship voyage. */
   revealAfterTravel(): Promise<void> {
+    return this.partCloudCover().then(() => this.playShipArrival());
+  }
+
+  /**
+   * Reveals a newly loaded repository while the aircraft descends from the
+   * cloud layer. Starting the descent before the final cloud clears is what
+   * makes the landing read as an arrival rather than a post-cutscene extra.
+   */
+  async revealAfterAirportTravel(): Promise<void> {
+    const reveal = this.partCloudCover();
+    await this.wait(WHITEOUT_HOLD_MS + 120);
+    const landing = this.playFlightLanding();
+    await Promise.all([reveal, landing]);
+  }
+
+  private partCloudCover(): Promise<void> {
     const clouds = this.transitionClouds;
     this.transitionClouds = [];
     const veil = this.transitionCloudVeil;
@@ -1481,7 +2225,7 @@ export class WorldScene extends Phaser.Scene {
       const finishReveal = (): void => {
         remaining -= 1;
         if (remaining === 0) {
-          void this.playShipArrival().then(resolve);
+          resolve();
         }
       };
 
