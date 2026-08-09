@@ -1121,7 +1121,7 @@ export class WorldScene extends Phaser.Scene {
    * Frames the built-up area plus a little countryside — fitting the whole
    * ocean would push the city down to a few pixels on any sizeable repo.
    */
-  private fitCamera(): void {
+  public fitCamera(): void {
     const snapshot = this.snapshot;
     if (!snapshot) return;
     const camera = this.cameras.main;

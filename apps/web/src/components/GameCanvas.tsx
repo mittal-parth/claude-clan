@@ -294,43 +294,51 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
         captureScreenshot: (): Promise<string> => {
           return new Promise((resolve, reject) => {
             const game = gameRef.current;
-            if (!game) {
+            const scene = sceneRef.current;
+            if (!game || !scene) {
               reject(new Error("Game canvas not ready"));
               return;
             }
 
             try {
-              const renderer = game.renderer as any;
-              if (renderer && typeof renderer.snapshot === "function") {
-                renderer.snapshot((img: HTMLImageElement | string) => {
-                  if (typeof img === "string") {
-                    resolve(img);
-                  } else if (img && img.src) {
-                    resolve(img.src);
-                  } else {
-                    const canvas = game.canvas || hostRef.current?.querySelector("canvas");
-                    if (canvas) {
-                      resolve(canvas.toDataURL("image/png"));
-                    } else {
-                      reject(new Error("Failed to extract canvas data"));
-                    }
-                  }
-                });
-              } else {
-                const canvas = game.canvas || hostRef.current?.querySelector("canvas");
-                if (canvas) {
-                  resolve(canvas.toDataURL("image/png"));
-                } else {
-                  reject(new Error("Canvas element not found"));
+              // 1. Save user's current camera state
+              const camera = scene.cameras.main;
+              const savedScrollX = camera.scrollX;
+              const savedScrollY = camera.scrollY;
+              const savedZoom = camera.zoom;
+              const savedZoomTarget = (scene as any).zoomTarget;
+
+              // 2. Center and fit camera to the full city island
+              scene.fitCamera();
+
+              const restoreCamera = () => {
+                camera.setZoom(savedZoom);
+                camera.scrollX = savedScrollX;
+                camera.scrollY = savedScrollY;
+                if (savedZoomTarget !== undefined) {
+                  (scene as any).zoomTarget = savedZoomTarget;
                 }
-              }
+              };
+
+              // 3. Wait for the game loop to render a frame with the new camera state
+              game.events.once("postrender", () => {
+                try {
+                  const canvas = game.canvas || hostRef.current?.querySelector("canvas");
+                  if (canvas) {
+                    const dataUrl = canvas.toDataURL("image/png");
+                    restoreCamera();
+                    resolve(dataUrl);
+                  } else {
+                    restoreCamera();
+                    reject(new Error("Canvas element not found"));
+                  }
+                } catch (err) {
+                  restoreCamera();
+                  reject(err);
+                }
+              });
             } catch (err) {
-              const canvas = game.canvas || hostRef.current?.querySelector("canvas");
-              if (canvas) {
-                resolve(canvas.toDataURL("image/png"));
-              } else {
-                reject(err);
-              }
+              reject(err);
             }
           });
         },
