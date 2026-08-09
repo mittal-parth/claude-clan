@@ -10,6 +10,7 @@ import {
   Globe,
   ListTodo,
   Loader2,
+  MessageSquare,
   Minimize2,
   Play,
   Search,
@@ -51,8 +52,11 @@ export interface QuestTimelineStep {
   label?: string;
   markdown?: string;
   status: QuestStatus;
+  role?: QuestRole;
   toolCallId?: string;
   tool?: string;
+  taskId?: string;
+  subagentId?: string;
 }
 
 export interface Quest {
@@ -77,23 +81,6 @@ export interface QuestLogProps {
   variant?: "card" | "bare";
 }
 
-const getStatusBadgeVariant = (status: QuestStatus) => {
-  switch (status) {
-    case "active":
-      return "default";
-    case "completed":
-      return "secondary";
-    case "failed":
-      return "destructive";
-    case "pending":
-      return "outline";
-    default: {
-      const exhaustiveStatus: never = status;
-      return exhaustiveStatus;
-    }
-  }
-};
-
 function roleLabel(role: QuestRole | undefined): string {
   switch (role) {
     case "mayor":
@@ -103,7 +90,7 @@ function roleLabel(role: QuestRole | undefined): string {
     case "system":
       return "System";
     default:
-      return "Chat";
+      return "Update";
   }
 }
 
@@ -132,6 +119,34 @@ function getPreviewText(quest: Quest): string {
   return quest.description;
 }
 
+function WorkingIndicator() {
+  return (
+    <span className="relative flex size-3 shrink-0 items-center justify-center">
+      <span className="absolute inline-flex size-full animate-ping rounded-full bg-primary/60 opacity-75" />
+      <Loader2
+        aria-label="Working"
+        className="relative size-3 animate-spin text-primary"
+      />
+    </span>
+  );
+}
+
+function TopLevelStatus({ status }: { status: QuestStatus }) {
+  if (status === "active") {
+    return <WorkingIndicator />;
+  }
+
+  if (status === "failed") {
+    return (
+      <span className="retro inline-flex h-3 shrink-0 items-center rounded-sm border border-destructive/70 bg-destructive/15 px-0.5 text-[6px] leading-none text-destructive">
+        !
+      </span>
+    );
+  }
+
+  return null;
+}
+
 function QuestItem({
   quest,
   onSelect,
@@ -140,7 +155,7 @@ function QuestItem({
   onSelect: (quest: Quest) => void;
 }) {
   const playClick = useUiClick();
-  const timelineCount = quest.timeline?.length ?? 0;
+  const updateCount = quest.timeline?.length ?? 0;
 
   return (
     <button
@@ -155,30 +170,17 @@ function QuestItem({
         <div className="flex-1 min-w-0">
           <div className="flex items-start justify-between gap-2">
             <div className="flex flex-col gap-0.5 min-w-0 w-full">
-              <span
-                className={cn(
-                  "retro text-[8px] uppercase tracking-wide",
-                  roleColorClass(quest.role),
-                )}
-              >
-                {roleLabel(quest.role)}
-              </span>
               <p className="text-[10px] leading-relaxed text-foreground line-clamp-2">
                 {getPreviewText(quest)}
               </p>
-              {timelineCount > 0 ? (
+              {updateCount > 0 ? (
                 <span className="text-[8px] text-muted-foreground">
-                  {timelineCount} crew action{timelineCount === 1 ? "" : "s"}
+                  {updateCount} update{updateCount === 1 ? "" : "s"}
                 </span>
               ) : null}
             </div>
 
-            <Badge
-              variant={getStatusBadgeVariant(quest.status)}
-              className="text-[8px] shrink-0"
-            >
-              {quest.status.toUpperCase()}
-            </Badge>
+            <TopLevelStatus status={quest.status} />
           </div>
         </div>
       </div>
@@ -187,6 +189,10 @@ function QuestItem({
 }
 
 function getStepIcon(step: QuestTimelineStep): LucideIcon {
+  if (step.type === "session.message") {
+    return step.role === "system" ? AlertTriangle : MessageSquare;
+  }
+
   const tool = step.tool?.toLowerCase() ?? "";
 
   if (
@@ -262,6 +268,7 @@ function StepStatusIcon({ status }: { status: QuestStatus }) {
 
 function TimelineStep({ step }: { step: QuestTimelineStep }) {
   const Icon = getStepIcon(step);
+  const isMessage = step.type === "session.message";
 
   return (
     <div className="relative flex gap-3 pb-4 last:pb-0">
@@ -274,6 +281,16 @@ function TimelineStep({ step }: { step: QuestTimelineStep }) {
         </div>
       </div>
       <div className="min-w-0 flex-1 pt-1">
+        {isMessage ? (
+          <span
+            className={cn(
+              "retro mb-1 block text-[8px] uppercase tracking-wide",
+              roleColorClass(step.role),
+            )}
+          >
+            {roleLabel(step.role)}
+          </span>
+        ) : null}
         {step.markdown ? (
           <Markdown className="text-[10px] leading-relaxed [&_code]:text-[10px] [&_p]:mb-0">
             {step.markdown}
@@ -304,19 +321,21 @@ export function QuestLog({
   variant = "card",
 }: QuestLogProps) {
   const [selectedQuest, setSelectedQuest] = React.useState<Quest | null>(null);
+  const topRef = React.useRef<HTMLDivElement>(null);
   const activeQuests = quests.filter((quest) => quest.status === "active");
-  const sortedQuests = [
-    ...activeQuests,
-    ...quests.filter((quest) => quest.status !== "active"),
-  ];
+
+  React.useEffect(() => {
+    topRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [quests.length, quests.at(0)?.id]);
 
   const list =
     quests.length === 0 && showEmptyState ? (
       <EmptyState message={emptyStateMessage} />
     ) : (
       <ScrollArea className="h-full min-h-0 w-full flex-1">
+        <div ref={topRef} aria-hidden className="h-px shrink-0" />
         <div className="w-full">
-          {sortedQuests.map((quest) => (
+          {quests.map((quest) => (
             <QuestItem
               key={quest.id}
               quest={quest}
@@ -365,24 +384,14 @@ export function QuestLog({
               <DialogHeader>
                 <div className="flex items-start justify-between gap-3 pr-8">
                   <div className="min-w-0">
-                    <span
-                      className={cn(
-                        "retro text-[8px] uppercase tracking-wide",
-                        roleColorClass(selectedQuest.role),
-                      )}
-                    >
-                      {roleLabel(selectedQuest.role)}
+                    <span className="retro text-[8px] uppercase tracking-wide text-primary">
+                      Work order
                     </span>
-                    <DialogTitle className="retro text-xs leading-snug mt-1">
-                      {selectedQuest.title}
+                    <DialogTitle className="retro mt-1 text-xs leading-snug">
+                      {getPreviewText(selectedQuest)}
                     </DialogTitle>
                   </div>
-                  <Badge
-                    variant={getStatusBadgeVariant(selectedQuest.status)}
-                    className="text-[8px] shrink-0"
-                  >
-                    {selectedQuest.status.toUpperCase()}
-                  </Badge>
+                  <TopLevelStatus status={selectedQuest.status} />
                 </div>
               </DialogHeader>
               <ScrollArea className="max-h-[60vh] pr-4">
@@ -391,11 +400,11 @@ export function QuestLog({
                     <Markdown>{selectedQuest.description}</Markdown>
                   </div>
 
-                  <div className="border-t-2 border-foreground pt-3 dark:border-ring">
-                    <p className="retro mb-3 text-[8px] uppercase text-muted-foreground">
-                      Crew timeline
-                    </p>
-                    {selectedQuest.timeline && selectedQuest.timeline.length > 0 ? (
+                  {selectedQuest.timeline && selectedQuest.timeline.length > 0 ? (
+                    <div className="border-t-2 border-foreground pt-3 dark:border-ring">
+                      <p className="retro mb-3 text-[8px] uppercase text-muted-foreground">
+                        Crew activity
+                      </p>
                       <div className="relative pl-1">
                         <div
                           aria-hidden
@@ -405,12 +414,12 @@ export function QuestLog({
                           <TimelineStep key={step.id} step={step} />
                         ))}
                       </div>
-                    ) : (
-                      <p className="text-[10px] text-muted-foreground">
-                        No crew actions yet.
-                      </p>
-                    )}
-                  </div>
+                    </div>
+                  ) : (
+                    <p className="text-[10px] text-muted-foreground">
+                      No crew activity yet.
+                    </p>
+                  )}
                 </div>
               </ScrollArea>
             </>

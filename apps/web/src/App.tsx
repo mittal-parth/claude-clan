@@ -187,6 +187,10 @@ function loadStoredEvents(repoKey: string, cityId: string): GameEvent[] {
   }
 }
 
+function clearStoredEvents(cityId: string): void {
+  localStorage.removeItem(EVENTS_STORAGE_PREFIX + cityId);
+}
+
 function cityLabel(city: CitySummary): string {
   return city.kind === "main" ? "main" : city.title;
 }
@@ -316,9 +320,11 @@ function timelineContentForEvent(
 
 function questStatus(event: GameEvent): QuestStatus {
   switch (event.type) {
+    case "file.changed":
+    case "diagnostics.updated":
+      return "completed";
     case "permit.requested":
     case "tool.started":
-    case "file.changed":
     case "session.started":
     case "subagent.changed":
       return event.type === "subagent.changed" && event.status === "stopped"
@@ -343,29 +349,6 @@ function truncatePreview(text: string, maxLength = 100): string {
   return `${text.substring(0, maxLength)}...`;
 }
 
-function roleDisplayName(role: "agent" | "mayor" | "system"): string {
-  switch (role) {
-    case "mayor":
-      return "Mayor";
-    case "agent":
-      return "Crew";
-    case "system":
-      return "System";
-    default: {
-      const exhaustiveRole: never = role;
-      return exhaustiveRole;
-    }
-  }
-}
-
-function isTimelineEvent(event: GameEvent): boolean {
-  return (
-    event.type !== "session.message" &&
-    event.type !== "world.ready" &&
-    event.type !== "session.usage"
-  );
-}
-
 function timelineStepFromEvent(event: GameEvent): QuestTimelineStep {
   const content = timelineContentForEvent(event);
 
@@ -386,12 +369,23 @@ function timelineStepFromEvent(event: GameEvent): QuestTimelineStep {
     step.toolCallId = event.toolCallId;
   }
 
+  if (event.type === "task.changed") {
+    step.taskId = event.taskId;
+  }
+
+  if (event.type === "subagent.changed") {
+    step.subagentId = event.subagentId;
+  }
+
   return step;
 }
 
 function collapseTimelineSteps(steps: QuestTimelineStep[]): QuestTimelineStep[] {
   const result: QuestTimelineStep[] = [];
   const toolSteps = new Map<string, QuestTimelineStep>();
+  const taskSteps = new Map<string, QuestTimelineStep>();
+  const subagentSteps = new Map<string, QuestTimelineStep>();
+  let compactStep: QuestTimelineStep | undefined;
 
   for (const step of steps) {
     if (step.type === "tool.completed") {
@@ -410,16 +404,68 @@ function collapseTimelineSteps(steps: QuestTimelineStep[]): QuestTimelineStep[] 
     ) {
       const existing = toolSteps.get(step.toolCallId);
       if (existing) {
-        if (step.type === "permit.requested") {
-          existing.markdown = step.markdown ?? existing.markdown;
-        } else {
+        if (step.type === "tool.started") {
+          existing.type = "tool.started";
           existing.markdown = step.markdown ?? existing.markdown;
           existing.tool = step.tool ?? existing.tool;
+        } else if (step.type === "permit.requested") {
+          existing.markdown = step.markdown ?? existing.markdown;
         }
         continue;
       }
 
       toolSteps.set(step.toolCallId, step);
+      result.push(step);
+      continue;
+    }
+
+    if (step.type === "task.changed" && step.taskId) {
+      if (step.status === "completed") {
+        const existing = taskSteps.get(step.taskId);
+        if (existing) {
+          existing.status = "completed";
+          existing.label = step.label ?? existing.label;
+        }
+        continue;
+      }
+
+      const existing = taskSteps.get(step.taskId);
+      if (existing) {
+        continue;
+      }
+
+      taskSteps.set(step.taskId, step);
+      result.push(step);
+      continue;
+    }
+
+    if (step.type === "subagent.changed" && step.subagentId) {
+      if (step.status === "completed") {
+        const existing = subagentSteps.get(step.subagentId);
+        if (existing) {
+          existing.status = "completed";
+          existing.label = step.label ?? existing.label;
+        }
+        continue;
+      }
+
+      const existing = subagentSteps.get(step.subagentId);
+      if (existing) {
+        continue;
+      }
+
+      subagentSteps.set(step.subagentId, step);
+      result.push(step);
+      continue;
+    }
+
+    if (step.type === "compact.changed") {
+      if (step.status === "completed" && compactStep) {
+        compactStep.status = "completed";
+        continue;
+      }
+
+      compactStep = step;
       result.push(step);
       continue;
     }
@@ -432,103 +478,178 @@ function collapseTimelineSteps(steps: QuestTimelineStep[]): QuestTimelineStep[] 
     result.push(step);
   }
 
-  return result;
+  return finalizeStalePermitSteps(result);
 }
 
-function chatQuestStatus(
-  role: "agent" | "mayor" | "system",
-  timeline: QuestTimelineStep[],
-): QuestStatus {
-  const completedToolCalls = new Set<string>();
+function finalizeStalePermitSteps(
+  steps: QuestTimelineStep[],
+): QuestTimelineStep[] {
+  let sawLaterActivity = false;
 
-  for (const step of timeline) {
-    if (step.type === "tool.completed" && step.toolCallId) {
-      completedToolCalls.add(step.toolCallId);
+  for (let index = steps.length - 1; index >= 0; index -= 1) {
+    const step = steps[index]!;
+
+    if (
+      step.type === "permit.requested" &&
+      step.status === "active" &&
+      sawLaterActivity
+    ) {
+      step.status = "completed";
+    }
+
+    if (countsAsStalePermitResolution(step)) {
+      sawLaterActivity = true;
     }
   }
 
-  const hasOpenActivity = timeline.some(
+  return steps;
+}
+
+function countsAsStalePermitResolution(step: QuestTimelineStep): boolean {
+  if (step.type === "session.message") {
+    return true;
+  }
+
+  if (step.type === "session.started" || step.type === "permit.requested") {
+    return false;
+  }
+
+  return step.status === "completed" || step.status === "failed";
+}
+
+function isMaxTurnsStopMessage(text: string): boolean {
+  return /maximum number of turns/i.test(text);
+}
+
+function systemMessageStatus(text: string): QuestStatus {
+  if (isMaxTurnsStopMessage(text)) {
+    return "completed";
+  }
+
+  if (/error|stopped|failed/i.test(text)) {
+    return "failed";
+  }
+
+  return "completed";
+}
+
+function isIgnorableFailureStep(step: QuestTimelineStep): boolean {
+  return (
+    step.type === "session.message" &&
+    step.role === "system" &&
+    step.markdown !== undefined &&
+    isMaxTurnsStopMessage(step.markdown)
+  );
+}
+
+function workUnitStatus(timeline: QuestTimelineStep[]): QuestStatus {
+  const hasOpenTools = timeline.some(
     (step) =>
       (step.type === "permit.requested" || step.type === "tool.started") &&
-      step.toolCallId !== undefined &&
-      !completedToolCalls.has(step.toolCallId),
+      step.status === "active",
   );
 
-  const hasActiveSteps = timeline.some((step) => step.status === "active");
-
-  if (hasOpenActivity || hasActiveSteps) {
+  if (hasOpenTools) {
     return "active";
   }
 
-  switch (role) {
-    case "mayor":
-      return "pending";
-    case "agent":
-    case "system":
-      return "completed";
-    default: {
-      const exhaustiveRole: never = role;
-      return exhaustiveRole;
-    }
+  const hasMeaningfulFailure = timeline.some(
+    (step) => step.status === "failed" && !isIgnorableFailureStep(step),
+  );
+
+  if (hasMeaningfulFailure) {
+    return "failed";
   }
+
+  return "completed";
+}
+
+function messageToTimelineStep(
+  event: Extract<GameEvent, { type: "session.message" }>,
+): QuestTimelineStep {
+  return {
+    id: event.id,
+    type: "session.message",
+    role: event.role,
+    markdown: event.text,
+    status:
+      event.role === "system"
+        ? systemMessageStatus(event.text)
+        : "completed",
+  };
 }
 
 function eventsToQuests(events: GameEvent[]): Quest[] {
   const ordered = events.slice().sort((a, b) => a.sequence - b.sequence);
-  const messages = ordered.filter(
-    (event): event is Extract<GameEvent, { type: "session.message" }> =>
-      event.type === "session.message",
+  const mayorMessages = ordered.filter(
+    (
+      event,
+    ): event is Extract<GameEvent, { type: "session.message" }> & {
+      role: "mayor";
+    } => event.type === "session.message" && event.role === "mayor",
   );
 
-  if (messages.length === 0) {
+  if (mayorMessages.length === 0) {
     return [];
   }
 
-  return messages
-    .map((message, index) => {
-      const previousSequence =
-        index > 0 ? messages[index - 1]!.sequence : -1;
-      const isLast = index === messages.length - 1;
+  return mayorMessages.map((mayorMessage, index) => {
+    const endSequence =
+      index < mayorMessages.length - 1
+        ? mayorMessages[index + 1]!.sequence
+        : Number.POSITIVE_INFINITY;
 
-      const timelineEvents = ordered.filter((event) => {
-        if (!isTimelineEvent(event)) {
-          return false;
-        }
+    const unitEvents = ordered.filter((event) => {
+      if (event.sequence <= mayorMessage.sequence) {
+        return false;
+      }
 
-        if (event.sequence <= previousSequence) {
-          return false;
-        }
+      if (event.sequence >= endSequence) {
+        return false;
+      }
 
-        if (isLast) {
-          return true;
-        }
+      if (event.type === "world.ready" || event.type === "session.usage") {
+        return false;
+      }
 
-        return event.sequence <= message.sequence;
-      });
+      if (event.type === "session.message" && event.role === "mayor") {
+        return false;
+      }
 
-      const timeline = collapseTimelineSteps(
-        timelineEvents.map(timelineStepFromEvent),
-      );
-      const description = message.text;
+      return true;
+    });
 
-      return {
-        id: message.id,
-        title: roleDisplayName(message.role),
-        description,
-        status: chatQuestStatus(message.role, timeline),
-        shortDescription: truncatePreview(description),
-        role: message.role,
-        timeline,
-      };
-    })
-    .reverse();
+    const timeline = collapseTimelineSteps(
+      unitEvents.map((event) =>
+        event.type === "session.message"
+          ? messageToTimelineStep(event)
+          : timelineStepFromEvent(event),
+      ),
+    );
+    const description = mayorMessage.text;
+
+    return {
+      id: mayorMessage.id,
+      title: "Work order",
+      description,
+      status: workUnitStatus(timeline),
+      shortDescription: truncatePreview(description),
+      role: "mayor" as const,
+      timeline,
+    };
+  }).reverse();
 }
 
 function findPendingPermit(
   events: GameEvent[],
 ): Extract<GameEvent, { type: "permit.requested" }> | undefined {
+  const latestSessionIndex = events.findLastIndex(
+    (event) => event.type === "session.started",
+  );
+  const relevantEvents =
+    latestSessionIndex >= 0 ? events.slice(latestSessionIndex) : events;
   const completed = new Set<string>();
-  for (const event of events.slice().reverse()) {
+  for (const event of relevantEvents.slice().reverse()) {
     if (event.type === "tool.completed") {
       completed.add(event.toolCallId);
     }
@@ -540,6 +661,24 @@ function findPendingPermit(
     }
   }
   return undefined;
+}
+
+function createLocalPermitDismissal(
+  cityId: string,
+  toolCallId: string,
+  events: GameEvent[],
+): Extract<GameEvent, { type: "tool.completed" }> {
+  const lastSequence = events.at(-1)?.sequence ?? 0;
+  return {
+    id: crypto.randomUUID(),
+    cityId: cityId as GameEvent["cityId"],
+    sessionId: "local",
+    sequence: lastSequence + 1,
+    timestamp: new Date().toISOString(),
+    type: "tool.completed",
+    toolCallId,
+    outcome: "denied",
+  };
 }
 
 function pointIsInside(
@@ -877,6 +1016,36 @@ export default function App({
           return;
         }
 
+        if (decoded.data.kind === "error") {
+          if (
+            decoded.data.code === "PERMIT_NOT_FOUND" &&
+            decoded.data.toolCallId
+          ) {
+            const toolCallId = decoded.data.toolCallId;
+            setEventsByCity((current) => {
+              for (const [cityId, bucket] of Object.entries(current)) {
+                if (
+                  bucket.some(
+                    (event) =>
+                      event.type === "permit.requested" &&
+                      event.toolCallId === toolCallId,
+                  )
+                ) {
+                  return {
+                    ...current,
+                    [cityId]: [
+                      ...bucket,
+                      createLocalPermitDismissal(cityId, toolCallId, bucket),
+                    ],
+                  };
+                }
+              }
+              return current;
+            });
+          }
+          return;
+        }
+
         if (decoded.data.kind === "overlay") {
           const overlay = decoded.data.overlay;
           setOverlayByCity((current) => ({
@@ -987,6 +1156,14 @@ export default function App({
     if (socketRef.current?.readyState === WebSocket.OPEN) {
       socketRef.current.send(JSON.stringify(command));
     }
+  }
+
+  function clearTransmissions(): void {
+    setEventsByCity((current) => ({
+      ...current,
+      [activeCityId]: [],
+    }));
+    clearStoredEvents(activeCityId);
   }
 
   function travelTo(cityId: string): void {
@@ -1799,9 +1976,20 @@ export default function App({
             <div className="flex min-h-0 flex-1 flex-col gap-1.5 border-t border-border/50 pt-2">
               <div className="flex items-center justify-between gap-2">
                 <span className="hud-label">Transmissions</span>
-                {activeQuestCount > 0 ? (
-                  <span className="hud-pill">{activeQuestCount} active</span>
-                ) : null}
+                <div className="flex items-center gap-2">
+                  {quests.length > 0 ? (
+                    <button
+                      type="button"
+                      className="retro text-[8px] uppercase text-muted-foreground transition-colors hover:text-foreground"
+                      onClick={clearTransmissions}
+                    >
+                      Clear
+                    </button>
+                  ) : null}
+                  {activeQuestCount > 0 ? (
+                    <span className="hud-pill">{activeQuestCount} active</span>
+                  ) : null}
+                </div>
               </div>
               <QuestLog
                 variant="bare"

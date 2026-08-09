@@ -333,7 +333,12 @@ app.get("/ws", { websocket: true }, (socket) => {
       case "permit.resolve": {
         const resolved = workspace.resolvePermit(data.toolCallId, data.decision);
         if (!resolved) {
-          send(socket, { kind: "error", code: "PERMIT_NOT_FOUND", message: "This permit is no longer pending." });
+          send(socket, {
+            kind: "error",
+            code: "PERMIT_NOT_FOUND",
+            message: "This permit is no longer pending.",
+            toolCallId: data.toolCallId,
+          });
         }
         break;
       }

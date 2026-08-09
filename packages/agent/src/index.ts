@@ -71,7 +71,7 @@ export class AgentSessionManager {
     this.cwd = options.cwd;
     this.emit = options.emit;
     this.maxBudgetUsd = options.maxBudgetUsd ?? 1;
-    this.maxTurns = options.maxTurns ?? 12;
+    this.maxTurns = options.maxTurns ?? 50;
     this.model = options.model ?? "sonnet";
     this.effort = options.effort ?? "high";
     this.safeTools = new Set(options.safeTools ?? ["Read", "Glob", "Grep"]);
@@ -150,11 +150,18 @@ export class AgentSessionManager {
   }
 
   async interrupt(): Promise<void> {
-    this.abortController?.abort();
+    for (const toolCallId of this.pendingPermits.keys()) {
+      this.emit({
+        type: "tool.completed",
+        toolCallId,
+        outcome: "denied",
+      });
+    }
     for (const permit of this.pendingPermits.values()) {
       permit.reject(new Error("Agent session interrupted"));
     }
     this.pendingPermits.clear();
+    this.abortController?.abort();
   }
 
   async setModel(model: string): Promise<void> {
@@ -168,6 +175,13 @@ export class AgentSessionManager {
       return false;
     }
     this.pendingPermits.delete(toolCallId);
+    if (decision === "deny") {
+      this.emit({
+        type: "tool.completed",
+        toolCallId,
+        outcome: "denied",
+      });
+    }
     permit.resolve(
       decision === "allow"
         ? { behavior: "allow", toolUseID: toolCallId }

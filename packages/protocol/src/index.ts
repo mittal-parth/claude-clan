@@ -297,6 +297,7 @@ export const ServerMessageSchema = z.discriminatedUnion("kind", [
     kind: z.literal("error"),
     code: z.string().min(1),
     message: z.string().min(1),
+    toolCallId: z.string().min(1).optional(),
   }),
   z.object({
     kind: z.literal("repos"),

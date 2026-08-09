@@ -199,7 +199,10 @@ export async function scanRepository(
   options: ScanOptions = {},
 ): Promise<WorldMap> {
   const absoluteRepoPath = resolve(repoPath);
-  const files = await listRepositoryFiles(absoluteRepoPath);
+  const files = await filterExistingFiles(
+    absoluteRepoPath,
+    await listRepositoryFiles(absoluteRepoPath),
+  );
   const churn = await readChurn(absoluteRepoPath);
   const importResolver =
     options.importResolver ?? new DependencyCruiserImportResolver();
@@ -237,6 +240,29 @@ async function listRepositoryFiles(repoPath: string): Promise<string[]> {
   } catch {
     return walkFallback(repoPath);
   }
+}
+
+/**
+ * git ls-files lists index entries, so a tracked file deleted from the
+ * working tree (but not yet staged) still appears. Drop those paths before
+ * any reader touches them -- otherwise one missing README aborts the scan
+ * and the server falls back to its three-building preview world.
+ */
+async function filterExistingFiles(
+  repoPath: string,
+  files: string[],
+): Promise<string[]> {
+  const existing = await Promise.all(
+    files.map(async (path): Promise<string | undefined> => {
+      try {
+        await stat(join(repoPath, path));
+        return path;
+      } catch {
+        return undefined;
+      }
+    }),
+  );
+  return existing.filter((path): path is string => path !== undefined);
 }
 
 async function walkFallback(repoPath: string): Promise<string[]> {
