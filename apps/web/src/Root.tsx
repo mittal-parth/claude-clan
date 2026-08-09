@@ -13,6 +13,14 @@ import {
 import LoginScreen from "@/components/LoginScreen";
 import RepoPicker from "@/components/RepoPicker";
 import type { CanvasAirportTravel } from "@/components/GameCanvas";
+import {
+  initAnalytics,
+  identifyUser,
+  resetUser,
+  trackPageView,
+  trackRepoImported,
+  trackRepoSelected,
+} from "@/lib/analytics";
 
 const DEMO_REPO_KEY = "demo";
 type DemoTransition = "idle" | "loading" | "revealing";
@@ -66,6 +74,10 @@ export default function Root() {
   }
 
   useEffect(() => {
+    initAnalytics();
+  }, []);
+
+  useEffect(() => {
     const { error } = readSessionFromHash(window.location.hash);
     if (error) {
       window.history.replaceState(null, "", window.location.pathname + window.location.search);
@@ -83,6 +95,14 @@ export default function Root() {
               : { authenticated: false };
           setSession(nextSession);
           restoreActiveRepoForSession(nextSession);
+          if (result.authenticated && result.user) {
+            identifyUser(result.user.id, {
+              login: result.user.login,
+              avatarUrl: result.user.avatarUrl,
+            });
+          } else {
+            resetUser();
+          }
         }
       })
       .catch(() => {
@@ -90,6 +110,7 @@ export default function Root() {
           const nextSession: AuthSession = { authenticated: false };
           setSession(nextSession);
           restoreActiveRepoForSession(nextSession, false);
+          resetUser();
         }
       })
       .finally(() => {
@@ -102,6 +123,14 @@ export default function Root() {
     // to re-key this on, so it runs once on mount. handleLogout updates
     // `session` locally instead of relying on a re-run here.
   }, []);
+
+  useEffect(() => {
+    if (!sessionChecked) return;
+    const gate = gateFor(session, activeRepoKey);
+    trackPageView(gate === "city" ? "city" : gate === "repos" ? "repo_picker" : "login", {
+      repoKey: activeRepoKey,
+    });
+  }, [sessionChecked, session, activeRepoKey]);
 
   const loadRepos = useCallback(() => {
     if (!session.authenticated || repoLoadInFlightRef.current !== undefined) return;
@@ -148,6 +177,7 @@ export default function Root() {
   function startDemo(): void {
     setDemoTransition("loading");
     setActiveRepoKey(DEMO_REPO_KEY);
+    trackRepoSelected({ repoKey: DEMO_REPO_KEY });
   }
 
   function handleInitialRevealReady(): void {
@@ -195,6 +225,7 @@ export default function Root() {
   function handleImportOrSelect(repo: RepoSummary): void {
     if (airportTravelRef.current || airportArrivalRef.current || importingRef.current) return;
     if (repo.imported) {
+      trackRepoSelected({ repoKey: repo.key, fullName: repo.fullName });
       beginAirportJourney(repo.key);
       return;
     }
@@ -205,6 +236,7 @@ export default function Root() {
       return;
     }
 
+    trackRepoImported({ fullName: repo.fullName });
     const requestId = ++importRequestRef.current;
     const pending = { repoKey: repo.key, startedAt: Date.now() };
     importingRef.current = pending;
