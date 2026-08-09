@@ -144,6 +144,11 @@ export class AgentSessionManager {
     }
   }
 
+  /** Whether a query is currently in flight -- used to decide if a workspace is safe to evict from the LRU cache. */
+  isRunning(): boolean {
+    return this.activeQuery !== undefined;
+  }
+
   async interrupt(): Promise<void> {
     this.abortController?.abort();
     for (const permit of this.pendingPermits.values()) {

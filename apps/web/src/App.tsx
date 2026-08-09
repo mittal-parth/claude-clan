@@ -12,7 +12,8 @@ import {
   type WorldSnapshot,
 } from "@sudo-city/protocol";
 import { FormEvent, useEffect, useRef, useState } from "react";
-import { Command, ShieldAlert, Volume2, VolumeX, X } from "lucide-react";
+import { Command, LogOut, ShieldAlert, Volume2, VolumeX, X } from "lucide-react";
+import type { AuthUser } from "@/auth/gate";
 import { useAudio } from "@/components/audio-provider";
 import { Markdown } from "@/components/markdown";
 import { ConstructionTracker } from "@/lib/construction-tracker";
@@ -79,6 +80,14 @@ const RESCAN_DEBOUNCE_MS = 1_200;
 const EVENTS_STORAGE_PREFIX = "sudo-city:events:";
 /** The full quest log for a city; generous since each city keeps its own. */
 const EVENTS_PER_CITY_CAP = 200;
+
+/** Two repos can both have a "pr-42" city, so the transcript key is namespaced by repo, not just city id. */
+function eventsStorageKey(repoKey: string, cityId: string): string {
+  return `${EVENTS_STORAGE_PREFIX}${repoKey}:${cityId}`;
+}
+
+const RECONNECT_BASE_DELAY_MS = 1_000;
+const RECONNECT_MAX_DELAY_MS = 15_000;
 
 function promptForIssue(issue: Issue): string {
   return [
@@ -155,9 +164,9 @@ function colorWithAlpha(color: number, alpha: number): string {
     .padStart(2, "0")}`;
 }
 
-function loadStoredEvents(cityId: string): GameEvent[] {
+function loadStoredEvents(repoKey: string, cityId: string): GameEvent[] {
   try {
-    const raw = localStorage.getItem(EVENTS_STORAGE_PREFIX + cityId);
+    const raw = localStorage.getItem(eventsStorageKey(repoKey, cityId));
     if (!raw) return [];
     const parsed = JSON.parse(raw) as unknown[];
     return parsed.filter(
@@ -172,14 +181,18 @@ function cityLabel(city: CitySummary): string {
   return city.kind === "main" ? "main" : city.title;
 }
 
-function statusLabel(status: ConnectionState): string {
+function statusLabel(status: ConnectionState, reconnectAttempt: number): string {
   switch (status) {
     case "connecting":
       return "Linking";
     case "online":
       return "Live";
     case "offline":
-      return "Offline";
+      // A free-tier server dyno spinning back up looks identical to a
+      // dropped connection from the client's side -- reconnectAttempt only
+      // climbs once a retry is already scheduled, so this reads as
+      // deliberate progress rather than a stuck error.
+      return reconnectAttempt > 0 ? "Waking the city…" : "Offline";
     default: {
       const exhaustiveStatus: never = status;
       return exhaustiveStatus;
@@ -536,19 +549,38 @@ function pointIsInside(
   );
 }
 
-export default function App() {
+export interface AppProps {
+  /** "demo", or an owner/name repo key the signed-in user imported. */
+  activeRepoKey: string;
+  /** The sealed session token, sent as the WS's first frame; absent in demo mode. */
+  sessionToken?: string;
+  user?: AuthUser;
+  onSwitchRepo: () => void;
+  onLogout: () => void;
+  onSignIn: () => void;
+}
+
+export default function App({
+  activeRepoKey,
+  sessionToken,
+  user,
+  onSwitchRepo,
+  onLogout,
+  onSignIn,
+}: AppProps) {
   const { sfxEnabled, toggleSfx } = useAudio();
   const socketRef = useRef<WebSocket>(null);
   const canvasRef = useRef<GameCanvasHandle>(null);
   const orderFormRef = useRef<HTMLFormElement>(null);
   const [connection, setConnection] =
     useState<ConnectionState>("connecting");
+  const [reconnectAttempt, setReconnectAttempt] = useState(0);
   const [cities, setCities] = useState<CitySummary[]>([]);
   const [issues, setIssues] = useState<Issue[]>([]);
   const [activeCityId, setActiveCityId] = useState("main");
   const [eventsByCity, setEventsByCity] = useState<
     Record<string, GameEvent[]>
-  >(() => ({ main: loadStoredEvents("main") }));
+  >(() => ({ main: loadStoredEvents(activeRepoKey, "main") }));
   const [worldByCity, setWorldByCity] = useState<
     Record<string, WorldSnapshot>
   >({});
@@ -653,8 +685,23 @@ export default function App() {
           : "linking";
 
   useEffect(() => {
-    const socket = new WebSocket(websocketUrl);
-    socketRef.current = socket;
+    // A repo switch is a full reconnect: the previous socket was viewing a
+    // different workspace entirely, and every city-keyed piece of state
+    // (cities, issues, worlds, overlays, the active city itself) belongs to
+    // that departing repo, not this one.
+    setCities([]);
+    setIssues([]);
+    setWorldByCity({});
+    setOverlayByCity({});
+    setActiveCityId("main");
+    setEventsByCity({ main: loadStoredEvents(activeRepoKey, "main") });
+    setConnection("connecting");
+    setReconnectAttempt(0);
+
+    let torndown = false;
+    let socket: WebSocket | undefined;
+    let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+    let attempt = 0;
     // Every city rescans on its own schedule -- an edit burst in one city
     // must not delay or coalesce with another city's rescan.
     const rescanTimers: Record<string, ReturnType<typeof setTimeout>> = {};
@@ -663,124 +710,158 @@ export default function App() {
       onChange: setBuildingPaths,
     });
 
-    // The agent edits in bursts; one rescan after the burst settles is enough,
-    // and the scene diffs the result so standing buildings do not flicker.
-    const scheduleRescan = (cityId: string): void => {
-      clearTimeout(rescanTimers[cityId]);
-      rescanTimers[cityId] = setTimeout(() => {
-        if (socket.readyState === WebSocket.OPEN) {
-          socket.send(
-            JSON.stringify({
-              type: "world.request",
-              cityId,
-            } satisfies MayorCommand),
-          );
-        }
-      }, RESCAN_DEBOUNCE_MS);
-    };
-
     function appendEvent(cityId: string, event: GameEvent): void {
       setEventsByCity((current) => {
         const bucket = current[cityId] ?? [];
         return {
           ...current,
-          [cityId]: [
-            ...bucket.slice(-(EVENTS_PER_CITY_CAP - 1)),
-            event,
-          ],
+          [cityId]: [...bucket.slice(-(EVENTS_PER_CITY_CAP - 1)), event],
         };
       });
     }
 
-    socket.addEventListener("open", () => setConnection("online"));
-    socket.addEventListener("close", () => setConnection("offline"));
-    socket.addEventListener("error", () => setConnection("offline"));
-    socket.addEventListener("message", (message) => {
-      const decoded = ServerMessageSchema.safeParse(
-        JSON.parse(String(message.data)) as unknown,
-      );
-      if (!decoded.success) {
+    function connect(): void {
+      if (torndown) {
         return;
       }
+      const ws = new WebSocket(websocketUrl);
+      socket = ws;
+      socketRef.current = ws;
 
-      if (decoded.data.kind === "cities") {
-        setCities(decoded.data.cities);
-        return;
-      }
+      // The agent edits in bursts; one rescan after the burst settles is
+      // enough, and the scene diffs the result so standing buildings don't
+      // flicker.
+      const scheduleRescan = (cityId: string): void => {
+        clearTimeout(rescanTimers[cityId]);
+        rescanTimers[cityId] = setTimeout(() => {
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: "world.request", cityId } satisfies MayorCommand));
+          }
+        }, RESCAN_DEBOUNCE_MS);
+      };
 
-      if (decoded.data.kind === "issues") {
-        setIssues(decoded.data.issues);
-        return;
-      }
+      ws.addEventListener("open", () => {
+        attempt = 0;
+        setReconnectAttempt(0);
+        setConnection("online");
+        if (sessionToken) {
+          ws.send(JSON.stringify({ type: "session.auth", token: sessionToken } satisfies MayorCommand));
+        }
+        ws.send(JSON.stringify({ type: "repo.select", repoKey: activeRepoKey } satisfies MayorCommand));
+      });
+      // Render's free tier spins the dyno down after inactivity, so the
+      // first visit after a quiet period drops the socket -- reconnect with
+      // backoff rather than treating "offline" as final.
+      ws.addEventListener("close", () => {
+        if (torndown) {
+          return;
+        }
+        setConnection("offline");
+        attempt += 1;
+        setReconnectAttempt(attempt);
+        const delay = Math.min(
+          RECONNECT_BASE_DELAY_MS * 2 ** (attempt - 1),
+          RECONNECT_MAX_DELAY_MS,
+        );
+        reconnectTimer = setTimeout(connect, delay);
+      });
+      ws.addEventListener("error", () => ws.close());
+      ws.addEventListener("message", (message) => {
+        const decoded = ServerMessageSchema.safeParse(
+          JSON.parse(String(message.data)) as unknown,
+        );
+        if (!decoded.success) {
+          return;
+        }
 
-      if (decoded.data.kind === "overlay") {
-        const overlay = decoded.data.overlay;
-        setOverlayByCity((current) => ({
-          ...current,
-          [overlay.cityId]: overlay,
-        }));
-        return;
-      }
+        if (decoded.data.kind === "cities") {
+          setCities(decoded.data.cities);
+          return;
+        }
 
-      if (decoded.data.kind === "diff") {
-        setDiff(decoded.data);
-        return;
-      }
+        if (decoded.data.kind === "issues") {
+          setIssues(decoded.data.issues);
+          return;
+        }
 
-      if (decoded.data.kind !== "event") {
-        return;
-      }
+        if (decoded.data.kind === "overlay") {
+          const overlay = decoded.data.overlay;
+          setOverlayByCity((current) => ({
+            ...current,
+            [overlay.cityId]: overlay,
+          }));
+          return;
+        }
 
-      const event = decoded.data.event;
-      appendEvent(event.cityId, event);
-      if (event.type === "world.ready") {
-        setWorldByCity((current) => ({
-          ...current,
-          [event.cityId]: event.snapshot,
-        }));
-      }
-      if (event.type === "file.changed") {
-        setFileChange({
-          id: event.id,
-          cityId: event.cityId,
-          path: event.path,
-          change: event.change,
-        });
-        // Covers a change with no tool behind it; a tool-driven one is
-        // already held open by its own hold.
-        sites.start(event.path);
-        scheduleRescan(event.cityId);
-      }
-      // A tool's target is the earliest signal that work has started — the
-      // crane goes up before the file is written, and stays up while the tool
-      // runs. Targets that are not a building path (a shell command, say)
-      // simply match no building.
-      if (event.type === "tool.started" && event.target) {
-        sites.start(event.target, event.toolCallId);
-      }
-      if (event.type === "tool.completed") {
-        sites.finish(event.toolCallId);
-      }
-    });
+        if (decoded.data.kind === "diff") {
+          setDiff(decoded.data);
+          return;
+        }
+
+        if (decoded.data.kind !== "event") {
+          return;
+        }
+
+        const event = decoded.data.event;
+        appendEvent(event.cityId, event);
+        if (event.type === "world.ready") {
+          setWorldByCity((current) => ({
+            ...current,
+            [event.cityId]: event.snapshot,
+          }));
+        }
+        if (event.type === "file.changed") {
+          setFileChange({
+            id: event.id,
+            cityId: event.cityId,
+            path: event.path,
+            change: event.change,
+          });
+          // Covers a change with no tool behind it; a tool-driven one is
+          // already held open by its own hold.
+          sites.start(event.path);
+          scheduleRescan(event.cityId);
+        }
+        // A tool's target is the earliest signal that work has started — the
+        // crane goes up before the file is written, and stays up while the
+        // tool runs. Targets that are not a building path (a shell command,
+        // say) simply match no building.
+        if (event.type === "tool.started" && event.target) {
+          sites.start(event.target, event.toolCallId);
+        }
+        if (event.type === "tool.completed") {
+          sites.finish(event.toolCallId);
+        }
+      });
+    }
+
+    connect();
 
     return () => {
+      torndown = true;
+      clearTimeout(reconnectTimer);
       for (const timer of Object.values(rescanTimers)) {
         clearTimeout(timer);
       }
       sites.dispose();
-      socket.close();
+      socket?.close();
       socketRef.current = null;
     };
-  }, []);
+  }, [activeRepoKey, sessionToken]);
 
   useEffect(() => {
     for (const [cityId, bucket] of Object.entries(eventsByCity)) {
-      localStorage.setItem(
-        EVENTS_STORAGE_PREFIX + cityId,
-        JSON.stringify(bucket),
-      );
+      try {
+        localStorage.setItem(eventsStorageKey(activeRepoKey, cityId), JSON.stringify(bucket));
+      } catch {
+        // A world.ready event carries the full building list, so a large
+        // enough repo can blow the quota on its own -- losing the on-disk
+        // transcript for this tick isn't worth crashing the render tree
+        // over (uncaught here, this throw propagates out of the effect and
+        // takes down the whole component with no error boundary to catch it).
+      }
     }
-  }, [eventsByCity]);
+  }, [activeRepoKey, eventsByCity]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
@@ -812,7 +893,7 @@ export default function App() {
     setSelected(undefined);
     setDiff(undefined);
     setEventsByCity((current) =>
-      cityId in current ? current : { ...current, [cityId]: loadStoredEvents(cityId) },
+      cityId in current ? current : { ...current, [cityId]: loadStoredEvents(activeRepoKey, cityId) },
     );
     send({ type: "city.travel", cityId });
   }
@@ -825,7 +906,7 @@ export default function App() {
     setSelected(undefined);
     setDiff(undefined);
     setEventsByCity((current) =>
-      cityId in current ? current : { ...current, [cityId]: loadStoredEvents(cityId) },
+      cityId in current ? current : { ...current, [cityId]: loadStoredEvents(activeRepoKey, cityId) },
     );
     send({ type: "city.travel", cityId });
   }
@@ -1411,11 +1492,34 @@ export default function App() {
                     connection === "online" && "hud-dot--live",
                   )}
                 />
-                {statusLabel(connection)}
+                {statusLabel(connection, reconnectAttempt)}
               </span>
             }
             actions={
               <>
+                {user ? (
+                  <>
+                    <img
+                      src={user.avatarUrl}
+                      alt={user.login}
+                      title={user.login}
+                      className="size-5 rounded-none border-2 border-foreground dark:border-ring"
+                    />
+                    <button
+                      type="button"
+                      className="hud-icon-button"
+                      aria-label="Sign out"
+                      title="Sign out"
+                      onClick={onLogout}
+                    >
+                      <LogOut className="size-3" aria-hidden="true" />
+                    </button>
+                  </>
+                ) : (
+                  <button type="button" className="hud-pill retro" onClick={onSignIn}>
+                    SIGN IN
+                  </button>
+                )}
                 <button
                   type="button"
                   className="hud-icon-button"
@@ -1453,13 +1557,18 @@ export default function App() {
               </div>
             }
           >
-            <div className="hud-masthead">
+            <div className="hud-masthead justify-between">
               <div className="min-w-0">
                 <h1 className="hud-masthead__name retro">{cityName}</h1>
                 <p className="hud-masthead__sub retro">
                   {cityStatusLine} · mayor console
                 </p>
               </div>
+              {user ? (
+                <HudButton type="button" size="sm" variant="outline" onClick={onSwitchRepo}>
+                  SWITCH
+                </HudButton>
+              ) : null}
             </div>
 
             <div className="flex items-center gap-2.5">

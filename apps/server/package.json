@@ -7,9 +7,11 @@
     "build": "tsc --outDir dist",
     "dev": "tsx watch src/index.ts",
     "start": "tsx src/index.ts",
+    "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@fastify/cors": "^11.1.0",
     "@fastify/websocket": "^11.3.0",
     "@sudo-city/agent": "workspace:*",
     "@sudo-city/cities": "workspace:*",
@@ -18,12 +20,15 @@
     "@sudo-city/world": "workspace:*",
     "@sudo-city/worldgen": "workspace:*",
     "fastify": "^5.11.2",
+    "pg": "^8.16.0",
     "ws": "^8.21.2"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
+    "@types/pg": "^8.15.0",
     "@types/ws": "^8.18.1",
     "tsx": "^4.20.0",
-    "typescript": "^5.9.0"
+    "typescript": "^5.9.0",
+    "vitest": "^3.2.0"
   }
 }
