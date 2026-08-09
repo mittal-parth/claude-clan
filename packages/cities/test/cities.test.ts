@@ -7,9 +7,12 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   changedFiles,
   cityIdFor,
+  ensureMainWorktree,
   ensureWorktree,
   fileDiff,
+  issueCityIdFor,
   parseGitHubRemote,
+  parseIssueListJson,
   parsePullRequestApiJson,
   parsePullRequestListJson,
   pruneWorktrees,
@@ -115,6 +118,19 @@ describe("changedFiles / fileDiff", () => {
 });
 
 describe("worktree lifecycle", () => {
+  it("creates a writable issue worktree from main", async () => {
+    const { repoPath } = await createFixtureRepo();
+    const cityId = issueCityIdFor({ number: 12 });
+
+    const path = await ensureMainWorktree(repoPath, cityId);
+    expect(path).toBe(worktreePath(repoPath, cityId));
+    expect(readFileSync(join(path, "kept.ts"), "utf8")).toContain("kept = 1");
+    expect(() => readFileSync(join(path, "added.ts"), "utf8")).toThrow();
+
+    writeFileSync(join(path, "issue-fix.ts"), "export const fixed = true;\n");
+    expect(readFileSync(join(path, "issue-fix.ts"), "utf8")).toContain("fixed");
+  });
+
   it("creates a worktree at the PR's head, checked out and scannable", async () => {
     const { repoPath, pr } = await createFixtureRepo();
 
@@ -193,6 +209,30 @@ describe("worktree lifecycle", () => {
 });
 
 describe("GhCliClient helpers", () => {
+  it("maps gh's issue JSON shape to IssueRef", () => {
+    expect(
+      parseIssueListJson(
+        JSON.stringify([
+          {
+            number: 12,
+            title: "Fix the shop",
+            body: "The issue shop needs a sign.",
+            author: { login: "octocat" },
+            url: "https://example.invalid/issues/12",
+          },
+        ]),
+      ),
+    ).toEqual([
+      {
+        number: 12,
+        title: "Fix the shop",
+        body: "The issue shop needs a sign.",
+        author: "octocat",
+        url: "https://example.invalid/issues/12",
+      },
+    ]);
+  });
+
   it("maps gh's JSON shape to PullRequestRef", () => {
     const refs = parsePullRequestListJson(
       JSON.stringify([
