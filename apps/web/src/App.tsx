@@ -12,7 +12,16 @@ import {
   type WorldSnapshot,
 } from "@sudo-city/protocol";
 import { FormEvent, useEffect, useRef, useState } from "react";
-import { Command, LogOut, ShieldAlert, Volume2, VolumeX, X } from "lucide-react";
+import {
+  Command,
+  LogOut,
+  Plane,
+  RefreshCw,
+  ShieldAlert,
+  Volume2,
+  VolumeX,
+  X,
+} from "lucide-react";
 import type { AuthUser } from "@/auth/gate";
 import { useAudio } from "@/components/audio-provider";
 import { Markdown } from "@/components/markdown";
@@ -48,6 +57,7 @@ import {
   GameCanvas,
   type CanvasDragPreview,
   type CanvasFileChange,
+  type CanvasAirportTravel,
   type CanvasPointerPosition,
   type CanvasTravelRequest,
   type GameCanvasHandle,
@@ -555,7 +565,13 @@ export interface AppProps {
   /** The sealed session token, sent as the WS's first frame; absent in demo mode. */
   sessionToken?: string;
   user?: AuthUser;
-  onSwitchRepo: () => void;
+  repoConnectionGeneration: number;
+  airportTravel?: CanvasAirportTravel;
+  airportArrival?: CanvasAirportTravel;
+  onOpenAirport: () => void;
+  onAirportTravelCovered: (travel: CanvasAirportTravel) => void;
+  onAirportArrivalComplete: (travel: CanvasAirportTravel) => void;
+  onRetryAirportArrival: (travel: CanvasAirportTravel) => void;
   onLogout: () => void;
   onSignIn: () => void;
 }
@@ -564,7 +580,13 @@ export default function App({
   activeRepoKey,
   sessionToken,
   user,
-  onSwitchRepo,
+  repoConnectionGeneration,
+  airportTravel,
+  airportArrival,
+  onOpenAirport,
+  onAirportTravelCovered,
+  onAirportArrivalComplete,
+  onRetryAirportArrival,
   onLogout,
   onSignIn,
 }: AppProps) {
@@ -584,6 +606,8 @@ export default function App({
   const [worldByCity, setWorldByCity] = useState<
     Record<string, WorldSnapshot>
   >({});
+  /** Prevents an outgoing repository's cached map from being revealed as an arrival. */
+  const [worldRepoKey, setWorldRepoKey] = useState<string>();
   const [overlayByCity, setOverlayByCity] = useState<
     Record<string, PullRequestOverlay>
   >({});
@@ -617,9 +641,10 @@ export default function App({
   const [issueTravelRequest, setIssueTravelRequest] =
     useState<CanvasTravelRequest>();
   const [issueBeingFixed, setIssueBeingFixed] = useState<Issue>();
+  const [airportArrivalDelayed, setAirportArrivalDelayed] = useState(false);
 
   const events = eventsByCity[activeCityId] ?? [];
-  const world = worldByCity[activeCityId];
+  const world = worldRepoKey === activeRepoKey ? worldByCity[activeCityId] : undefined;
   const overlay = overlayByCity[activeCityId];
   const activeCity = cities.find((city) => city.id === activeCityId);
   const selectedChange = selected
@@ -692,8 +717,22 @@ export default function App({
     setCities([]);
     setIssues([]);
     setWorldByCity({});
+    setWorldRepoKey(undefined);
     setOverlayByCity({});
     setActiveCityId("main");
+    setSelected(undefined);
+    setDiff(undefined);
+    setFileChange(undefined);
+    setBuildingPaths([]);
+    setShipHover(undefined);
+    setShipTravelTargetId(undefined);
+    setIssueShopOpen(false);
+    setIssueTravelRequest(undefined);
+    setIssueBeingFixed(undefined);
+    setDraggingBuilding(undefined);
+    setDragPreview(undefined);
+    setDragPosition(undefined);
+    setContextPaths([]);
     setEventsByCity({ main: loadStoredEvents(activeRepoKey, "main") });
     setConnection("connecting");
     setReconnectAttempt(0);
@@ -767,6 +806,7 @@ export default function App({
       });
       ws.addEventListener("error", () => ws.close());
       ws.addEventListener("message", (message) => {
+        if (torndown || socket !== ws) return;
         const decoded = ServerMessageSchema.safeParse(
           JSON.parse(String(message.data)) as unknown,
         );
@@ -809,6 +849,7 @@ export default function App({
             ...current,
             [event.cityId]: event.snapshot,
           }));
+          setWorldRepoKey(activeRepoKey);
         }
         if (event.type === "file.changed") {
           setFileChange({
@@ -847,7 +888,14 @@ export default function App({
       socket?.close();
       socketRef.current = null;
     };
-  }, [activeRepoKey, sessionToken]);
+  }, [activeRepoKey, sessionToken, repoConnectionGeneration]);
+
+  useEffect(() => {
+    setAirportArrivalDelayed(false);
+    if (!airportArrival || world) return;
+    const timer = window.setTimeout(() => setAirportArrivalDelayed(true), 12_000);
+    return () => window.clearTimeout(timer);
+  }, [airportArrival, world]);
 
   useEffect(() => {
     for (const [cityId, bucket] of Object.entries(eventsByCity)) {
@@ -1017,6 +1065,7 @@ export default function App({
       <GameCanvas
         ref={canvasRef}
         cityId={activeCityId}
+        worldKey={activeRepoKey}
         world={world}
         overlay={overlay}
         travelCityId={shipTravelTargetId}
@@ -1032,9 +1081,17 @@ export default function App({
         crewSprite={crewAvatarSrc}
         issues={issues}
         travelRequest={issueTravelRequest}
+        airportTravel={airportTravel}
+        airportArrival={airportArrival}
         onTravelRequest={requestShipTravel}
         onTravelComplete={completeShipTravel}
         onTravelTransitionChange={setShipTransitioning}
+        onAirportTravelCovered={onAirportTravelCovered}
+        onAirportArrivalComplete={onAirportArrivalComplete}
+        onAirportClick={() => {
+          if (!shipTransitioning) onOpenAirport();
+        }}
+        onAirportHover={setShipHover}
         onIssueShopClick={() => {
           setSelected(undefined);
           setDiff(undefined);
@@ -1100,14 +1157,45 @@ export default function App({
 
       {shipHover ? (
         <div
-          className="retro pointer-events-none absolute z-30 -translate-x-1/2 -translate-y-full whitespace-nowrap border-2 border-foreground bg-card px-2 py-1 text-[10px] text-foreground dark:border-ring"
+          className="pointer-events-none absolute z-30 min-w-max -translate-x-1/2 -translate-y-full border border-white/20 bg-[#081923]/95 px-3 py-2 text-left text-white shadow-xl backdrop-blur-sm"
           style={{ left: shipHover.screenX, top: shipHover.screenY - 12 }}
         >
-          {shipHover.action}
+          <span className="retro block text-[8px] text-amber-200">{shipHover.title}</span>
+          <span className="mt-1 block text-[10px] text-sky-100/65">{shipHover.action}</span>
         </div>
       ) : null}
 
       <div aria-hidden="true" className="hud-vignette" />
+
+      {airportArrival && !world ? (
+        <div className="pointer-events-none absolute inset-x-0 bottom-8 z-40 flex justify-center px-4">
+          <div className="pointer-events-auto flex max-w-md items-center gap-3 border border-sky-100/20 bg-[#081923]/92 px-4 py-3 text-white shadow-2xl backdrop-blur-md">
+            <span className="airport-icon-grid shrink-0">
+              <Plane className="size-4 animate-pulse" aria-hidden="true" />
+            </span>
+            <div className="min-w-0 flex-1">
+              <p className="retro truncate text-[8px] text-amber-200">
+                ARRIVING · {airportArrival.destinationKey}
+              </p>
+              <p className="mt-1 text-[10px] text-sky-100/60">
+                {airportArrivalDelayed
+                  ? "The destination survey is taking longer than expected."
+                  : "Cloud cover holding while the destination city is surveyed…"}
+              </p>
+            </div>
+            {airportArrivalDelayed ? (
+              <HudButton
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={() => onRetryAirportArrival(airportArrival)}
+              >
+                <RefreshCw className="mr-1 size-3" aria-hidden="true" /> retry
+              </HudButton>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
 
       {/* The canvas whiteout owns the screen while a ship is sailing; the
           HUD would otherwise float over clouds describing the city being
@@ -1564,11 +1652,6 @@ export default function App({
                   {cityStatusLine} · mayor console
                 </p>
               </div>
-              {user ? (
-                <HudButton type="button" size="sm" variant="outline" onClick={onSwitchRepo}>
-                  SWITCH
-                </HudButton>
-              ) : null}
             </div>
 
             <div className="flex items-center gap-2.5">

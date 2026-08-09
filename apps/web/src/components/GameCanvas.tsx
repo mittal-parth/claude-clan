@@ -26,6 +26,13 @@ export interface CanvasTravelRequest {
   cityId: string;
 }
 
+/** A cross-repository journey: its world arrives only after the flight leaves. */
+export interface CanvasAirportTravel {
+  id: string;
+  sourceKey: string;
+  destinationKey: string;
+}
+
 export interface CanvasPointerPosition {
   clientX: number;
   clientY: number;
@@ -41,6 +48,8 @@ export type GameCanvasHandle = {
 
 interface GameCanvasProps {
   cityId: string;
+  /** Repository identity is separate from cityId (both repositories have a main). */
+  worldKey: string;
   world?: WorldSnapshot;
   overlay?: PullRequestOverlay;
   /** Snapshot that may be revealed once a ship has reached this city. */
@@ -52,6 +61,10 @@ interface GameCanvasProps {
   issues?: readonly Issue[];
   /** Programmatic travel from the issue shop, still using the cloud sequence. */
   travelRequest?: CanvasTravelRequest;
+  /** Starts an airport departure after a repository has finished importing. */
+  airportTravel?: CanvasAirportTravel;
+  /** Opens the cloud cover onto the first world from the newly selected repo. */
+  airportArrival?: CanvasAirportTravel;
   /** Public URL of the portrait to stand on every construction site. */
   crewSprite?: string;
   /** Files the crew is working on; each gets a construction site. */
@@ -62,7 +75,12 @@ interface GameCanvasProps {
   onTravelComplete?: (cityId: string) => void;
   /** Lets the HTML map overlays yield to the canvas whiteout. */
   onTravelTransitionChange?: (transitioning: boolean) => void;
+  /** Changes the repository only once the outgoing city is hidden by clouds. */
+  onAirportTravelCovered?: (travel: CanvasAirportTravel) => void;
+  onAirportArrivalComplete?: (travel: CanvasAirportTravel) => void;
   onIssueShopClick?: () => void;
+  onAirportClick?: () => void;
+  onAirportHover?: (info?: ShipHoverInfo) => void;
   onSelectBuilding?: (building?: Building) => void;
   onShipHover?: (info?: ShipHoverInfo) => void;
   onBuildingDragStart?: (
@@ -80,6 +98,7 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
   function GameCanvas(
     {
       cityId,
+      worldKey,
       world,
       overlay,
       travelCityId,
@@ -89,12 +108,18 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
       cities,
       issues,
       travelRequest,
+      airportTravel,
+      airportArrival,
       crewSprite,
       buildingPaths,
       onTravelRequest,
       onTravelComplete,
       onTravelTransitionChange,
+      onAirportTravelCovered,
+      onAirportArrivalComplete,
       onIssueShopClick,
+      onAirportClick,
+      onAirportHover,
       onSelectBuilding,
       onShipHover,
       onBuildingDragStart,
@@ -108,11 +133,16 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
     const sceneRef = useRef<WorldScene>(null);
     const selectRef = useRef(onSelectBuilding);
     const shipHoverRef = useRef(onShipHover);
+    const airportHoverRef = useRef(onAirportHover);
+    const airportClickRef = useRef(onAirportClick);
     const travelRequestRef = useRef(onTravelRequest);
     const travelCompleteRef = useRef(onTravelComplete);
     const travelTransitionRef = useRef(onTravelTransitionChange);
+    const airportTravelCoveredRef = useRef(onAirportTravelCovered);
+    const airportArrivalCompleteRef = useRef(onAirportArrivalComplete);
     const issueShopClickRef = useRef(onIssueShopClick);
     const cityIdRef = useRef(cityId);
+    const worldKeyRef = useRef(worldKey);
     const travelCityRef = useRef(travelCityId);
     const travelWorldRef = useRef(travelWorld);
     const travelOverlayRef = useRef(travelOverlay);
@@ -128,17 +158,24 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
     const departureCityRef = useRef<string | undefined>(undefined);
     const destinationCityRef = useRef<string | undefined>(undefined);
     const handledTravelRequestRef = useRef<string | undefined>(undefined);
+    const handledAirportTravelRef = useRef<string | undefined>(undefined);
+    const handledAirportArrivalRef = useRef<string | undefined>(undefined);
 
     // Kept in refs so a changing prop identity never rebuilds the game, and so
     // the ship-click listener (registered once, at scene creation) always sees
     // the latest values.
     selectRef.current = onSelectBuilding;
     shipHoverRef.current = onShipHover;
+    airportHoverRef.current = onAirportHover;
+    airportClickRef.current = onAirportClick;
     travelRequestRef.current = onTravelRequest;
     travelCompleteRef.current = onTravelComplete;
     travelTransitionRef.current = onTravelTransitionChange;
+    airportTravelCoveredRef.current = onAirportTravelCovered;
+    airportArrivalCompleteRef.current = onAirportArrivalComplete;
     issueShopClickRef.current = onIssueShopClick;
     cityIdRef.current = cityId;
+    worldKeyRef.current = worldKey;
     travelCityRef.current = travelCityId;
     travelWorldRef.current = travelWorld;
     travelOverlayRef.current = travelOverlay;
@@ -165,7 +202,7 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
       // cached destination can no longer replace the sailing ship mid-flight.
       revealStartedRef.current = true;
       const scene = sceneRef.current;
-      scene?.setWorld(destinationWorld, destinationCityId);
+      scene?.setWorld(destinationWorld, destinationCityId, worldKeyRef.current);
       scene?.setOverlay(travelOverlayRef.current);
       scene?.prepareArrivalForTravel(
         departureCityRef.current,
@@ -178,6 +215,7 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
         revealStartedRef.current = false;
         departureCityRef.current = undefined;
         destinationCityRef.current = undefined;
+        scene?.setTravelTransitionActive(false);
         travelTransitionRef.current?.(false);
         if (completedCityId) {
           travelCompleteRef.current?.(completedCityId);
@@ -203,6 +241,7 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
       revealStartedRef.current = false;
       departureCityRef.current = cityIdRef.current;
       destinationCityRef.current = targetCityId;
+      scene.setTravelTransitionActive(true);
       travelTransitionRef.current?.(true);
       // The network round trip runs concurrently with the departure/cover
       // animation rather than after it, so a fast (already-built) travel
@@ -214,6 +253,29 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
         tryReveal();
       });
       travelRequestRef.current?.(targetCityId);
+      return true;
+    }
+
+    function beginAirportTravel(travel: CanvasAirportTravel): boolean {
+      const scene = sceneRef.current;
+      if (
+        !scene ||
+        transitioningRef.current ||
+        travel.sourceKey !== worldKeyRef.current
+      ) {
+        return false;
+      }
+      transitioningRef.current = true;
+      coverDoneRef.current = false;
+      revealStartedRef.current = false;
+      departureCityRef.current = cityIdRef.current;
+      destinationCityRef.current = undefined;
+      scene.setTravelTransitionActive(true);
+      travelTransitionRef.current?.(true);
+      void scene.coverForAirportTravel().then(() => {
+        coverDoneRef.current = true;
+        airportTravelCoveredRef.current?.(travel);
+      });
       return true;
     }
 
@@ -236,6 +298,10 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
       scene.setSelectionListener((building) => selectRef.current?.(building));
       scene.setShipHoverListener((info) => shipHoverRef.current?.(info));
       scene.setShipClickListener(beginTravel);
+      scene.setAirportHoverListener((info) =>
+        (airportHoverRef.current ?? shipHoverRef.current)?.(info),
+      );
+      scene.setAirportClickListener(() => airportClickRef.current?.());
       scene.setIssueShopClickListener(() => issueShopClickRef.current?.());
       scene.setBuildingDragListener((building) => {
         draggingBuildingRef.current = building;
@@ -300,6 +366,7 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
         const { width, height } = entry.contentRect;
         if (width > 0 && height > 0) {
           game.scale.resize(width, height);
+          scene.resizeTravelCover(width, height);
         }
       });
       observer.observe(host);
@@ -318,12 +385,12 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
 
     useEffect(() => {
       if (world) {
-        sceneRef.current?.setWorld(world, cityId);
+        sceneRef.current?.setWorld(world, cityId, worldKey);
         // The new city's snapshot has landed; if a travel transition is mid-
         // flight, this is one of the two conditions revealAfterTravel waits on.
         tryReveal();
       }
-    }, [world, cityId]);
+    }, [world, cityId, worldKey]);
 
     useEffect(() => {
       sceneRef.current?.setOverlay(overlay);
@@ -356,6 +423,42 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
         handledTravelRequestRef.current = travelRequest.id;
       }
     }, [travelRequest]);
+
+    useEffect(() => {
+      if (
+        !airportTravel ||
+        airportTravel.id === handledAirportTravelRef.current ||
+        !sceneRef.current
+      ) {
+        return;
+      }
+      if (beginAirportTravel(airportTravel)) {
+        handledAirportTravelRef.current = airportTravel.id;
+      }
+    }, [airportTravel]);
+
+    useEffect(() => {
+      if (
+        !airportArrival ||
+        airportArrival.id === handledAirportArrivalRef.current ||
+        !world ||
+        airportArrival.destinationKey !== worldKey ||
+        !sceneRef.current ||
+        !transitioningRef.current ||
+        !coverDoneRef.current
+      ) {
+        return;
+      }
+      handledAirportArrivalRef.current = airportArrival.id;
+      void sceneRef.current.revealAfterAirportTravel().then(() => {
+        transitioningRef.current = false;
+        coverDoneRef.current = false;
+        departureCityRef.current = undefined;
+        sceneRef.current?.setTravelTransitionActive(false);
+        travelTransitionRef.current?.(false);
+        airportArrivalCompleteRef.current?.(airportArrival);
+      });
+    }, [airportArrival, world, worldKey]);
 
     useEffect(() => {
       if (fileChange) {
