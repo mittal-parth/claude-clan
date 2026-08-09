@@ -1227,9 +1227,32 @@ export default function App({
   function takeIssueToFix(issue: Issue): void {
     setIssueShopOpen(false);
     setIssueBeingFixed(issue);
+    // The issue rides out as a container: the crane loads it aboard before the
+    // clouds close, and unloads it onto the quay when she berths.
     setIssueTravelRequest({
       id: `issue-${issue.number}-${Date.now()}`,
       cityId: `issue-${issue.number}`,
+      carriesContainer: true,
+    });
+  }
+
+  /**
+   * The container ship is the harbour's way in and out. In the main city she
+   * is waiting to be loaded, so clicking her opens the issue market; anywhere
+   * else she is the way home, and sails back empty.
+   */
+  function handleHarbourShipClick(): void {
+    if (shipTransitioning) return;
+    setSelected(undefined);
+    setDiff(undefined);
+    if (activeCityId === "main") {
+      setIssueShopOpen(true);
+      return;
+    }
+    setIssueTravelRequest({
+      id: `home-${activeCityId}-${Date.now()}`,
+      cityId: "main",
+      carriesContainer: false,
     });
   }
 
@@ -1363,6 +1386,7 @@ export default function App({
           setDiff(undefined);
           setIssueShopOpen(true);
         }}
+        onHarbourShipClick={handleHarbourShipClick}
         onShipHover={setShipHover}
         onSelectBuilding={selectBuilding}
         onBuildingDragStart={handleBuildingDragStart}
