@@ -25,6 +25,7 @@
     "cmdk": "^1.1.1",
     "lucide-react": "^1.29.0",
     "phaser": "^4.2.1",
+    "posthog-js": "^1.414.0",
     "radix-ui": "^1.6.7",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
