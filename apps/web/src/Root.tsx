@@ -3,9 +3,12 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import App from "./App";
 import { fetchRepos, fetchSession, importRepo, logout } from "@/auth/api";
 import {
+  clearStoredActiveRepo,
   gateFor,
   readSessionFromHash,
+  readStoredActiveRepo,
   readStoredToken,
+  writeStoredActiveRepo,
   writeStoredToken,
   type AuthSession,
 } from "@/auth/gate";
@@ -45,6 +48,25 @@ export default function Root() {
   airportArrivalRef.current = airportArrival;
   importingRef.current = importing;
 
+  function restoreActiveRepoForSession(
+    nextSession: AuthSession,
+    clearInvalid = true,
+  ): void {
+    const stored = readStoredActiveRepo();
+    const restoredRepoKey =
+      stored?.repoKey === DEMO_REPO_KEY
+        ? DEMO_REPO_KEY
+        : nextSession.authenticated &&
+            stored?.userId === nextSession.user.id
+          ? stored.repoKey
+          : undefined;
+
+    if (stored && !restoredRepoKey && clearInvalid) {
+      clearStoredActiveRepo();
+    }
+    setActiveRepoKey(restoredRepoKey);
+  }
+
   useEffect(() => {
     const { token: hashToken, error } = readSessionFromHash(window.location.hash);
     if (hashToken) {
@@ -61,15 +83,20 @@ export default function Root() {
     fetchSession(token)
       .then((result) => {
         if (!cancelled) {
-          setSession(
+          const nextSession: AuthSession =
             result.authenticated && result.user
               ? { authenticated: true, user: result.user }
-              : { authenticated: false },
-          );
+              : { authenticated: false };
+          setSession(nextSession);
+          restoreActiveRepoForSession(nextSession);
         }
       })
       .catch(() => {
-        if (!cancelled) setSession({ authenticated: false });
+        if (!cancelled) {
+          const nextSession: AuthSession = { authenticated: false };
+          setSession(nextSession);
+          restoreActiveRepoForSession(nextSession, false);
+        }
       })
       .finally(() => {
         if (!cancelled) setSessionChecked(true);
@@ -106,6 +133,15 @@ export default function Root() {
   }, [token]);
 
   useEffect(() => {
+    if (!activeRepoKey) return;
+    if (activeRepoKey === DEMO_REPO_KEY) {
+      writeStoredActiveRepo(DEMO_REPO_KEY);
+    } else if (session.authenticated) {
+      writeStoredActiveRepo(activeRepoKey, session.user.id);
+    }
+  }, [activeRepoKey, session]);
+
+  useEffect(() => {
     if (session.authenticated) loadRepos();
   }, [session.authenticated, loadRepos]);
 
@@ -125,6 +161,7 @@ export default function Root() {
   }
 
   function handleSignIn(): void {
+    clearStoredActiveRepo();
     setDemoTransition("idle");
     setActiveRepoKey(undefined);
   }
@@ -204,6 +241,7 @@ export default function Root() {
     importingRef.current = undefined;
     void logout(token);
     writeStoredToken(undefined);
+    clearStoredActiveRepo();
     setToken(undefined);
     setSession({ authenticated: false });
     setDemoTransition("idle");

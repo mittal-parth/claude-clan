@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { gateFor, readSessionFromHash, readStoredToken, writeStoredToken } from "./gate.js";
+import {
+  clearStoredActiveRepo,
+  gateFor,
+  readSessionFromHash,
+  readStoredActiveRepo,
+  readStoredToken,
+  writeStoredActiveRepo,
+  writeStoredToken,
+} from "./gate.js";
 
 describe("gateFor", () => {
   it("shows the city once a repo is active, regardless of auth", () => {
@@ -46,5 +54,41 @@ describe("stored token guards", () => {
   it("no-ops when sessionStorage is unavailable", () => {
     expect(readStoredToken()).toBeUndefined();
     expect(() => writeStoredToken("token")).not.toThrow();
+  });
+});
+
+
+describe("stored active repo guards", () => {
+  it("round-trips demo and user-bound repo selections", () => {
+    const previous = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+    const values = new Map<string, string>();
+    Object.defineProperty(globalThis, "localStorage", {
+      configurable: true,
+      value: {
+        getItem: (key: string) => values.get(key) ?? null,
+        setItem: (key: string, value: string) => values.set(key, value),
+        removeItem: (key: string) => values.delete(key),
+      },
+    });
+
+    try {
+      writeStoredActiveRepo("demo");
+      expect(readStoredActiveRepo()).toEqual({ repoKey: "demo" });
+
+      writeStoredActiveRepo("octocat/hello-world", 42);
+      expect(readStoredActiveRepo()).toEqual({
+        repoKey: "octocat/hello-world",
+        userId: 42,
+      });
+
+      clearStoredActiveRepo();
+      expect(readStoredActiveRepo()).toBeUndefined();
+    } finally {
+      if (previous) {
+        Object.defineProperty(globalThis, "localStorage", previous);
+      } else {
+        Reflect.deleteProperty(globalThis, "localStorage");
+      }
+    }
   });
 });
