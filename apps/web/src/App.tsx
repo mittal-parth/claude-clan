@@ -66,6 +66,7 @@ import type { ShipHoverInfo } from "./game/WorldScene";
 import CrewSelectDialog, {
   type CrewSelection,
 } from "./components/CrewSelectDialog";
+import IssueShopDialog from "@/components/IssueShopDialog";
 import {
   DEFAULT_CREW_ID,
   DEFAULT_EFFORT,
@@ -101,7 +102,7 @@ const RECONNECT_MAX_DELAY_MS = 15_000;
 
 function promptForIssue(issue: Issue): string {
   return [
-    `Fix GitHub issue #${issue.number}: ${issue.title}`,
+    `Fix city issue #${issue.number}: ${issue.title}`,
     issue.body ? `Issue details:\n${issue.body}` : "",
   ]
     .filter(Boolean)
@@ -1346,56 +1347,13 @@ export default function App({
         onBuildingDragEnd={handleBuildingDrop}
       />
 
-      {issueShopOpen ? (
-        <div className="absolute inset-x-4 bottom-4 top-4 z-20 flex flex-col border-4 border-foreground bg-card shadow-xl dark:border-ring">
-          <div className="flex items-center justify-between border-b-2 border-foreground px-3 py-2 dark:border-ring">
-            <div>
-              <p className="retro text-[10px] text-primary">Issue shop</p>
-              <h2 className="retro text-xs">Open GitHub issues</h2>
-            </div>
-            <button
-              type="button"
-              className="retro text-xs text-muted-foreground hover:text-foreground"
-              aria-label="Close issue shop"
-              onClick={() => setIssueShopOpen(false)}
-            >
-              ✕
-            </button>
-          </div>
-          <div className="min-h-0 flex-1 overflow-y-auto p-3">
-            {issues.length ? (
-              <div className="space-y-3">
-                {issues.map((issue) => (
-                  <article
-                    key={issue.number}
-                    className="border-2 border-border bg-background p-3 dark:border-ring"
-                  >
-                    <p className="retro text-[10px] text-primary">
-                      #{issue.number} · @{issue.author}
-                    </p>
-                    <h3 className="retro mt-1 text-xs">{issue.title}</h3>
-                    {issue.body ? (
-                      <p className="mt-2 whitespace-pre-wrap text-xs text-muted-foreground">
-                        {truncatePreview(issue.body, 280)}
-                      </p>
-                    ) : null}
-                    <HudButton
-                      className="mt-3"
-                      onClick={() => takeIssueToFix(issue)}
-                    >
-                      Take this issue to fix
-                    </HudButton>
-                  </article>
-                ))}
-              </div>
-            ) : (
-              <p className="retro text-xs text-muted-foreground">
-                No open GitHub issues found.
-              </p>
-            )}
-          </div>
-        </div>
-      ) : null}
+      <IssueShopDialog
+        open={issueShopOpen}
+        onOpenChange={setIssueShopOpen}
+        issues={issues}
+        activeCityId={activeCityId}
+        onTakeIssue={takeIssueToFix}
+      />
 
       {shipHover ? (
         <div
