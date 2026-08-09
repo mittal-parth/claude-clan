@@ -51,6 +51,8 @@ interface GameCanvasProps {
   /** Repository identity is separate from cityId (both repositories have a main). */
   worldKey: string;
   world?: WorldSnapshot;
+  /** Fires once the first world is applied and the initial viewport has settled. */
+  onInitialWorldReady?: () => void;
   overlay?: PullRequestOverlay;
   /** Snapshot that may be revealed once a ship has reached this city. */
   travelCityId?: string;
@@ -100,6 +102,7 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
       cityId,
       worldKey,
       world,
+      onInitialWorldReady,
       overlay,
       travelCityId,
       travelWorld,
@@ -143,6 +146,8 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
     const issueShopClickRef = useRef(onIssueShopClick);
     const cityIdRef = useRef(cityId);
     const worldKeyRef = useRef(worldKey);
+    const initialWorldReadyRef = useRef(false);
+    const initialWorldReadyCallbackRef = useRef(onInitialWorldReady);
     const travelCityRef = useRef(travelCityId);
     const travelWorldRef = useRef(travelWorld);
     const travelOverlayRef = useRef(travelOverlay);
@@ -176,6 +181,7 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
     issueShopClickRef.current = onIssueShopClick;
     cityIdRef.current = cityId;
     worldKeyRef.current = worldKey;
+    initialWorldReadyCallbackRef.current = onInitialWorldReady;
     travelCityRef.current = travelCityId;
     travelWorldRef.current = travelWorld;
     travelOverlayRef.current = travelOverlay;
@@ -366,7 +372,7 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
         const { width, height } = entry.contentRect;
         if (width > 0 && height > 0) {
           game.scale.resize(width, height);
-          scene.resizeTravelCover(width, height);
+          scene.resizeViewport(width, height);
         }
       });
       observer.observe(host);
@@ -384,13 +390,52 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
     }, []);
 
     useEffect(() => {
-      if (world) {
-        sceneRef.current?.setWorld(world, cityId, worldKey);
-        // The new city's snapshot has landed; if a travel transition is mid-
-        // flight, this is one of the two conditions revealAfterTravel waits on.
-        tryReveal();
+      if (!world) return;
+
+      const scene = sceneRef.current;
+      scene?.setWorld(world, cityId, worldKey);
+      // The new city's snapshot has landed; if a travel transition is mid-
+      // flight, this is one of the two conditions revealAfterTravel waits on.
+      tryReveal();
+
+      if (!onInitialWorldReady || !scene || initialWorldReadyRef.current) {
+        return;
       }
-    }, [world, cityId, worldKey]);
+
+      let cancelled = false;
+      let frame: number | undefined;
+      const notifyWhenSettled = (): void => {
+        frame = window.requestAnimationFrame(() => {
+          // Let Phaser's resize observer and camera fit finish before the
+          // login cover starts revealing the second canvas.
+          frame = window.requestAnimationFrame(() => {
+            if (
+              cancelled ||
+              initialWorldReadyRef.current ||
+              !scene.scene.isActive()
+            ) {
+              return;
+            }
+            initialWorldReadyRef.current = true;
+            initialWorldReadyCallbackRef.current?.();
+          });
+        });
+      };
+
+      if (scene.scene.isActive()) {
+        notifyWhenSettled();
+      } else {
+        scene.events.once(Phaser.Scenes.Events.CREATE, notifyWhenSettled);
+      }
+
+      return () => {
+        cancelled = true;
+        if (frame !== undefined) {
+          window.cancelAnimationFrame(frame);
+        }
+        scene.events.off(Phaser.Scenes.Events.CREATE, notifyWhenSettled);
+      };
+    }, [world, cityId, worldKey, Boolean(onInitialWorldReady)]);
 
     useEffect(() => {
       sceneRef.current?.setOverlay(overlay);

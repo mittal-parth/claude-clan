@@ -14,6 +14,7 @@ import RepoPicker from "@/components/RepoPicker";
 import type { CanvasAirportTravel } from "@/components/GameCanvas";
 
 const DEMO_REPO_KEY = "demo";
+type DemoTransition = "idle" | "loading" | "revealing";
 
 /** Owns login, repository selection, and the cross-repository airport journey. */
 export default function Root() {
@@ -29,6 +30,7 @@ export default function Root() {
   const [airportTravel, setAirportTravel] = useState<CanvasAirportTravel>();
   const [airportArrival, setAirportArrival] = useState<CanvasAirportTravel>();
   const [repoConnectionGeneration, setRepoConnectionGeneration] = useState(0);
+  const [demoTransition, setDemoTransition] = useState<DemoTransition>("idle");
 
   const activeRepoRef = useRef(activeRepoKey);
   const airportTravelRef = useRef(airportTravel);
@@ -107,6 +109,26 @@ export default function Root() {
     if (session.authenticated) loadRepos();
   }, [session.authenticated, loadRepos]);
 
+  function startDemo(): void {
+    setDemoTransition("loading");
+    setActiveRepoKey(DEMO_REPO_KEY);
+  }
+
+  function handleInitialRevealReady(): void {
+    setDemoTransition((current) =>
+      current === "loading" ? "revealing" : current,
+    );
+  }
+
+  function handleInitialRevealComplete(): void {
+    setDemoTransition("idle");
+  }
+
+  function handleSignIn(): void {
+    setDemoTransition("idle");
+    setActiveRepoKey(undefined);
+  }
+
   function beginAirportJourney(destinationKey: string): void {
     const sourceKey = activeRepoRef.current;
     if (!sourceKey) {
@@ -184,6 +206,7 @@ export default function Root() {
     writeStoredToken(undefined);
     setToken(undefined);
     setSession({ authenticated: false });
+    setDemoTransition("idle");
     setActiveRepoKey(undefined);
     setRepos([]);
     setImporting(undefined);
@@ -195,9 +218,6 @@ export default function Root() {
   if (!sessionChecked) return null;
 
   const gate = gateFor(session, activeRepoKey);
-  if (gate === "login") {
-    return <LoginScreen onSeeDemo={() => setActiveRepoKey(DEMO_REPO_KEY)} />;
-  }
   if (gate === "repos") {
     return (
       <RepoPicker
@@ -212,69 +232,94 @@ export default function Root() {
     );
   }
 
+  const demoIsTransitioning =
+    activeRepoKey === DEMO_REPO_KEY && demoTransition !== "idle";
+  const showLogin = gate === "login" || demoIsTransitioning;
+
   return (
-    <>
-      <App
-        activeRepoKey={activeRepoKey!}
-        sessionToken={session.authenticated ? token : undefined}
-        user={session.authenticated ? session.user : undefined}
-        repoConnectionGeneration={repoConnectionGeneration}
-        airportTravel={airportTravel}
-        airportArrival={airportArrival}
-        onOpenAirport={() => {
-          if (airportTravelRef.current || airportArrivalRef.current) return;
-          loadRepos();
-          setAirportOpen(true);
-        }}
-        onAirportTravelCovered={(travel) => {
-          if (airportTravelRef.current?.id !== travel.id) return;
-          airportTravelRef.current = undefined;
-          airportArrivalRef.current = travel;
-          activeRepoRef.current = travel.destinationKey;
-          setAirportTravel(undefined);
-          setAirportArrival(travel);
-          setActiveRepoKey(travel.destinationKey);
-        }}
-        onAirportArrivalComplete={(travel) => {
-          if (airportArrivalRef.current?.id !== travel.id) return;
-          airportArrivalRef.current = undefined;
-          setAirportArrival(undefined);
-        }}
-        onRetryAirportArrival={(travel) => {
-          if (airportArrivalRef.current?.id !== travel.id) return;
-          setRepoConnectionGeneration((generation) => generation + 1);
-        }}
-        onLogout={handleLogout}
-        onSignIn={() => setActiveRepoKey(undefined)}
-      />
-      {session.authenticated ? (
-        <RepoPicker
-          repos={repos}
-          loading={reposLoading}
-          error={reposError}
-          importing={importing}
-          onImportOrSelect={handleImportOrSelect}
-          onSeeDemo={() => beginAirportJourney(DEMO_REPO_KEY)}
-          onRefresh={loadRepos}
-          activeRepoKey={activeRepoKey}
-          dialog={{ open: airportOpen, onOpenChange: setAirportOpen }}
-        />
-      ) : (
-        <RepoPicker
-          repos={[]}
-          loading={false}
-          onImportOrSelect={() => undefined}
-          onSeeDemo={() => setAirportOpen(false)}
-          onRefresh={() => undefined}
-          activeRepoKey={activeRepoKey}
-          authenticationRequired
-          onSignIn={() => {
-            setAirportOpen(false);
-            setActiveRepoKey(undefined);
+    <div className="root-stage">
+      {gate === "login" || gate === "city" ? (
+        <App
+          activeRepoKey={gate === "login" ? DEMO_REPO_KEY : activeRepoKey!}
+          sessionToken={session.authenticated ? token : undefined}
+          user={session.authenticated ? session.user : undefined}
+          repoConnectionGeneration={repoConnectionGeneration}
+          loginBackground={gate === "login"}
+          initialReveal={demoIsTransitioning}
+          onInitialRevealReady={handleInitialRevealReady}
+          onInitialRevealComplete={handleInitialRevealComplete}
+          airportTravel={airportTravel}
+          airportArrival={airportArrival}
+          onOpenAirport={() => {
+            if (airportTravelRef.current || airportArrivalRef.current) return;
+            loadRepos();
+            setAirportOpen(true);
           }}
-          dialog={{ open: airportOpen, onOpenChange: setAirportOpen }}
+          onAirportTravelCovered={(travel) => {
+            if (airportTravelRef.current?.id !== travel.id) return;
+            airportTravelRef.current = undefined;
+            airportArrivalRef.current = travel;
+            activeRepoRef.current = travel.destinationKey;
+            setAirportTravel(undefined);
+            setAirportArrival(travel);
+            setActiveRepoKey(travel.destinationKey);
+          }}
+          onAirportArrivalComplete={(travel) => {
+            if (airportArrivalRef.current?.id !== travel.id) return;
+            airportArrivalRef.current = undefined;
+            setAirportArrival(undefined);
+          }}
+          onRetryAirportArrival={(travel) => {
+            if (airportArrivalRef.current?.id !== travel.id) return;
+            setRepoConnectionGeneration((generation) => generation + 1);
+          }}
+          onLogout={handleLogout}
+          onSignIn={handleSignIn}
         />
-      )}
-    </>
+      ) : null}
+
+      {showLogin ? (
+        <div
+          className={`login-transition-cover${
+            demoTransition === "revealing"
+              ? " login-transition-cover--exiting"
+              : ""
+          }`}
+        >
+          <LoginScreen onSeeDemo={startDemo} />
+        </div>
+      ) : null}
+
+      {gate === "city" ? (
+        session.authenticated ? (
+          <RepoPicker
+            repos={repos}
+            loading={reposLoading}
+            error={reposError}
+            importing={importing}
+            onImportOrSelect={handleImportOrSelect}
+            onSeeDemo={() => beginAirportJourney(DEMO_REPO_KEY)}
+            onRefresh={loadRepos}
+            activeRepoKey={activeRepoKey}
+            dialog={{ open: airportOpen, onOpenChange: setAirportOpen }}
+          />
+        ) : (
+          <RepoPicker
+            repos={[]}
+            loading={false}
+            onImportOrSelect={() => undefined}
+            onSeeDemo={() => setAirportOpen(false)}
+            onRefresh={() => undefined}
+            activeRepoKey={activeRepoKey}
+            authenticationRequired
+            onSignIn={() => {
+              setAirportOpen(false);
+              handleSignIn();
+            }}
+            dialog={{ open: airportOpen, onOpenChange: setAirportOpen }}
+          />
+        )
+      ) : null}
+    </div>
   );
 }

@@ -337,6 +337,22 @@ export class WorldScene extends Phaser.Scene {
     this.transitionCloudVeil?.setSize(width, height).setDisplaySize(width, height);
   }
 
+  /**
+   * Phaser can receive its final RESIZE viewport after the first world has
+   * already been fitted. Refit only while the camera is untouched; after a
+   * user pan/zoom, a browser or panel resize must preserve their framing.
+   */
+  resizeViewport(width: number, height: number): void {
+    this.resizeTravelCover(width, height);
+    if (
+      this.snapshot &&
+      !this.focusTween &&
+      this.lastCameraInputAt === Number.NEGATIVE_INFINITY
+    ) {
+      this.fitCamera();
+    }
+  }
+
   setIssueShopClickListener(listener: () => void): void {
     this.issueShopClickListener = listener;
   }

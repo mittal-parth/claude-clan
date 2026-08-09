@@ -1,19 +1,19 @@
+import { githubStartUrl } from "@/auth/api";
 import HudButton from "@/components/hud/HudButton";
 import "@/components/ui/8bit/styles/retro.css";
-import { githubStartUrl } from "@/auth/api";
 
 export interface LoginScreenProps {
   onSeeDemo: () => void;
 }
 
-/** The full-bleed page shown before any repo is active -- the only screen an unauthenticated visitor can reach besides the demo city. */
+/** The floating login card shown over the already-mounted demo city. */
 export default function LoginScreen({ onSeeDemo }: LoginScreenProps) {
   return (
-    <div className="hud-root relative flex min-h-screen items-center justify-center bg-background px-4">
-      <div className="hud-scanline pointer-events-none absolute inset-0" />
-      <div className="hud-vignette pointer-events-none absolute inset-0" />
+    <div className="login-screen">
+      <div className="login-city-overlay" aria-hidden="true" />
+      <div className="hud-scanline pointer-events-none absolute inset-0 z-[1]" />
 
-      <div className="relative z-10 w-full max-w-md border-4 border-foreground bg-card p-0 shadow-none sm:rounded-none dark:border-ring">
+      <div className="login-screen__card relative z-10 w-full max-w-md border-4 border-foreground bg-card/90 p-0 shadow-2xl backdrop-blur-md sm:rounded-none dark:border-ring">
         <div className="border-b-4 border-foreground bg-primary/10 px-6 py-6 text-center dark:border-ring">
           <p className="retro text-lg text-primary">CLAUDE CITY</p>
           <p className="retro mt-2 text-[9px] text-muted-foreground">

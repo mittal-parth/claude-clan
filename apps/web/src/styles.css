@@ -78,6 +78,158 @@
   display: block;
 }
 
+.root-stage {
+  position: relative;
+  min-height: 100dvh;
+  width: 100%;
+  overflow: hidden;
+}
+
+.login-transition-cover {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  will-change: opacity;
+  transition: opacity 700ms var(--hud-ease);
+}
+
+.login-transition-cover--exiting {
+  pointer-events: none;
+  opacity: 0;
+}
+
+/* Keep the freshly-mounted city behind the login scene until its first
+ * snapshot is ready. The ready state then hands the screen over in layers. */
+.hud-root--initializing > .game-canvas {
+  opacity: 0;
+  will-change: opacity, filter;
+}
+
+.hud-root--initializing .hud-layer {
+  opacity: 0;
+  transform: translateY(12px);
+}
+
+.hud-root--revealing > .game-canvas {
+  animation: login-city-reveal 900ms var(--hud-ease) both;
+}
+
+.hud-root--revealing .hud-layer {
+  animation: login-hud-layer-reveal 700ms var(--hud-ease) 120ms both;
+}
+
+.hud-root--revealing .hud-column--main > .hud-window {
+  animation: login-hud-panel-reveal 560ms var(--hud-ease) 180ms both;
+}
+
+.hud-root--revealing .hud-column--main .hud-form .hud-window {
+  animation: login-hud-panel-reveal 560ms var(--hud-ease) 310ms both;
+}
+
+.hud-root--revealing .hud-column--console > .hud-window {
+  animation: login-hud-panel-reveal 620ms var(--hud-ease) 430ms both;
+}
+
+@keyframes login-city-reveal {
+  from {
+    opacity: 0;
+    filter: brightness(0.68) saturate(0.72);
+  }
+  55% {
+    opacity: 0.92;
+    filter: brightness(0.9) saturate(0.92);
+  }
+  to {
+    opacity: 1;
+    filter: none;
+  }
+}
+
+@keyframes login-hud-layer-reveal {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes login-hud-panel-reveal {
+  from {
+    opacity: 0;
+    transform: translateY(18px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .login-transition-cover {
+    transition: none;
+  }
+
+  .login-transition-cover--exiting {
+    transform: none;
+  }
+
+  .hud-root--initializing > .game-canvas,
+  .hud-root--initializing .hud-layer,
+  .hud-root--revealing > .game-canvas,
+  .hud-root--revealing .hud-layer,
+  .hud-root--revealing .hud-window {
+    opacity: 1;
+    filter: none;
+    transform: none;
+    animation: none;
+  }
+}
+
+/* --- login landing ------------------------------------------------------- */
+
+.login-screen {
+  position: relative;
+  display: flex;
+  min-height: 100dvh;
+  width: 100%;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  isolation: isolate;
+  padding: 1rem;
+  background: transparent;
+}
+
+.login-city-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  background:
+    radial-gradient(
+      ellipse at center,
+      transparent 0%,
+      color-mix(in oklab, var(--hud-shade) 16%, transparent) 52%,
+      color-mix(in oklab, var(--hud-shade) 78%, transparent) 100%
+    ),
+    linear-gradient(
+      180deg,
+      color-mix(in oklab, var(--hud-shade) 42%, transparent),
+      transparent 30%,
+      color-mix(in oklab, var(--hud-shade) 52%, transparent)
+    );
+}
+
+.login-screen__card {
+  box-shadow:
+    inset 0 1px 0 color-mix(in oklab, var(--foreground) 16%, transparent),
+    0 28px 70px -30px rgb(0 0 0 / 0.95),
+    8px 8px 0 color-mix(in oklab, var(--hud-shade) 42%, transparent);
+}
+
 
 /* ---------------------------------------------------------------------------
  * HUD
@@ -100,6 +252,11 @@
   width: 100%;
   overflow: hidden;
   background: var(--background);
+}
+
+.hud-root--login-background .hud-layer,
+.hud-root--handoff-loading .hud-layer {
+  display: none;
 }
 
 /* Sinks the bright map at the edges so pale windows keep their contrast. */
@@ -759,6 +916,10 @@
   .hud-window {
     animation: hud-rise 420ms var(--hud-ease) both;
   }
+}
+
+.hud-root--reveal-complete .hud-window {
+  animation: none;
 }
 
 @media (prefers-reduced-motion: reduce) {

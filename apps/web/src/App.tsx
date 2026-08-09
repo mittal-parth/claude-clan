@@ -566,6 +566,12 @@ export interface AppProps {
   sessionToken?: string;
   user?: AuthUser;
   repoConnectionGeneration: number;
+  /** Keeps the real demo canvas mounted behind the login card. */
+  loginBackground?: boolean;
+  /** Keeps the city visually staged while the login cover hands off to it. */
+  initialReveal?: boolean;
+  onInitialRevealReady?: () => void;
+  onInitialRevealComplete?: () => void;
   airportTravel?: CanvasAirportTravel;
   airportArrival?: CanvasAirportTravel;
   onOpenAirport: () => void;
@@ -581,6 +587,10 @@ export default function App({
   sessionToken,
   user,
   repoConnectionGeneration,
+  loginBackground = false,
+  initialReveal = false,
+  onInitialRevealReady,
+  onInitialRevealComplete,
   airportTravel,
   airportArrival,
   onOpenAirport,
@@ -594,6 +604,14 @@ export default function App({
   const socketRef = useRef<WebSocket>(null);
   const canvasRef = useRef<GameCanvasHandle>(null);
   const orderFormRef = useRef<HTMLFormElement>(null);
+  const initialRevealReadyRef = useRef(false);
+  const initialRevealTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(
+    undefined,
+  );
+  const initialRevealReadyCallbackRef = useRef(onInitialRevealReady);
+  const initialRevealCompleteCallbackRef = useRef(onInitialRevealComplete);
+  initialRevealReadyCallbackRef.current = onInitialRevealReady;
+  initialRevealCompleteCallbackRef.current = onInitialRevealComplete;
   const [connection, setConnection] =
     useState<ConnectionState>("connecting");
   const [reconnectAttempt, setReconnectAttempt] = useState(0);
@@ -642,10 +660,45 @@ export default function App({
     useState<CanvasTravelRequest>();
   const [issueBeingFixed, setIssueBeingFixed] = useState<Issue>();
   const [airportArrivalDelayed, setAirportArrivalDelayed] = useState(false);
+  const [initialRevealReady, setInitialRevealReady] = useState(false);
+  const [initialRevealComplete, setInitialRevealComplete] = useState(false);
 
   const events = eventsByCity[activeCityId] ?? [];
   const world = worldRepoKey === activeRepoKey ? worldByCity[activeCityId] : undefined;
   const overlay = overlayByCity[activeCityId];
+
+  useEffect(() => {
+    if (!initialReveal) {
+      initialRevealReadyRef.current = false;
+      setInitialRevealReady(false);
+      if (initialRevealTimerRef.current !== undefined) {
+        clearTimeout(initialRevealTimerRef.current);
+        initialRevealTimerRef.current = undefined;
+      }
+      return;
+    }
+
+    setInitialRevealComplete(false);
+    return () => {
+      if (initialRevealTimerRef.current !== undefined) {
+        clearTimeout(initialRevealTimerRef.current);
+        initialRevealTimerRef.current = undefined;
+      }
+    };
+  }, [initialReveal]);
+
+  function notifyInitialRevealReady(): void {
+    if (!initialReveal || initialRevealReadyRef.current) return;
+
+    initialRevealReadyRef.current = true;
+    setInitialRevealReady(true);
+    initialRevealReadyCallbackRef.current?.();
+    initialRevealTimerRef.current = setTimeout(() => {
+      initialRevealTimerRef.current = undefined;
+      setInitialRevealComplete(true);
+      initialRevealCompleteCallbackRef.current?.();
+    }, 1_100);
+  }
   const activeCity = cities.find((city) => city.id === activeCityId);
   const selectedChange = selected
     ? overlay?.files.find((file) => file.path === selected.path)
@@ -1043,7 +1096,16 @@ export default function App({
     setOrderPermissionMode("default");
   }
   return (
-    <div className="hud-root">
+    <div
+      className={cn(
+        "hud-root",
+        loginBackground && "hud-root--login-background",
+        initialRevealComplete && "hud-root--reveal-complete",
+        initialReveal && !initialRevealReady && "hud-root--handoff-loading",
+        initialReveal && initialRevealReady && "hud-root--initializing",
+        initialReveal && initialRevealReady && world && "hud-root--revealing",
+      )}
+    >
       {showDragPreview && dragPreview && dragPosition ? (
         <img
           src={dragPreview.src}
@@ -1067,6 +1129,9 @@ export default function App({
         cityId={activeCityId}
         worldKey={activeRepoKey}
         world={world}
+        onInitialWorldReady={
+          initialReveal ? notifyInitialRevealReady : undefined
+        }
         overlay={overlay}
         travelCityId={shipTravelTargetId}
         travelWorld={
