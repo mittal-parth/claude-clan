@@ -1,6 +1,6 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
-import App from "./App";
+import Root from "./Root";
 import { AudioProvider } from "./components/audio-provider";
 import "./styles.css";
 
@@ -13,7 +13,7 @@ if (!root) {
 createRoot(root).render(
   <StrictMode>
     <AudioProvider>
-      <App />
+      <Root />
     </AudioProvider>
   </StrictMode>,
 );
