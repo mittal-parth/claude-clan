@@ -1057,9 +1057,19 @@ function bakeAirportTaxiway(baker: Baker, key: string, junction: boolean): void 
   const height = 64;
   const originX = width / 2;
   const originY = height / 2;
-  fillFace(baker, AIRPORT.concreteDark, 1, diamond(0.5), originX, originY);
-  fillFace(baker, AIRPORT.asphalt, 1, diamond(0.39), originX, originY);
-  strokeFace(baker, AIRPORT.asphaltEdge, 0.9, 1, diamond(0.39), originX, originY);
+  // Taxiway slabs that sit on the terminal apron use the same poured-concrete
+  // palette as the surrounding tarmac. Only the dedicated runway textures use
+  // dark asphalt; this avoids a lone runway-black diamond on the grey apron.
+  fillFace(baker, AIRPORT.concrete, 1, diamond(0.5), originX, originY);
+  strokeFace(
+    baker,
+    AIRPORT.concreteDark,
+    0.72,
+    1,
+    diamond(0.46),
+    originX,
+    originY,
+  );
 
   baker.graphics.lineStyle(3, AIRPORT.gold, 1);
   const v1 = baker.at([0, -0.5, 2], originX, originY);
