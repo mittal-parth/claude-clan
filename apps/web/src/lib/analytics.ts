@@ -107,3 +107,8 @@ export function trackRepoImported(properties: { fullName: string }): void {
 export function trackBuildingInspected(properties: { path: string; fileType?: string; lines?: number }): void {
   trackEvent("building_inspected", properties);
 }
+
+/** Track when a user takes an issue to fix. */
+export function trackIssueTaken(properties: { issueNumber: number; repoKey?: string; cityId?: string }): void {
+  trackEvent("issue_taken", properties);
+}

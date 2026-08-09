@@ -58,6 +58,7 @@ import {
   trackMayorOrderHalted,
   trackPermitDecision,
   trackRepoSelected,
+  trackIssueTaken,
 } from "@/lib/analytics";
 
 /** Everything on duty until the server's policy message says otherwise. */
@@ -607,6 +608,11 @@ export function useGameState({
   }
 
   function takeIssueToFix(issue: Issue): void {
+    trackIssueTaken({
+      issueNumber: issue.number,
+      repoKey: activeRepoKey,
+      cityId: activeCityId,
+    });
     setIssueShopOpen(false);
     // Caught on the click rather than at dispatch, so the prompt appears
     // before the order is drafted into the console.
