@@ -4,6 +4,8 @@ import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import type { ChangedFile, FileChangeKind } from "@sudo-city/protocol";
 
+export * from "./auth.js";
+
 const execFileAsync = promisify(execFile);
 
 export interface PullRequestRef {
@@ -27,13 +29,17 @@ export interface IssueRef {
 export type ReviewEvent = "COMMENT" | "APPROVE" | "REQUEST_CHANGES";
 
 export interface GitHubClient {
-  listOpenPullRequests(repoPath: string): Promise<PullRequestRef[]>;
-  listOpenIssues(repoPath: string): Promise<IssueRef[]>;
+  listOpenPullRequests(
+    repoPath: string,
+    overrideToken?: string,
+  ): Promise<PullRequestRef[]>;
+  listOpenIssues(repoPath: string, overrideToken?: string): Promise<IssueRef[]>;
   postReview(
     repoPath: string,
     number: number,
     body: string,
     event: ReviewEvent,
+    overrideToken?: string,
   ): Promise<void>;
 }
 
@@ -175,13 +181,22 @@ export function parseGitHubRemote(remoteUrl: string): string | undefined {
 export class GitHubApiClient implements GitHubClient {
   constructor(private readonly token = process.env.GITHUB_TOKEN) {}
 
-  private headers(): Record<string, string> {
+  /**
+   * A per-call override token takes priority over the instance's own token.
+   * On a shared server the instance token (GITHUB_TOKEN, one process-wide
+   * PAT) is a fallback for the demo workspace only -- a signed-in user's
+   * roster must be fetched with *their* installation token, or every user
+   * would burn the same 60-req/hr unauthenticated (or one shared PAT's)
+   * budget, and the demo city alone would start 403ing under any real load.
+   */
+  private headers(overrideToken?: string): Record<string, string> {
     const headers: Record<string, string> = {
       accept: "application/vnd.github+json",
       "user-agent": "sudo-city",
     };
-    if (this.token) {
-      headers.authorization = `Bearer ${this.token}`;
+    const token = overrideToken ?? this.token;
+    if (token) {
+      headers.authorization = `Bearer ${token}`;
     }
     return headers;
   }
@@ -195,14 +210,17 @@ export class GitHubApiClient implements GitHubClient {
     return parseGitHubRemote(stdout);
   }
 
-  async listOpenPullRequests(repoPath: string): Promise<PullRequestRef[]> {
+  async listOpenPullRequests(
+    repoPath: string,
+    overrideToken?: string,
+  ): Promise<PullRequestRef[]> {
     const slug = await this.slugFor(repoPath);
     if (!slug) {
       return [];
     }
     const response = await fetch(
       `https://api.github.com/repos/${slug}/pulls?state=open&per_page=100`,
-      { headers: this.headers() },
+      { headers: this.headers(overrideToken) },
     );
     if (!response.ok) {
       throw new Error(
@@ -212,14 +230,17 @@ export class GitHubApiClient implements GitHubClient {
     return parsePullRequestApiJson(await response.text());
   }
 
-  async listOpenIssues(repoPath: string): Promise<IssueRef[]> {
+  async listOpenIssues(
+    repoPath: string,
+    overrideToken?: string,
+  ): Promise<IssueRef[]> {
     const slug = await this.slugFor(repoPath);
     if (!slug) {
       return [];
     }
     const response = await fetch(
       `https://api.github.com/repos/${slug}/issues?state=open&per_page=100`,
-      { headers: this.headers() },
+      { headers: this.headers(overrideToken) },
     );
     if (!response.ok) {
       throw new Error(
@@ -234,8 +255,9 @@ export class GitHubApiClient implements GitHubClient {
     number: number,
     body: string,
     event: ReviewEvent,
+    overrideToken?: string,
   ): Promise<void> {
-    if (!this.token) {
+    if (!overrideToken && !this.token) {
       throw new Error(
         "Posting a review requires GITHUB_TOKEN; listing works without one.",
       );
@@ -248,7 +270,10 @@ export class GitHubApiClient implements GitHubClient {
       `https://api.github.com/repos/${slug}/pulls/${number}/reviews`,
       {
         method: "POST",
-        headers: { ...this.headers(), "content-type": "application/json" },
+        headers: {
+          ...this.headers(overrideToken),
+          "content-type": "application/json",
+        },
         body: JSON.stringify({ body, event }),
       },
     );
