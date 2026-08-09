@@ -18,58 +18,34 @@ export interface SessionResponse {
   user?: { id: number; login: string; avatarUrl: string };
 }
 
-/**
- * Every authenticated call reads back an optional `x-session-token` header:
- * the server refreshes a near-expiry GitHub token transparently and hands
- * back the newly sealed session, so the client never runs its own refresh
- * logic -- it just adopts whatever token comes back.
- */
-async function authedFetch(
-  path: string,
-  token: string | undefined,
-  onRefreshed: (token: string) => void,
-  init?: RequestInit,
-): Promise<Response> {
-  const response = await fetch(`${API_URL}${path}`, {
+/** The bearer token is an opaque session id that never changes -- refreshing the underlying GitHub token happens server-side, in place, so there's nothing for the client to adopt back. */
+function authedFetch(path: string, token: string | undefined, init?: RequestInit): Promise<Response> {
+  return fetch(`${API_URL}${path}`, {
     ...init,
     headers: {
       ...init?.headers,
       ...(token ? { authorization: `Bearer ${token}` } : {}),
     },
   });
-  const refreshed = response.headers.get("x-session-token");
-  if (refreshed) {
-    onRefreshed(refreshed);
-  }
-  return response;
 }
 
-export async function fetchSession(
-  token: string | undefined,
-  onRefreshed: (token: string) => void,
-): Promise<SessionResponse> {
+export async function fetchSession(token: string | undefined): Promise<SessionResponse> {
   if (!token) {
     return { authenticated: false, mode: "anonymous" };
   }
-  const response = await authedFetch("/api/auth/session", token, onRefreshed);
+  const response = await authedFetch("/api/auth/session", token);
   return (await response.json()) as SessionResponse;
 }
 
-export async function logout(
-  token: string | undefined,
-  onRefreshed: (token: string) => void,
-): Promise<void> {
+export async function logout(token: string | undefined): Promise<void> {
   if (!token) {
     return;
   }
-  await authedFetch("/api/auth/logout", token, onRefreshed, { method: "POST" });
+  await authedFetch("/api/auth/logout", token, { method: "POST" });
 }
 
-export async function fetchRepos(
-  token: string,
-  onRefreshed: (token: string) => void,
-): Promise<RepoSummary[]> {
-  const response = await authedFetch("/api/repos", token, onRefreshed);
+export async function fetchRepos(token: string): Promise<RepoSummary[]> {
+  const response = await authedFetch("/api/repos", token);
   if (!response.ok) {
     throw new Error(`Failed to list repositories (${response.status})`);
   }
@@ -77,12 +53,8 @@ export async function fetchRepos(
   return body.repos;
 }
 
-export async function importRepo(
-  token: string,
-  fullName: string,
-  onRefreshed: (token: string) => void,
-): Promise<{ workspaceKey: string }> {
-  const response = await authedFetch("/api/repos/import", token, onRefreshed, {
+export async function importRepo(token: string, fullName: string): Promise<{ workspaceKey: string }> {
+  const response = await authedFetch("/api/repos/import", token, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ fullName }),

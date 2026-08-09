@@ -2,7 +2,6 @@ import { authorizeUrl, installUrl, signState, verifyState } from "@sudo-city/cit
 import type { FastifyInstance } from "fastify";
 import type { AuthContext } from "../auth-context.js";
 import { bearerToken, resolveSession } from "../auth-context.js";
-import { sealSession, type Session } from "../session.js";
 
 export function registerAuthRoutes(app: FastifyInstance, auth: AuthContext): void {
   // Login: always the plain OAuth authorize endpoint, whether or not the
@@ -41,17 +40,11 @@ export function registerAuthRoutes(app: FastifyInstance, auth: AuthContext): voi
       try {
         const tokens = await auth.githubAuth.exchangeCode(code);
         const viewer = await auth.githubAuth.viewer(tokens.accessToken);
-        const now = new Date();
-        const session: Session = {
-          userId: viewer.id,
-          login: viewer.login,
-          avatarUrl: viewer.avatarUrl,
+        const sessionId = await auth.db.createSession(
+          { id: viewer.id, login: viewer.login, avatarUrl: viewer.avatarUrl },
           tokens,
-          issuedAt: now.toISOString(),
-          expiresAt: tokens.expiresAt,
-        };
-        const sealed = sealSession(session, auth.sessionKey);
-        await reply.redirect(`${auth.webOrigin}/#session=${sealed}`);
+        );
+        await reply.redirect(`${auth.webOrigin}/#session=${sessionId}`);
       } catch (error) {
         app.log.error({ error }, "GitHub login callback failed");
         await reply.redirect(`${auth.webOrigin}/#session-error=1`);
@@ -59,26 +52,19 @@ export function registerAuthRoutes(app: FastifyInstance, auth: AuthContext): voi
     },
   );
 
-  app.get("/api/auth/session", async (request, reply) => {
+  app.get("/api/auth/session", async (request) => {
     const token = bearerToken(request);
     if (!token) {
       return { authenticated: false as const, mode: "anonymous" as const };
     }
-    const resolved = await resolveSession(token, auth, new Date());
-    if (!resolved) {
+    const session = await resolveSession(token, auth, new Date());
+    if (!session) {
       return { authenticated: false as const, mode: "anonymous" as const };
-    }
-    if (resolved.refreshedToken) {
-      reply.header("x-session-token", resolved.refreshedToken);
     }
     return {
       authenticated: true as const,
       mode: "user" as const,
-      user: {
-        id: resolved.session.userId,
-        login: resolved.session.login,
-        avatarUrl: resolved.session.avatarUrl,
-      },
+      user: { id: session.userId, login: session.login, avatarUrl: session.avatarUrl },
     };
   });
 
@@ -87,22 +73,19 @@ export function registerAuthRoutes(app: FastifyInstance, auth: AuthContext): voi
     if (token) {
       const session = await resolveSession(token, auth, new Date());
       if (session) {
+        await auth.db.revokeSession(token);
         // Best-effort: the client discards its bearer token regardless of
-        // whether this call succeeds, since there is no server-side session
-        // to invalidate either way.
-        await fetch(
-          `https://api.github.com/applications/${auth.clientId}/token`,
-          {
-            method: "DELETE",
-            headers: {
-              accept: "application/vnd.github+json",
-              "content-type": "application/json",
-              authorization: `Basic ${Buffer.from(`${auth.clientId}:${auth.clientSecret}`).toString("base64")}`,
-              "user-agent": "sudo-city",
-            },
-            body: JSON.stringify({ access_token: session.session.tokens.accessToken }),
+        // whether this call succeeds.
+        await fetch(`https://api.github.com/applications/${auth.clientId}/token`, {
+          method: "DELETE",
+          headers: {
+            accept: "application/vnd.github+json",
+            "content-type": "application/json",
+            authorization: `Basic ${Buffer.from(`${auth.clientId}:${auth.clientSecret}`).toString("base64")}`,
+            "user-agent": "sudo-city",
           },
-        ).catch((error: unknown) => {
+          body: JSON.stringify({ access_token: session.tokens.accessToken }),
+        }).catch((error: unknown) => {
           app.log.warn({ error }, "Failed to revoke GitHub token on logout");
         });
       }

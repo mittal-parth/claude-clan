@@ -30,12 +30,7 @@ export default function Root() {
   const [importing, setImporting] = useState<{ repoKey: string; startedAt: number }>();
   const [switchOpen, setSwitchOpen] = useState(false);
 
-  const onRefreshed = useCallback((next: string) => {
-    setToken(next);
-    writeStoredToken(next);
-  }, []);
-
-  // The GitHub callback hands the sealed session back in the URL fragment,
+  // The GitHub callback hands the session id back in the URL fragment,
   // never a query string, so it never reaches Render's access logs on that
   // hop -- read it once, persist it to sessionStorage, then strip the hash
   // so a reload or a copied URL doesn't re-carry it.
@@ -52,7 +47,7 @@ export default function Root() {
 
   useEffect(() => {
     let cancelled = false;
-    fetchSession(token, onRefreshed)
+    fetchSession(token)
       .then((result) => {
         if (cancelled) {
           return;
@@ -76,7 +71,7 @@ export default function Root() {
     return () => {
       cancelled = true;
     };
-  }, [token, onRefreshed]);
+  }, [token]);
 
   const loadRepos = useCallback(() => {
     if (!token) {
@@ -84,13 +79,13 @@ export default function Root() {
     }
     setReposLoading(true);
     setReposError(undefined);
-    fetchRepos(token, onRefreshed)
+    fetchRepos(token)
       .then(setRepos)
       .catch((error: unknown) => {
         setReposError(error instanceof Error ? error.message : "Failed to load repositories");
       })
       .finally(() => setReposLoading(false));
-  }, [token, onRefreshed]);
+  }, [token]);
 
   useEffect(() => {
     if (session.authenticated) {
@@ -108,7 +103,7 @@ export default function Root() {
       return;
     }
     setImporting({ repoKey: repo.key, startedAt: Date.now() });
-    importRepo(token, repo.fullName, onRefreshed)
+    importRepo(token, repo.fullName)
       .then(() => {
         setRepos((current) =>
           current.map((entry) => (entry.key === repo.key ? { ...entry, imported: true } : entry)),
@@ -123,7 +118,7 @@ export default function Root() {
   }
 
   function handleLogout(): void {
-    void logout(token, onRefreshed);
+    void logout(token);
     writeStoredToken(undefined);
     setToken(undefined);
     setSession({ authenticated: false });

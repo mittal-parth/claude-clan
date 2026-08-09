@@ -1,9 +1,9 @@
 import { GitHubAuth, needsRefresh } from "@sudo-city/cities";
 import type { FastifyRequest } from "fastify";
-import { deriveSessionKey, openSession, sealSession, type Session } from "./session.js";
+import { Database, type DbSession } from "./db.js";
 
 export interface AuthContext {
-  sessionKey: Buffer;
+  db: Database;
   githubAuth: GitHubAuth;
   appSlug: string;
   webOrigin: string;
@@ -12,14 +12,18 @@ export interface AuthContext {
   clientSecret: string;
 }
 
-export function buildAuthContext(): AuthContext {
+export async function buildAuthContext(): Promise<AuthContext> {
   const clientId = requireEnv("GITHUB_CLIENT_ID");
   const clientSecret = requireEnv("GITHUB_CLIENT_SECRET");
+  const db = new Database(requireEnv("DATABASE_URL"));
+  await db.migrate();
   return {
-    sessionKey: deriveSessionKey(requireEnv("SESSION_SECRET")),
+    db,
     githubAuth: new GitHubAuth({ clientId, clientSecret }),
     appSlug: requireEnv("GITHUB_APP_SLUG"),
     webOrigin: requireEnv("WEB_ORIGIN"),
+    // Reuses SESSION_SECRET for the login-flow CSRF state HMAC only -- the
+    // session itself is a DB row now, not something this secret seals.
     stateSecret: requireEnv("SESSION_SECRET"),
     clientId,
     clientSecret,
@@ -42,35 +46,25 @@ export function bearerToken(request: FastifyRequest): string | undefined {
   return header.slice("Bearer ".length);
 }
 
-export interface ResolvedSession {
-  session: Session;
-  /** Set only when the access token was refreshed -- callers should hand this back to the client as the session's new bearer token. */
-  refreshedToken?: string;
-}
-
 /**
- * Opens the sealed session and, if its GitHub access token is within 60s of
- * expiring, refreshes it and re-seals -- callers surface refreshedToken back
- * to the client (a response header) so the client's held token stays valid
- * without ever needing its own refresh logic.
+ * Looks up the session row and, if its GitHub access token is within 60s of
+ * expiring, refreshes it in place -- the session id (the client's bearer
+ * token) never changes, so unlike the old sealed-token scheme there is
+ * nothing to hand back to the client here.
  */
 export async function resolveSession(
   token: string,
   auth: AuthContext,
   now: Date,
-): Promise<ResolvedSession | undefined> {
-  const session = openSession(token, auth.sessionKey, now);
+): Promise<DbSession | undefined> {
+  const session = await auth.db.getSession(token);
   if (!session) {
     return undefined;
   }
   if (!needsRefresh(session.tokens, now) || !session.tokens.refreshToken) {
-    return { session };
+    return session;
   }
   const refreshed = await auth.githubAuth.refresh(session.tokens.refreshToken);
-  const updated: Session = {
-    ...session,
-    tokens: refreshed,
-    expiresAt: refreshed.expiresAt,
-  };
-  return { session: updated, refreshedToken: sealSession(updated, auth.sessionKey) };
+  await auth.db.updateSessionTokens(token, refreshed);
+  return { ...session, tokens: refreshed };
 }

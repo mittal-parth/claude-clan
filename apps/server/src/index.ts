@@ -12,10 +12,9 @@ import {
 } from "@sudo-city/protocol";
 import Fastify from "fastify";
 import { WebSocket, type RawData } from "ws";
-import { buildAuthContext, type AuthContext } from "./auth-context.js";
+import { buildAuthContext, resolveSession, type AuthContext } from "./auth-context.js";
 import { registerAuthRoutes } from "./routes/auth.js";
 import { registerRepoRoutes } from "./routes/repos.js";
-import { openSession } from "./session.js";
 import { Workspace } from "./workspace.js";
 import { WorkspaceManager } from "./workspaces.js";
 
@@ -48,7 +47,7 @@ if (!process.env.ANTHROPIC_API_KEY) {
  */
 let authContext: AuthContext | undefined;
 try {
-  authContext = buildAuthContext();
+  authContext = await buildAuthContext();
 } catch (error) {
   app.log.warn(
     { error },
@@ -151,6 +150,7 @@ if (authContext) {
 app.get("/health", async () => ({ ok: true, service: "sudo-city" }));
 app.addHook("onClose", async () => {
   await workspaces.disposeAll();
+  await authContext?.db.close();
 });
 
 function sendWorld(socket: WebSocket, workspace: Workspace, cityId: CityId): void {
@@ -188,7 +188,21 @@ app.get("/ws", { websocket: true }, (socket) => {
     return state ? workspaces.get(state.workspaceKey) : undefined;
   }
 
+  // The client sends session.auth immediately followed by repo.select over
+  // the same socket. session.auth now does a real DB lookup (async), so
+  // without this queue, repo.select's handler could run before session.auth
+  // finishes and see an unauthenticated socket. Chaining every message onto
+  // one per-socket promise processes them strictly in arrival order
+  // regardless of how long any individual handler's async work takes.
+  let queue: Promise<void> = Promise.resolve();
+
   socket.on("message", (payload: RawData) => {
+    queue = queue.then(() => handleMessage(payload)).catch((error: unknown) => {
+      app.log.error({ error }, "Unhandled error in the WS message queue");
+    });
+  });
+
+  async function handleMessage(payload: RawData): Promise<void> {
     let command: unknown;
     try {
       command = JSON.parse(payload.toString()) as unknown;
@@ -222,19 +236,12 @@ app.get("/ws", { websocket: true }, (socket) => {
         send(socket, { kind: "error", code: "AUTH_DISABLED", message: "Login is not configured on this server." });
         return;
       }
-      // Decoded synchronously (no refresh-and-reseal dance, unlike the REST
-      // routes' resolveSession) -- the client sends repo.select immediately
-      // after this over the same socket, and on a single read both frames
-      // can be parsed and dispatched in the same synchronous pass, before
-      // any awaited work here would get a chance to run. An async path here
-      // would make repo.select lose that race and silently see an
-      // unauthenticated socket.
-      const decodedSession = openSession(data.token, authContext.sessionKey, new Date());
-      if (!decodedSession) {
+      const session = await resolveSession(data.token, authContext, new Date());
+      if (!session) {
         send(socket, { kind: "error", code: "AUTH_INVALID", message: "Session is invalid or expired." });
         return;
       }
-      clients.set(socket, { ...state, userId: decodedSession.userId });
+      clients.set(socket, { ...state, userId: session.userId });
       return;
     }
 
@@ -384,7 +391,7 @@ app.get("/ws", { websocket: true }, (socket) => {
       app.log.error({ error, command: data.type }, "Unhandled error processing a mayor command");
       send(socket, { kind: "error", code: "INTERNAL_ERROR", message: "That command failed unexpectedly." });
     }
-  });
+  }
 });
 
 await app.listen({ host, port });
