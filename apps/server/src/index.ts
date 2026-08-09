@@ -1,675 +1,203 @@
-import { randomUUID } from "node:crypto";
 import { loadEnvFile } from "node:process";
-import { join, relative, resolve, sep } from "node:path";
-import {
-  AgentSessionManager,
-  type AgentEvent,
-} from "@sudo-city/agent";
-import {
-  GitHubApiClient,
-  changedFiles,
-  cityIdFor,
-  ensureMainWorktree,
-  ensureWorktree,
-  fileDiff,
-  issueCityIdFor,
-  pruneWorktrees,
-  type GitHubClient,
-  type IssueRef,
-  type PullRequestRef,
-} from "@sudo-city/cities";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import cors from "@fastify/cors";
 import websocket from "@fastify/websocket";
-import { layoutWorld } from "@sudo-city/layout";
 import {
   MayorCommandSchema,
-  type ChangedFile,
   type CityId,
-  type CitySummary,
   type GameEvent,
-  type Issue,
-  type PullRequestOverlay,
+  type RepoStatusPhase,
   type ServerMessage,
-  type WorldSnapshot,
 } from "@sudo-city/protocol";
-import { SQLiteWorldStore } from "@sudo-city/world";
-import { scanRepository } from "@sudo-city/worldgen";
 import Fastify from "fastify";
 import { WebSocket, type RawData } from "ws";
+import { buildAuthContext, type AuthContext } from "./auth-context.js";
+import { registerAuthRoutes } from "./routes/auth.js";
+import { registerRepoRoutes } from "./routes/repos.js";
+import { openSession } from "./session.js";
+import { Workspace } from "./workspace.js";
+import { WorkspaceManager } from "./workspaces.js";
 
 const host = process.env.HOST ?? "127.0.0.1";
 const port = Number(process.env.PORT ?? 4100);
 const app = Fastify({ logger: true });
 
+const webOrigin = process.env.WEB_ORIGIN;
+await app.register(cors, {
+  origin: [webOrigin, "http://127.0.0.1:5173"].filter((value): value is string => Boolean(value)),
+});
 await app.register(websocket);
 
-const targetRepo =
-  process.env.SUDO_CITY_REPO ?? process.env.INIT_CWD ?? process.cwd();
-const repositoryRoot = resolve(targetRepo);
-const MAX_CONTEXT_FILES = 20;
-
-function sanitizeContextPaths(paths: readonly string[] | undefined): string[] {
-  const safePaths = new Set<string>();
-
-  for (const rawPath of paths ?? []) {
-    const candidate = rawPath.trim().replaceAll("\\", "/");
-    if (!candidate || candidate.startsWith("/") || candidate.includes("\0")) {
-      continue;
-    }
-
-    const absolutePath = resolve(repositoryRoot, candidate);
-    const repositoryPath = relative(repositoryRoot, absolutePath);
-    if (
-      !repositoryPath ||
-      repositoryPath === ".." ||
-      repositoryPath.startsWith(`..${sep}`)
-    ) {
-      continue;
-    }
-
-    safePaths.add(sep === "/" ? repositoryPath : repositoryPath.split(sep).join("/"));
-    if (safePaths.size >= MAX_CONTEXT_FILES) {
-      break;
-    }
-  }
-
-  return [...safePaths];
-}
-
-function mayorMessage(prompt: string, contextPaths: readonly string[]): string {
-  if (contextPaths.length === 0) {
-    return prompt;
-  }
-
-  return [
-    prompt,
-    "",
-    "Attached context files:",
-    ...contextPaths.map((path) => `- ${path}`),
-  ].join("\n");
-}
+const demoRepoPath = process.env.SUDO_CITY_REPO ?? process.env.INIT_CWD ?? process.cwd();
 
 if (!process.env.ANTHROPIC_API_KEY) {
   try {
-    loadEnvFile(join(targetRepo, ".env"));
+    loadEnvFile(join(demoRepoPath, ".env"));
   } catch {
     // Existing Claude Code credentials remain the local-development fallback.
   }
 }
-const store = new SQLiteWorldStore(
-  join(targetRepo, ".sudocity", "world.db"),
-);
-
-type EventInput<Event extends GameEvent = GameEvent> = Event extends GameEvent
-  ? Omit<Event, "id" | "cityId" | "sessionId" | "sequence" | "timestamp">
-  : never;
 
 /**
- * One city's worth of process state. Each city has its own event sequence,
- * session id, in-flight scan guard, and agent -- none of these can be shared
- * across cities without one city stomping another's snapshot or sequence.
+ * A GitHub App isn't required to run the demo city at all -- login-related
+ * routes and the session.auth/repo.select commands are the only things
+ * gated on this being configured. Everything else (the shared demo
+ * workspace, chat, orders) must keep working with zero credentials, per the
+ * plan's "must never depend on GitHub" requirement for the offline path.
  */
-interface City {
-  readonly id: CityId;
-  readonly cwd: string;
-  readonly agent: AgentSessionManager;
-  readonly sessionId: string;
-  sequence: number;
-  snapshot: WorldSnapshot;
-  /** A PR city's diff against main; absent for "main" itself. */
-  overlay?: PullRequestOverlay;
-  /** This city's own share of the global budget spent so far -- session.usage's costUsd is cumulative per session, so this is a replace, not an add. */
-  spentUsd: number;
-  /** Guards against a burst of file.changed events queueing parallel scans. */
-  pendingScan?: Promise<WorldSnapshot>;
+let authContext: AuthContext | undefined;
+try {
+  authContext = buildAuthContext();
+} catch (error) {
+  app.log.warn(
+    { error },
+    "GitHub App env vars are not fully configured; login is disabled and only the demo city is available",
+  );
 }
 
-class CityRegistry {
-  private readonly cities = new Map<CityId, City>();
-  /** Every open PR known from the last gh pr list, whether or not it's been travelled to yet. */
-  private readonly pullRequests = new Map<CityId, PullRequestRef>();
-  /** Every open GitHub issue known from the last gh issue list. */
-  private readonly issues = new Map<CityId, IssueRef>();
-  /** In-flight ensureCity builds, so summaries() can report "building" and a second travel command reuses the same build. */
-  private readonly pendingBuilds = new Map<CityId, Promise<City>>();
-
-  add(city: City): void {
-    this.cities.set(city.id, city);
-  }
-
-  remove(id: CityId): void {
-    this.cities.delete(id);
-  }
-
-  get(id: CityId): City | undefined {
-    return this.cities.get(id);
-  }
-
-  list(): City[] {
-    return [...this.cities.values()];
-  }
-
-  setPullRequests(prs: readonly PullRequestRef[]): void {
-    this.pullRequests.clear();
-    for (const pr of prs) {
-      this.pullRequests.set(cityIdFor(pr) as CityId, pr);
-    }
-  }
-
-  pullRequestFor(id: CityId): PullRequestRef | undefined {
-    return this.pullRequests.get(id);
-  }
-
-  setIssues(issues: readonly IssueRef[]): void {
-    this.issues.clear();
-    for (const issue of issues) {
-      this.issues.set(issueCityIdFor(issue) as CityId, issue);
-    }
-  }
-
-  issueFor(id: CityId): IssueRef | undefined {
-    return this.issues.get(id);
-  }
-
-  listIssues(): Issue[] {
-    return [...this.issues.values()].map((issue) => ({ ...issue }));
-  }
-
-  knownPullRequestIds(): CityId[] {
-    return [...this.pullRequests.keys()];
-  }
-
-  isBuilding(id: CityId): boolean {
-    return this.pendingBuilds.has(id);
-  }
-
-  /** Builds a PR city at most once concurrently; a second travel while one is in flight reuses the same promise. */
-  async ensureBuild(id: CityId, build: () => Promise<City>): Promise<City> {
-    let pending = this.pendingBuilds.get(id);
-    if (!pending) {
-      pending = build().finally(() => this.pendingBuilds.delete(id));
-      this.pendingBuilds.set(id, pending);
-    }
-    const city = await pending;
-    this.cities.set(id, city);
-    return city;
-  }
-
-  summaries(): CitySummary[] {
-    const entries: CitySummary[] = [];
-    if (this.cities.has("main")) {
-      entries.push({
-        id: "main",
-        kind: "main",
-        title: "main",
-        ref: "main",
-        status: "ready",
-      });
-    }
-    for (const [id, pr] of this.pullRequests) {
-      entries.push({
-        id,
-        kind: "pull-request",
-        title: `#${pr.number} ${pr.title}`,
-        ref: pr.headRef,
-        number: pr.number,
-        author: pr.author,
-        url: pr.url,
-        status: this.cities.has(id)
-          ? "ready"
-          : this.pendingBuilds.has(id)
-            ? "building"
-            : "idle",
-      });
-    }
-    for (const [id, issue] of this.issues) {
-      if (!this.cities.has(id) && !this.pendingBuilds.has(id)) {
-        continue;
-      }
-      entries.push({
-        id,
-        kind: "issue",
-        title: `#${issue.number} ${issue.title}`,
-        ref: "main",
-        number: issue.number,
-        author: issue.author,
-        url: issue.url,
-        status: this.cities.has(id)
-          ? "ready"
-          : this.pendingBuilds.has(id)
-            ? "building"
-            : "idle",
-      });
-    }
-    return entries;
-  }
-
-  async disposeAll(): Promise<void> {
-    await Promise.all(this.list().map((city) => city.agent.interrupt()));
-  }
-}
-
-const registry = new CityRegistry();
-
-function fallbackWorld(city: CityId, repoPath: string): WorldSnapshot {
-  return {
-    id: `preview-${city}`,
-    repoPath,
-    revision: "working-tree",
-    generatedAt: new Date().toISOString(),
-    size: { width: 8, height: 8 },
-    districts: [
-      { path: "apps/web", x: 0, y: 0, width: 4, height: 8, weight: 184 },
-      { path: "apps/server", x: 4, y: 0, width: 4, height: 4, weight: 96 },
-      { path: "packages/protocol", x: 4, y: 4, width: 4, height: 4, weight: 121 },
-    ],
-    buildings: [
-      {
-        path: "apps/web/src/App.tsx",
-        district: "apps/web",
-        language: "TypeScript",
-        loc: 184,
-        plot: { x: 1, y: 2 },
-      },
-      {
-        path: "apps/server/src/index.ts",
-        district: "apps/server",
-        language: "TypeScript",
-        loc: 96,
-        plot: { x: 4, y: 1 },
-      },
-      {
-        path: "packages/protocol/src/index.ts",
-        district: "packages/protocol",
-        language: "TypeScript",
-        loc: 121,
-        plot: { x: 5, y: 4 },
-      },
-    ],
-  };
-}
-
-/**
- * A PR city must render the same island as main -- buildTerrain derives
- * every street from district geometry, and squarify reweights every
- * rectangle from LOC, so recomputing districts for a PR would silently
- * reshuffle the city even though only a few files changed. Pinning to
- * main's own size/districts, and seeding plots from main's (with the PR
- * city's own already-persisted plots winning if it's been scanned before),
- * keeps a PR city spatially comparable to main: only the occupied plots
- * differ.
- */
-async function generateWorld(city: CityId, cwd: string): Promise<WorldSnapshot> {
-  try {
-    const map = await scanRepository(cwd);
-    const main = city === "main" ? undefined : registry.get("main");
-    const layout = layoutWorld(map, {
-      width: main?.snapshot.size.width,
-      height: main?.snapshot.size.height,
-      districts: main?.snapshot.districts,
-      previousPlots: main
-        ? { ...store.loadPlots("main"), ...store.loadPlots(city) }
-        : store.loadPlots(city),
-    });
-    store.savePlots(city, layout.plots);
-    store.saveSnapshot(city, layout.snapshot);
-    return layout.snapshot;
-  } catch (error) {
-    app.log.warn({ error, city }, "Repository scan failed; using preview world");
-    return fallbackWorld(city, cwd);
-  }
-}
-
-function createEvent(city: City, event: EventInput): GameEvent {
-  const currentSequence = city.sequence++;
-  const completedEvent = {
-    ...event,
-    id: `${city.id}_evt_${currentSequence}`,
-    cityId: city.id,
-    sessionId: city.sessionId,
-    sequence: currentSequence,
-    timestamp: new Date().toISOString(),
-  } as GameEvent;
-  store.appendEvent(completedEvent);
-  return completedEvent;
-}
+const GLOBAL_MAX_BUDGET_USD = Number(process.env.SUDO_CITY_MAX_BUDGET_USD ?? 1);
+const cloneRoot = process.env.SUDO_CITY_CLONE_ROOT ?? join(tmpdir(), "sudocity");
 
 function send(socket: WebSocket, message: ServerMessage): void {
   socket.send(JSON.stringify(message));
 }
 
-/** Which city each connected socket is currently viewing. */
-const clients = new Map<WebSocket, { cityId: CityId }>();
+interface ClientState {
+  workspaceKey: string;
+  cityId: CityId;
+  userId?: number;
+}
 
-function broadcastEvent(cityId: CityId, event: GameEvent): void {
-  const message = JSON.stringify({ kind: "event", event } satisfies ServerMessage);
-  for (const [client, subscription] of clients) {
-    if (subscription.cityId === cityId && client.readyState === WebSocket.OPEN) {
-      client.send(message);
+/** Every connected socket, keyed by itself, carrying which workspace+city it's currently viewing. */
+const clients = new Map<WebSocket, ClientState>();
+
+function socketsForUser(userId: number): WebSocket[] {
+  return [...clients.entries()]
+    .filter(([, state]) => state.userId === userId)
+    .map(([socket]) => socket);
+}
+
+function broadcastRepoStatus(
+  userId: number,
+  repoKey: string,
+  phase: RepoStatusPhase,
+  message?: string,
+): void {
+  for (const socket of socketsForUser(userId)) {
+    if (socket.readyState === WebSocket.OPEN) {
+      send(socket, { kind: "repo.status", repoKey, phase, message });
     }
   }
 }
 
-function broadcastCities(): void {
-  const message = JSON.stringify({
-    kind: "cities",
-    cities: registry.summaries(),
-  } satisfies ServerMessage);
-  for (const client of clients.keys()) {
-    if (client.readyState === WebSocket.OPEN) {
-      client.send(message);
-    }
-  }
-}
-
-function broadcastIssues(): void {
-  const message = JSON.stringify({
-    kind: "issues",
-    issues: registry.listIssues(),
-  } satisfies ServerMessage);
-  for (const client of clients.keys()) {
-    if (client.readyState === WebSocket.OPEN) {
-      client.send(message);
-    }
-  }
-}
-
-function emitAgentEvent(cityId: CityId, event: AgentEvent): void {
-  const city = registry.get(cityId);
-  if (!city) {
-    return;
-  }
-  if (event.type === "session.usage") {
-    // total_cost_usd from the SDK is cumulative for that session, not a
-    // per-turn delta -- replacing rather than summing is what keeps N
-    // cities' concurrent spend from being double-counted.
-    city.spentUsd = event.costUsd;
-  }
-  broadcastEvent(cityId, createEvent(city, event));
-}
-
-/**
- * One budget shared across every city's agent, not one per agent -- N
- * concurrent PR review sessions must not silently multiply the ceiling by N.
- * Each city's manager is rationed the remaining balance right before it
- * starts a query (see setMaxBudgetUsd below), so an already-expensive main
- * session leaves less for a PR city that travels in afterward, and vice versa.
- */
-const GLOBAL_MAX_BUDGET_USD = Number(process.env.SUDO_CITY_MAX_BUDGET_USD ?? 1);
-
-function remainingBudget(): number {
-  const spent = registry
-    .list()
-    .reduce((total, city) => total + city.spentUsd, 0);
-  return Math.max(0, GLOBAL_MAX_BUDGET_USD - spent);
-}
-
-const mainSessionId = `local-${randomUUID()}`;
-const mainAgent = new AgentSessionManager({
-  cwd: targetRepo,
-  emit: (event) => emitAgentEvent("main", event),
-  maxBudgetUsd: remainingBudget(),
+const workspaces = new WorkspaceManager({
+  log: app.log,
+  cloneRoot,
+  globalMaxBudgetUsd: GLOBAL_MAX_BUDGET_USD,
+  sink: {
+    onEvent(workspaceKey, cityId, event: GameEvent) {
+      const message = JSON.stringify({ kind: "event", event } satisfies ServerMessage);
+      for (const [socket, state] of clients) {
+        if (
+          state.workspaceKey === workspaceKey &&
+          state.cityId === cityId &&
+          socket.readyState === WebSocket.OPEN
+        ) {
+          socket.send(message);
+        }
+      }
+    },
+    onCitiesChanged(workspaceKey) {
+      const workspace = workspaces.get(workspaceKey);
+      if (!workspace) {
+        return;
+      }
+      const message = JSON.stringify({
+        kind: "cities",
+        cities: workspace.summaries(),
+      } satisfies ServerMessage);
+      for (const [socket, state] of clients) {
+        if (state.workspaceKey === workspaceKey && socket.readyState === WebSocket.OPEN) {
+          socket.send(message);
+        }
+      }
+    },
+    onIssuesChanged(workspaceKey) {
+      const workspace = workspaces.get(workspaceKey);
+      if (!workspace) {
+        return;
+      }
+      const message = JSON.stringify({
+        kind: "issues",
+        issues: workspace.listIssues(),
+      } satisfies ServerMessage);
+      for (const [socket, state] of clients) {
+        if (state.workspaceKey === workspaceKey && socket.readyState === WebSocket.OPEN) {
+          socket.send(message);
+        }
+      }
+    },
+  },
 });
 
-registry.add({
-  id: "main",
-  cwd: targetRepo,
-  agent: mainAgent,
-  sessionId: mainSessionId,
-  sequence: 0,
-  snapshot: await generateWorld("main", targetRepo),
-  spentUsd: 0,
-});
+const demoWorkspace = await workspaces.openDemo(demoRepoPath);
 
-function sendWorld(socket: WebSocket, city: City): void {
-  send(socket, {
-    kind: "event",
-    event: createEvent(city, { type: "world.ready", snapshot: city.snapshot }),
-  });
-}
-
-function sendOverlay(socket: WebSocket, city: City): void {
-  if (city.overlay) {
-    send(socket, { kind: "overlay", overlay: city.overlay });
-  }
-}
-
-/**
- * The changed-file set for a PR against its base, computed in the main
- * checkout (not the worktree). Deleted files carry main's own plot, since
- * they no longer exist in the PR worktree for the renderer to place them by.
- */
-async function computeOverlay(
-  cityId: CityId,
-  pr: PullRequestRef,
-): Promise<PullRequestOverlay> {
-  const files = await changedFiles(targetRepo, pr.baseRef, pr.headSha);
-  const mainPlots = store.loadPlots("main");
-  const withPlots: ChangedFile[] = files.map((file) =>
-    file.change === "deleted"
-      ? { ...file, plot: mainPlots[file.path] }
-      : file,
-  );
-  return {
-    cityId,
-    baseRef: pr.baseRef,
-    headSha: pr.headSha,
-    files: withPlots,
-  };
-}
-
-const githubClient: GitHubClient = new GitHubApiClient();
-
-/**
- * gh's absence, an unauthenticated session, or no configured remote must
- * never fail the boot -- they degrade to a roster with only "main", the
- * same fallback posture the repository scan itself already has.
- */
-async function refreshRoster(): Promise<void> {
-  let pullRequests: PullRequestRef[] = [];
-  let issues: IssueRef[] = [];
-  try {
-    [pullRequests, issues] = await Promise.all([
-      githubClient.listOpenPullRequests(targetRepo),
-      githubClient.listOpenIssues(targetRepo),
-    ]);
-  } catch (error) {
-    app.log.warn(
-      { error },
-      "Failed to list GitHub work; only the main city is available",
-    );
-  }
-
-  const keep = new Set<CityId>([
-    ...pullRequests.map((pr) => cityIdFor(pr) as CityId),
-    ...issues.map((issue) => issueCityIdFor(issue) as CityId),
-  ]);
-  registry.setPullRequests(pullRequests);
-  registry.setIssues(issues);
-
-  for (const city of registry.list()) {
-    if (city.id !== "main" && !keep.has(city.id)) {
-      await city.agent.interrupt();
-      registry.remove(city.id);
-    }
-  }
-
-  await pruneWorktrees(targetRepo, keep).catch((error: unknown) => {
-    app.log.warn({ error }, "Failed to prune stale PR worktrees");
-  });
-
-  broadcastCities();
-  broadcastIssues();
-}
-
-/**
- * Builds a PR city's worktree, scan, and agent. Called lazily on first
- * travel, never eagerly for every open PR -- startup cost stays flat
- * regardless of how many PRs are open.
- */
-/**
- * Read-only Write/Edit/NotebookEdit are removed from the model's context
- * entirely (disallowedTools), not merely gated behind a permit -- a PR city
- * is for reviewing, not fixing in place. Publishing a review still goes
- * through Bash, which isn't a safe tool, so `gh pr review` naturally hits
- * the normal permit prompt and needs an explicit mayor stamp before it runs.
- */
-const REVIEW_DISALLOWED_TOOLS = ["Write", "Edit", "NotebookEdit"] as const;
-
-function reviewSystemPrompt(
-  pr: PullRequestRef,
-  overlay: PullRequestOverlay | undefined,
-): string {
-  const files = overlay?.files.length
-    ? overlay.files
-        .map((file) => `- ${file.change}: ${file.path}`)
-        .join("\n")
-    : "(the changed-file list could not be computed)";
-  return [
-    `You are reviewing GitHub pull request #${pr.number}, "${pr.title}", opened by @${pr.author}.`,
-    `This city's working directory is a worktree checked out at the PR's head commit (${pr.headSha}), diffed against ${pr.baseRef}.`,
-    "Write, Edit, and NotebookEdit are disabled here -- this city is read-only. Read and search freely; do not attempt to fix anything in place.",
-    "Changed files:",
-    files,
-    `To publish your review, run \`gh pr review ${pr.number} --approve\`, \`--request-changes\`, or \`--comment\`, each with \`--body "..."\`, via Bash. That call will pause for the mayor's permit before it executes -- never assume a review has been posted until it's been stamped.`,
-  ].join("\n");
-}
-
-async function buildPrCity(cityId: CityId, pr: PullRequestRef): Promise<City> {
-  const worktree = await ensureWorktree(targetRepo, pr);
-  const snapshot = await generateWorld(cityId, worktree);
-  const overlay = await computeOverlay(cityId, pr).catch((error: unknown) => {
-    app.log.warn(
-      { error, cityId },
-      "Failed to compute the PR diff overlay; markers will be unavailable",
-    );
-    return undefined;
-  });
-  const agent = new AgentSessionManager({
-    cwd: worktree,
-    emit: (event) => emitAgentEvent(cityId, event),
-    maxBudgetUsd: remainingBudget(),
-    disallowedTools: REVIEW_DISALLOWED_TOOLS,
-    systemPromptAppend: reviewSystemPrompt(pr, overlay),
-  });
-  return {
-    id: cityId,
-    cwd: worktree,
-    agent,
-    sessionId: `local-${randomUUID()}`,
-    sequence: 0,
-    snapshot,
-    overlay,
-    spentUsd: 0,
-  };
-}
-
-async function buildIssueCity(cityId: CityId, issue: IssueRef): Promise<City> {
-  const worktree = await ensureMainWorktree(targetRepo, cityId);
-  const snapshot = await generateWorld(cityId, worktree);
-  const agent = new AgentSessionManager({
-    cwd: worktree,
-    emit: (event) => emitAgentEvent(cityId, event),
-    maxBudgetUsd: remainingBudget(),
-    systemPromptAppend: [
-      `You are fixing GitHub issue #${issue.number}, "${issue.title}".`,
-      "This city is a writable detached worktree based on main. Implement and verify the fix here; do not change the primary checkout.",
-      issue.body ? `Issue details:\n${issue.body}` : "No issue description was provided.",
-    ].join("\n\n"),
-  });
-  return {
-    id: cityId,
-    cwd: worktree,
-    agent,
-    sessionId: `local-${randomUUID()}`,
-    sequence: 0,
-    snapshot,
-    spentUsd: 0,
-  };
-}
-
-/**
- * Returns an existing city, or builds one lazily if its PR is known but not
- * yet materialised. Broadcasts the roster around the build so clients see
- * the "building" status flip to "ready" (or back to "idle" on failure).
- */
-async function ensureCity(cityId: CityId): Promise<City | undefined> {
-  const existing = registry.get(cityId);
-  if (existing) {
-    return existing;
-  }
-  const pr = registry.pullRequestFor(cityId);
-  const issue = registry.issueFor(cityId);
-  if (!pr && !issue) {
-    return undefined;
-  }
-
-  const building = registry.ensureBuild(cityId, () =>
-    pr ? buildPrCity(cityId, pr) : buildIssueCity(cityId, issue!),
-  );
-  broadcastCities();
-  try {
-    const city = await building;
-    broadcastCities();
-    return city;
-  } catch (error) {
-    app.log.error({ error, cityId }, "Failed to build PR city");
-    broadcastCities();
-    return undefined;
-  }
-}
-
-await refreshRoster();
-
-/**
- * Rescans a city's repository and broadcasts the result to that city's
- * viewers only. Plots are persisted, so a file that already exists keeps
- * its city block and the client's diff leaves the standing building alone.
- */
-async function rescanWorld(city: City): Promise<void> {
-  city.pendingScan ??= generateWorld(city.id, city.cwd).finally(() => {
-    city.pendingScan = undefined;
-  });
-  city.snapshot = await city.pendingScan;
-  broadcastEvent(
-    city.id,
-    createEvent(city, { type: "world.ready", snapshot: city.snapshot }),
-  );
+if (authContext) {
+  registerAuthRoutes(app, authContext);
+  registerRepoRoutes(app, authContext, workspaces, broadcastRepoStatus);
 }
 
 app.get("/health", async () => ({ ok: true, service: "sudo-city" }));
 app.addHook("onClose", async () => {
-  await registry.disposeAll();
-  store.close();
+  await workspaces.disposeAll();
 });
 
-app.get("/ws", { websocket: true }, (socket) => {
-  const mainCity = registry.get("main");
-  if (!mainCity) {
-    socket.close();
+function sendWorld(socket: WebSocket, workspace: Workspace, cityId: CityId): void {
+  const city = workspace.city(cityId);
+  if (!city) {
     return;
   }
+  send(socket, {
+    kind: "event",
+    event: workspace.createEvent(city, { type: "world.ready", snapshot: city.snapshot }),
+  });
+}
 
-  clients.set(socket, { cityId: "main" });
-  send(socket, { kind: "cities", cities: registry.summaries() });
-  send(socket, { kind: "issues", issues: registry.listIssues() });
-  sendWorld(socket, mainCity);
+function sendOverlay(socket: WebSocket, workspace: Workspace, cityId: CityId): void {
+  const overlay = workspace.overlayFor(cityId);
+  if (overlay) {
+    send(socket, { kind: "overlay", overlay });
+  }
+}
+
+function sendWorkspaceState(socket: WebSocket, workspace: Workspace, cityId: CityId): void {
+  send(socket, { kind: "cities", cities: workspace.summaries() });
+  send(socket, { kind: "issues", issues: workspace.listIssues() });
+  sendWorld(socket, workspace, cityId);
+  sendOverlay(socket, workspace, cityId);
+}
+
+app.get("/ws", { websocket: true }, (socket) => {
+  clients.set(socket, { workspaceKey: demoWorkspace.key, cityId: "main" });
+  sendWorkspaceState(socket, demoWorkspace, "main");
   socket.once("close", () => clients.delete(socket));
+
+  function currentWorkspace(): Workspace | undefined {
+    const state = clients.get(socket);
+    return state ? workspaces.get(state.workspaceKey) : undefined;
+  }
 
   socket.on("message", (payload: RawData) => {
     let command: unknown;
     try {
       command = JSON.parse(payload.toString()) as unknown;
     } catch {
-      send(socket, {
-        kind: "error",
-        code: "INVALID_JSON",
-        message: "Command must be valid JSON",
-      });
+      send(socket, { kind: "error", code: "INVALID_JSON", message: "Command must be valid JSON" });
       return;
     }
 
     const decoded = MayorCommandSchema.safeParse(command);
-
     if (!decoded.success) {
       send(socket, {
         kind: "error",
@@ -679,152 +207,156 @@ app.get("/ws", { websocket: true }, (socket) => {
       return;
     }
 
-    // Aliased to a local const so discriminated-union narrowing survives
-    // inside the .some() callback below -- narrowing a property access like
-    // decoded.data does not reliably propagate into a nested closure.
     const data = decoded.data;
+    const state = clients.get(socket);
+    if (!state) {
+      return;
+    }
 
-    function requireCity(cityId: CityId): City | undefined {
-      const city = registry.get(cityId);
-      if (!city) {
+    // One socket's bad command must never take the process down with it --
+    // this server is shared by every connected user, unlike the old
+    // single-repo single-tenant version.
+    try {
+    if (data.type === "session.auth") {
+      if (!authContext) {
+        send(socket, { kind: "error", code: "AUTH_DISABLED", message: "Login is not configured on this server." });
+        return;
+      }
+      // Decoded synchronously (no refresh-and-reseal dance, unlike the REST
+      // routes' resolveSession) -- the client sends repo.select immediately
+      // after this over the same socket, and on a single read both frames
+      // can be parsed and dispatched in the same synchronous pass, before
+      // any awaited work here would get a chance to run. An async path here
+      // would make repo.select lose that race and silently see an
+      // unauthenticated socket.
+      const decodedSession = openSession(data.token, authContext.sessionKey, new Date());
+      if (!decodedSession) {
+        send(socket, { kind: "error", code: "AUTH_INVALID", message: "Session is invalid or expired." });
+        return;
+      }
+      clients.set(socket, { ...state, userId: decodedSession.userId });
+      return;
+    }
+
+    if (data.type === "repo.select") {
+      const currentState = clients.get(socket);
+      if (!currentState) {
+        return;
+      }
+      if (data.repoKey === "demo") {
+        clients.set(socket, { workspaceKey: demoWorkspace.key, cityId: "main" });
+        sendWorkspaceState(socket, demoWorkspace, "main");
+        return;
+      }
+      if (currentState.userId === undefined) {
+        send(socket, { kind: "error", code: "AUTH_REQUIRED", message: "Sign in to select your own repos." });
+        return;
+      }
+      const [owner, name] = data.repoKey.split("/");
+      if (!owner || !name) {
+        send(socket, { kind: "error", code: "REPO_NOT_FOUND", message: "Unknown repository." });
+        return;
+      }
+      // The socket only carries an authenticated userId, never a token --
+      // repo.select must be paired with a prior /api/repos/import (which
+      // has the bearer token) unless the workspace is already open.
+      const existingKey = `${currentState.userId}:${data.repoKey}`;
+      const existing = workspaces.get(existingKey);
+      if (!existing) {
         send(socket, {
           kind: "error",
-          code: "CITY_NOT_FOUND",
-          message: `No city "${cityId}" is available.`,
+          code: "REPO_NOT_IMPORTED",
+          message: "Import this repository first via /api/repos/import.",
         });
+        return;
+      }
+      clients.set(socket, { workspaceKey: existing.key, cityId: "main", userId: currentState.userId });
+      sendWorkspaceState(socket, existing, "main");
+      return;
+    }
+
+    const workspace = currentWorkspace();
+    if (!workspace) {
+      send(socket, { kind: "error", code: "CITY_NOT_FOUND", message: "No active repository selected." });
+      return;
+    }
+
+    function requireCity(cityId: CityId) {
+      const city = workspace!.city(cityId);
+      if (!city) {
+        send(socket, { kind: "error", code: "CITY_NOT_FOUND", message: `No city "${cityId}" is available.` });
       }
       return city;
     }
 
     switch (data.type) {
       case "world.request": {
-        const city = requireCity(data.cityId);
-        if (!city) {
+        if (!requireCity(data.cityId)) {
           break;
         }
-        void rescanWorld(city).catch((error: unknown) => {
+        void workspace.rescanWorld(data.cityId).catch((error: unknown) => {
           app.log.error({ error }, "World rescan failed");
           send(socket, {
             kind: "error",
             code: "WORLD_SCAN_FAILED",
-            message:
-              error instanceof Error ? error.message : "Repository scan failed",
+            message: error instanceof Error ? error.message : "Repository scan failed",
           });
         });
         break;
       }
       case "session.prompt": {
-        const city = requireCity(data.cityId);
-        if (!city) {
+        if (!requireCity(data.cityId)) {
           break;
         }
-        const contextPaths = sanitizeContextPaths(data.contextPaths);
-        broadcastEvent(
-          city.id,
-          createEvent(city, {
-            type: "session.message",
-            role: "mayor",
-            text: mayorMessage(data.prompt, contextPaths),
-          }),
-        );
-        // Rationed from the shared ledger right before the query starts, so
-        // whatever another city has already spent narrows this session's cap.
-        city.agent.setMaxBudgetUsd(remainingBudget());
-        void city.agent
-          .start(data.prompt, data.permissionMode ?? "default", {
-            model: data.model,
-            effort: data.effort,
-            contextPaths,
-          })
-          .catch((error: unknown) => {
-            emitAgentEvent(city.id, {
-              type: "session.message",
-              role: "system",
-              text:
-                error instanceof Error
-                  ? `Agent stopped: ${error.message}`
-                  : "Agent stopped unexpectedly.",
-            });
-          });
+        workspace.prompt(data.cityId, data.prompt, {
+          permissionMode: data.permissionMode,
+          contextPaths: data.contextPaths,
+          model: data.model,
+          effort: data.effort,
+        });
         break;
       }
       case "session.interrupt": {
-        const city = requireCity(data.cityId);
-        if (!city) {
+        if (!requireCity(data.cityId)) {
           break;
         }
-        void city.agent.interrupt();
-        broadcastEvent(
-          city.id,
-          createEvent(city, {
-            type: "session.message",
-            role: "system",
-            text: "Construction paused by the mayor.",
-          }),
-        );
+        workspace.interrupt(data.cityId);
         break;
       }
       case "permit.resolve": {
-        // A permit's toolCallId is SDK-generated and globally unique, so
-        // fanning out across every city's agent is safe: at most one will
-        // recognise it, and resolvePermit returns false on a miss. This also
-        // avoids trusting a client-supplied cityId for an authorization
-        // decision.
-        const resolved = registry
-          .list()
-          .some((city) =>
-            city.agent.resolvePermit(data.toolCallId, data.decision),
-          );
+        const resolved = workspace.resolvePermit(data.toolCallId, data.decision);
         if (!resolved) {
-          send(socket, {
-            kind: "error",
-            code: "PERMIT_NOT_FOUND",
-            message: "This permit is no longer pending.",
-          });
+          send(socket, { kind: "error", code: "PERMIT_NOT_FOUND", message: "This permit is no longer pending." });
         }
         break;
       }
       case "city.travel": {
         const cityId = data.cityId;
-        // A PR city may not exist yet -- ensureCity builds it lazily on
-        // first travel and broadcasts "building" -> "ready"/failed status
-        // around the wait, which is why this can't reuse requireCity's
-        // synchronous lookup.
-        void ensureCity(cityId)
+        void workspace
+          .ensureCity(cityId)
           .then((city) => {
             if (!city) {
-              send(socket, {
-                kind: "error",
-                code: "CITY_NOT_FOUND",
-                message: `No city "${cityId}" is available.`,
-              });
+              send(socket, { kind: "error", code: "CITY_NOT_FOUND", message: `No city "${cityId}" is available.` });
               return;
             }
-            clients.set(socket, { cityId: city.id });
-            sendWorld(socket, city);
-            sendOverlay(socket, city);
+            clients.set(socket, { ...clients.get(socket)!, cityId: city.id });
+            sendWorld(socket, workspace, city.id);
+            sendOverlay(socket, workspace, city.id);
           })
           .catch((error: unknown) => {
             app.log.error({ error, cityId }, "Failed to travel to city");
             send(socket, {
               kind: "error",
               code: "CITY_NOT_FOUND",
-              message:
-                error instanceof Error
-                  ? error.message
-                  : "Failed to build that city.",
+              message: error instanceof Error ? error.message : "Failed to build that city.",
             });
           });
         break;
       }
       case "city.refresh":
-        void refreshRoster().catch((error: unknown) => {
+        void workspace.refreshRoster().catch((error: unknown) => {
           app.log.error({ error }, "Failed to refresh the city roster");
-          send(socket, {
-            kind: "error",
-            code: "CITY_NOT_FOUND",
-            message: "Failed to refresh open pull requests.",
-          });
+          send(socket, { kind: "error", code: "CITY_NOT_FOUND", message: "Failed to refresh open pull requests." });
         });
         break;
       case "diff.request": {
@@ -832,41 +364,25 @@ app.get("/ws", { websocket: true }, (socket) => {
         if (!city) {
           break;
         }
-        const pr = registry.pullRequestFor(city.id);
-        if (!pr) {
-          send(socket, {
-            kind: "error",
-            code: "CITY_NOT_FOUND",
-            message: "This city has no pull request to diff against.",
-          });
-          break;
-        }
-        void fileDiff(targetRepo, pr.baseRef, pr.headSha, data.path)
+        void workspace
+          .diff(data.cityId, data.path)
           .then((patch) => {
-            send(socket, {
-              kind: "diff",
-              cityId: city.id,
-              path: data.path,
-              patch,
-            });
+            send(socket, { kind: "diff", cityId: data.cityId, path: data.path, patch });
           })
           .catch((error: unknown) => {
-            app.log.error(
-              { error, cityId: city.id, path: data.path },
-              "Failed to compute file diff",
-            );
-            send(socket, {
-              kind: "error",
-              code: "CITY_NOT_FOUND",
-              message: "Failed to compute that diff.",
-            });
+            app.log.error({ error, cityId: data.cityId, path: data.path }, "Failed to compute file diff");
+            send(socket, { kind: "error", code: "CITY_NOT_FOUND", message: "Failed to compute that diff." });
           });
         break;
       }
       default: {
-        const exhaustiveCommand: never = data;
-        throw new Error(`Unhandled command: ${String(exhaustiveCommand)}`);
+        const exhaustive: never = data;
+        throw new Error(`Unhandled command: ${String(exhaustive)}`);
       }
+    }
+    } catch (error) {
+      app.log.error({ error, command: data.type }, "Unhandled error processing a mayor command");
+      send(socket, { kind: "error", code: "INTERNAL_ERROR", message: "That command failed unexpectedly." });
     }
   });
 });
