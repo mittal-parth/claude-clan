@@ -398,8 +398,9 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
       );
       scene.setAirportClickListener(() => airportClickRef.current?.());
       // The whole harbour is one click target -- the sign shares the ship's
-      // own handler rather than opening the (currently unwired) issue shop.
+      // own handler. The issue shop itself opens from the capitol instead.
       scene.setHarbourSignClickListener(() => harbourShipClickRef.current?.());
+      scene.setCapitolClickListener(() => issueShopClickRef.current?.());
       scene.setHarbourShipHoverListener((info) =>
         (airportHoverRef.current ?? shipHoverRef.current)?.(info),
       );

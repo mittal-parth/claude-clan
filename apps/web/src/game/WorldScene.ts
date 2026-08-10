@@ -441,6 +441,7 @@ export class WorldScene extends Phaser.Scene {
   private airportBeacon?: Phaser.GameObjects.Arc;
   private airportHoverListener?: (info?: ShipHoverInfo) => void;
   private airportClickListener?: () => void;
+  private capitolClickListener?: () => void;
 
   /**
    * The east-coast harbour. Purely scenery: none of these sprites is made
@@ -541,6 +542,10 @@ export class WorldScene extends Phaser.Scene {
 
   setAirportClickListener(listener: () => void): void {
     this.airportClickListener = listener;
+  }
+
+  setCapitolClickListener(listener: () => void): void {
+    this.capitolClickListener = listener;
   }
 
   setTravelTransitionActive(active: boolean): void {
@@ -1233,7 +1238,12 @@ export class WorldScene extends Phaser.Scene {
       )
       .setOrigin(0.5, 1)
       .setScale(CAPITOL_SCALE)
-      .setDepth(projection.depth(sort.x, sort.y));
+      .setDepth(projection.depth(sort.x, sort.y))
+      .setInteractive({ pixelPerfect: true, useHandCursor: true });
+    capitol.on("pointerdown", () => {
+      playUiClickSound();
+      this.capitolClickListener?.();
+    });
     this.propSprites.push(capitol);
   }
 

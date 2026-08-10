@@ -963,6 +963,29 @@
     0 0 0 1px rgb(125 211 252 / 0.1),
     0 28px 90px rgb(0 0 0 / 0.62),
     0 0 70px rgb(14 116 144 / 0.12);
+  scrollbar-width: thin;
+  scrollbar-color: rgb(125 211 252 / 0.35) rgb(7 21 30 / 0.8);
+}
+
+.airport-board ::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.airport-board ::-webkit-scrollbar-track {
+  background: rgb(7 21 30 / 0.8);
+  border-radius: 3px;
+}
+
+.airport-board ::-webkit-scrollbar-thumb {
+  background: rgb(125 211 252 / 0.28);
+  border: 1px solid rgb(125 211 252 / 0.35);
+  border-radius: 3px;
+}
+
+.airport-board ::-webkit-scrollbar-thumb:hover {
+  background: rgb(246 189 96 / 0.55);
+  border-color: rgb(246 189 96 / 0.8);
 }
 
 .airport-board-header::before {

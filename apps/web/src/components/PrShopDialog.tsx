@@ -86,7 +86,7 @@ function PrRow({
         <button
           type="button"
           onClick={onTake}
-          className="group/btn inline-flex items-center gap-2 border border-sky-300/30 bg-sky-400/10 px-3 py-1.5 transition-colors hover:border-sky-300 hover:bg-sky-400 hover:text-black"
+          className="group/btn inline-flex cursor-pointer items-center gap-2 border border-sky-300/30 bg-sky-400/10 px-3 py-1.5 transition-colors hover:border-sky-300 hover:bg-sky-400 hover:text-black"
         >
           <Anchor className="size-3.5 text-sky-300 transition-transform group-hover/btn:-rotate-12 group-hover/btn:text-black" aria-hidden="true" />
           <span className="retro text-[8px] leading-4 text-sky-100 group-hover/btn:text-black">

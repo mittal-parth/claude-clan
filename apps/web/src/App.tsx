@@ -809,7 +809,6 @@ export default function App({
     useState<CanvasTravelRequest>();
   const [navyTravelRequest, setNavyTravelRequest] =
     useState<CanvasTravelRequest>();
-  const [issueBeingFixed, setIssueBeingFixed] = useState<Issue>();
   const [airportArrivalDelayed, setAirportArrivalDelayed] = useState(false);
   const [initialRevealReady, setInitialRevealReady] = useState(false);
   const [initialRevealComplete, setInitialRevealComplete] = useState(false);
@@ -954,7 +953,6 @@ export default function App({
     setPrShopOpen(false);
     setIssueTravelRequest(undefined);
     setNavyTravelRequest(undefined);
-    setIssueBeingFixed(undefined);
     setDraggingBuilding(undefined);
     setDragPreview(undefined);
     setDragPosition(undefined);
@@ -1233,25 +1231,14 @@ export default function App({
     setShipTravelTargetId(undefined);
     setIssueTravelRequest(undefined);
     setNavyTravelRequest(undefined);
-    if (issueBeingFixed && cityId === `issue-${issueBeingFixed.number}`) {
-      // Deliberately do not send this prompt. It is a ready-to-review draft
-      // in Mayor's order, exactly as if the mayor had typed it themselves.
-      setPrompt(promptForIssue(issueBeingFixed));
-      setIssueBeingFixed(undefined);
-    }
   }
 
   function takeIssueToFix(issue: Issue): void {
     setIssueShopOpen(false);
-    setIssueBeingFixed(issue);
-    // The issue rides out as a container: the crane loads it aboard before the
-    // clouds close, and unloads it onto the quay when she berths.
-    setIssueTravelRequest({
-      id: `issue-${issue.number}-${Date.now()}`,
-      cityId: `issue-${issue.number}`,
-      ship: "container",
-      carriesContainer: true,
-    });
+    // Deliberately do not send this prompt, and do not open a worktree city
+    // for it. It is a ready-to-review draft in Mayor's order, exactly as if
+    // the mayor had typed it themselves after reading the issue.
+    setPrompt(promptForIssue(issue));
   }
 
   // The container ship is the mayor's own fleet: their own open PRs, plus
