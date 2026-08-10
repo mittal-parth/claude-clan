@@ -343,23 +343,26 @@ export const ServerMessageSchema = z.discriminatedUnion("kind", [
  */
 
 /**
- * Half-extents of the reserve, in tiles, measured from the centre tile.
+ * Half-extents of the reserve, in tiles, measured from the centre tile. The
+ * front v extent is one tile shorter than the rear so the rearward building
+ * offset leaves a deliberate, slightly larger forecourt.
  *
  * These are sized directly from the building outward, one layer at a time, and
  * nothing is spare. The capitol occupies tiles -5..5 along u and -2..2 along v,
  * and then:
  *
- *   building | 1 tile paved apron | 2 tiles lawn | boulevard
+ *   building | 1 tile paved apron | 1 tile lawn | boulevard
  *
- * which puts the boulevard on the reserve's perimeter at 9 and 6. Any wider
- * and the mall opens dead ground around the monument; any narrower and the
- * wings overhang the road.
+ * which puts the boulevard on the reserve's perimeter at u ±7, rear v -4 and
+ * front v +3. Any wider and the mall opens dead ground around the monument;
+ * any narrower and the wings overhang the road.
  *
  * The building is far wider than it is deep — the wings run along u — so the
  * reserve is a rectangle rather than a square.
  */
-export const CAPITOL_HALF_U = 9;
-export const CAPITOL_HALF_V = 6;
+export const CAPITOL_HALF_U = 7;
+export const CAPITOL_HALF_V = 4;
+export const CAPITOL_FRONT_EXTENT_V = CAPITOL_HALF_V - 1;
 
 export interface CapitolDistrict {
   /** Centre tile — where the capitol sprite is anchored. */
@@ -386,7 +389,7 @@ export function capitolDistrict(size: WorldSize): CapitolDistrict {
     minX: centerX - CAPITOL_HALF_U,
     minY: centerY - CAPITOL_HALF_V,
     maxX: centerX + CAPITOL_HALF_U,
-    maxY: centerY + CAPITOL_HALF_V,
+    maxY: centerY + CAPITOL_FRONT_EXTENT_V,
   };
 }
 
@@ -400,7 +403,8 @@ export function capitolDistrict(size: WorldSize): CapitolDistrict {
  */
 export function capitolFits(size: WorldSize): boolean {
   return (
-    size.width >= CAPITOL_HALF_U * 2 + 9 && size.height >= CAPITOL_HALF_V * 2 + 9
+    size.width >= CAPITOL_HALF_U * 2 + 9 &&
+    size.height >= CAPITOL_HALF_V + CAPITOL_FRONT_EXTENT_V + 9
   );
 }
 

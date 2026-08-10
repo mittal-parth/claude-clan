@@ -10,7 +10,7 @@ import {
   type WorldSnapshot,
 } from "@sudo-city/protocol";
 import Phaser from "phaser";
-import { capitolDepthTile } from "./capitol";
+import { CAPITOL_OFFSET_V, capitolDepthTile } from "./capitol";
 import { AmbientLife, prefersReducedMotion } from "./ambient";
 import { ConstructionSites, type ConstructionTarget } from "./construction";
 import { playUiClickSound } from "@/lib/play-ui-click";
@@ -169,7 +169,12 @@ import {
   roadTextureKey,
   terrainTextureKey,
 } from "./textures";
-import { bakeCapitol, CAPITOL_KEY, CAPITOL_ANCHOR_Y } from "./capitolTextures";
+import {
+  bakeCapitol,
+  CAPITOL_ANCHOR_Y,
+  CAPITOL_KEY,
+  CAPITOL_SCALE,
+} from "./capitolTextures";
 
 /** Tints applied to a marked building; the marker sprite carries its own colour. */
 const ADDED_TINT = 0xffcf94;
@@ -1214,12 +1219,20 @@ export class WorldScene extends Phaser.Scene {
       return;
     }
     const mall = capitolDistrict(size);
-    const anchor = projection.project(mall.centerX, mall.centerY);
+    const anchor = projection.project(
+      mall.centerX,
+      mall.centerY + CAPITOL_OFFSET_V,
+    );
     const sort = capitolDepthTile(mall);
 
     const capitol = this.add
-      .sprite(anchor.x, anchor.y + CAPITOL_ANCHOR_Y, CAPITOL_KEY)
+      .sprite(
+        anchor.x,
+        anchor.y + CAPITOL_ANCHOR_Y * CAPITOL_SCALE,
+        CAPITOL_KEY,
+      )
       .setOrigin(0.5, 1)
+      .setScale(CAPITOL_SCALE)
       .setDepth(projection.depth(sort.x, sort.y));
     this.propSprites.push(capitol);
   }

@@ -1,4 +1,5 @@
 import {
+  CAPITOL_FRONT_EXTENT_V,
   CAPITOL_HALF_U,
   CAPITOL_HALF_V,
   capitolDistrict,
@@ -7,7 +8,11 @@ import {
   type WorldSnapshot,
 } from "@sudo-city/protocol";
 import { describe, expect, it } from "vitest";
-import { capitolCell, capitolDepthTile } from "./capitol";
+import {
+  CAPITOL_OFFSET_V,
+  capitolCell,
+  capitolDepthTile,
+} from "./capitol";
 import { buildTerrain, ROAD_EAST, ROAD_WEST } from "./terrain";
 
 /** Comfortably larger than the reserve, so the mall has city around it. */
@@ -42,11 +47,15 @@ describe("the capitol reserve", () => {
     expect(mall.centerX).toBe(Math.floor((SIZE - 1) / 2));
     expect(mall.centerY).toBe(Math.floor((SIZE - 1) / 2));
     expect(mall.maxX - mall.minX).toBe(CAPITOL_HALF_U * 2);
-    expect(mall.maxY - mall.minY).toBe(CAPITOL_HALF_V * 2);
+    expect(mall.maxY - mall.minY).toBe(
+      CAPITOL_HALF_V + CAPITOL_FRONT_EXTENT_V,
+    );
   });
 
   it("is declined by a field too small to give the block away", () => {
     expect(capitolFits({ width: 12, height: 12 })).toBe(false);
+    expect(capitolFits({ width: 23, height: 16 })).toBe(true);
+    expect(capitolFits({ width: 23, height: 15 })).toBe(false);
     expect(capitolFits({ width: SIZE, height: SIZE })).toBe(true);
   });
 
@@ -93,39 +102,37 @@ describe("the mall's ground", () => {
   it("leaves the ground under the building unplanted", () => {
     const mall = capitolDistrict({ width: SIZE, height: SIZE });
 
-    // The capitol's footprint: the wings run to +/-5 along u, and the rear
-    // portico to the foot of the grand stair spans -2..2 along v.
-    for (let dv = -2; dv <= 2; dv += 1) {
-      for (let du = -5; du <= 5; du += 1) {
+    // After the 0.75 scale and one-tile rear offset, the visible building spans
+    // roughly du -4..4 and dv -2..1; the next front row is designed lawn.
+    for (let dv = -2; dv <= 1; dv += 1) {
+      for (let du = -4; du <= 4; du += 1) {
         const cell = capitolCell(mall, mall.centerX + du, mall.centerY + dv);
         expect(cell?.prop).toBeUndefined();
       }
     }
   });
 
-  it("lays apron, two tiles of lawn, then boulevard on every side", () => {
+  it("lays apron, one tile of lawn, then boulevard on every side", () => {
     const mall = capitolDistrict({ width: SIZE, height: SIZE });
     const kindAt = (du: number, dv: number) =>
       capitolCell(mall, mall.centerX + du, mall.centerY + dv)?.kind;
 
-    // Sideways, clear of the approach: building to du 5, apron at 6, lawn at
-    // 7 and 8, boulevard at 9.
+    // Sideways, clear of the approach: building to du 5, the baked apron
+    // overhangs du 6, and boulevard is du 7.
     for (const side of [1, -1]) {
-      expect(kindAt(side * 6, 0)).toBe("plaza");
-      expect(kindAt(side * 7, 0)).toBe("park");
-      expect(kindAt(side * 8, 0)).toBe("park");
-      expect(kindAt(side * 9, 0)).toBe("road");
+      expect(kindAt(side * 6, 0)).toBe("park");
+      expect(kindAt(side * 7, 0)).toBe("road");
     }
 
-    // Behind: building to dv -2, apron at -3, lawn at -4 and -5, road at -6.
-    expect(kindAt(0, -3)).toBe("plaza");
-    expect(kindAt(0, -4)).toBe("park");
-    expect(kindAt(0, -5)).toBe("park");
-    expect(kindAt(0, -6)).toBe("road");
+    // Behind: building to dv -2, the baked apron overhangs dv -3, and
+    // boulevard is dv -4.
+    expect(kindAt(0, -3)).toBe("park");
+    expect(kindAt(0, -4)).toBe("road");
 
-    // In front, off the approach, the same two tiles of lawn survive.
-    expect(kindAt(7, 4)).toBe("park");
-    expect(kindAt(7, 5)).toBe("park");
+    // In front, off the approach, the one lawn tile remains at dv 2 and the
+    // boulevard is now at dv 3.
+    expect(kindAt(6, 2)).toBe("park");
+    expect(kindAt(6, 3)).toBe("road");
   });
 
   it("walks the approach from the apron to the boulevard at stair width", () => {
@@ -133,19 +140,21 @@ describe("the mall's ground", () => {
     const kindAt = (du: number, dv: number) =>
       capitolCell(mall, mall.centerX + du, mall.centerY + dv)?.kind;
 
-    // Unbroken paving from the foot of the stair right up to the road.
-    for (let dv = 3; dv <= 5; dv += 1) {
-      for (let du = -2; du <= 2; du += 1) {
+    // The two rows at dv 1 and dv 2 carry concrete from the stair into the
+    // existing walk, with the front boulevard closing it at dv 3.
+    for (let dv = 1; dv <= CAPITOL_FRONT_EXTENT_V - 1; dv += 1) {
+      for (let du = -1; du <= 1; du += 1) {
         expect(kindAt(du, dv)).toBe("plaza");
       }
-      // And it is exactly the stair's width — the tile either side is lawn.
-      expect(kindAt(3, dv)).toBe("park");
-      expect(kindAt(-3, dv)).toBe("park");
+      // The scaled stair is exactly three tiles wide — the tile either side
+      // remains lawn.
+      expect(kindAt(2, dv)).toBe("park");
+      expect(kindAt(-2, dv)).toBe("park");
     }
-    expect(kindAt(0, 6)).toBe("road");
+    expect(kindAt(0, 3)).toBe("road");
 
     // The walk runs to the front only; the back keeps its unbroken lawn.
-    expect(kindAt(0, -4)).toBe("park");
+    expect(kindAt(0, -3)).toBe("park");
   });
 
   it("plants the avenue symmetrically rather than at random", () => {
@@ -154,14 +163,22 @@ describe("the mall's ground", () => {
       capitolCell(mall, mall.centerX + du, mall.centerY + dv)?.prop;
 
     // Mirroring across the wing axis is what reads as a designed mall.
-    for (let dv = -CAPITOL_HALF_V + 1; dv <= CAPITOL_HALF_V - 1; dv += 1) {
-      expect(propAt(CAPITOL_HALF_U - 1, dv)).toBe(propAt(-(CAPITOL_HALF_U - 1), dv));
+    for (
+      let dv = -CAPITOL_HALF_V + 1;
+      dv <= CAPITOL_FRONT_EXTENT_V - 1;
+      dv += 1
+    ) {
+      expect(propAt(CAPITOL_HALF_U - 1, dv)).toBe(
+        propAt(-(CAPITOL_HALF_U - 1), dv),
+      );
     }
-    // The corners of the lawn are marked.
-    expect(propAt(CAPITOL_HALF_U - 1, CAPITOL_HALF_V - 1)).toBe("fountain");
-    expect(propAt(-(CAPITOL_HALF_U - 1), -(CAPITOL_HALF_V - 1))).toBe("fountain");
+    // The rear and front corners of the remaining lawn are marked.
+    expect(propAt(CAPITOL_HALF_U - 1, -CAPITOL_HALF_V + 1)).toBe("fountain");
+    expect(propAt(-(CAPITOL_HALF_U - 1), -CAPITOL_HALF_V + 1)).toBe("fountain");
+    expect(propAt(CAPITOL_HALF_U - 1, CAPITOL_FRONT_EXTENT_V - 1)).toBe("fountain");
+    expect(propAt(-(CAPITOL_HALF_U - 1), CAPITOL_FRONT_EXTENT_V - 1)).toBe("fountain");
     // The ceremonial approach stays open.
-    expect(propAt(0, CAPITOL_HALF_V - 1)).toBeUndefined();
+    expect(propAt(0, CAPITOL_FRONT_EXTENT_V - 1)).toBeUndefined();
   });
 
   it("exempts its planting from the decoration budget", () => {
@@ -205,7 +222,7 @@ describe("the mall inside a built world", () => {
 
     for (let y = mall.minY; y <= mall.maxY; y += 1) {
       for (let x = mall.minX; x <= mall.maxX; x += 1) {
-        expect(["road", "park"]).toContain(grid.cellAt(x, y)?.kind);
+        expect(["road", "park", "plaza"]).toContain(grid.cellAt(x, y)?.kind);
       }
     }
   });
@@ -228,6 +245,7 @@ describe("the capitol sprite's sort key", () => {
     const sort = capitolDepthTile(mall);
 
     expect(sort.x).toBe(mall.centerX);
+    expect(sort.y).toBe(mall.centerY + CAPITOL_OFFSET_V + 2);
     expect(sort.y).toBeGreaterThan(mall.centerY);
     // Still inside its own reserve, so it can never outsort a neighbour that
     // is genuinely in front of the mall.

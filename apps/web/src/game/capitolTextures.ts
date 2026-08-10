@@ -35,6 +35,8 @@ import {
 } from "./textures";
 
 export const CAPITOL_KEY = "prop:capitol";
+/** Visual scale for the baked capitol; terrain geometry remains unchanged. */
+export const CAPITOL_SCALE = 0.75;
 
 /**
  * Pixels the texture reserves below its tile point.
@@ -104,8 +106,8 @@ const CAPITOL = {
  * rusticated basement each block already carries is the plinth.
  *
  * Because the terrace is gone, these extents ARE the building's footprint, and
- * the mall reserve in @sudo-city/protocol is sized directly from them: two
- * clear tiles of lawn on every side, then the boulevard. Widening anything
+ * the mall reserve in @sudo-city/protocol is sized directly from them: one
+ * clear tile of lawn on every side, then the boulevard. Widening anything
  * here without widening the reserve eats that gap.
  */
 

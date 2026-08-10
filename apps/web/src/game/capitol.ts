@@ -17,8 +17,10 @@
  */
 
 import {
+  CAPITOL_FRONT_EXTENT_V,
   CAPITOL_HALF_U,
   CAPITOL_HALF_V,
+  inCapitolDistrict,
   type CapitolDistrict,
 } from "@sudo-city/protocol";
 import { hashCoords, pickIndex } from "./hash";
@@ -31,10 +33,13 @@ import type { PropKind, TerrainCell } from "./terrain";
 const BUILDING_HALF_U = 5;
 const BUILDING_HALF_V = 2;
 
+/** The reserve stays centred; the whole baked building sits one tile to the rear. */
+export const CAPITOL_OFFSET_V = -1;
+
 /**
  * The mall in layers, working outward from the building:
  *
- *   building | half-tile apron | 2 tiles lawn | boulevard
+ *   building | half-tile apron | 1 tile lawn | boulevard
  *
  * The apron is half a tile wide, so it cannot be terrain — the grid has no
  * half tiles. It is baked into the capitol's own texture instead and simply
@@ -42,9 +47,9 @@ const BUILDING_HALF_V = 2;
  * classified as lawn here. Only the walk out to the road, which has to line up
  * with the road, is real paving.
  */
-const APRON_SPILL = 1;
 const LAWN_HALF_U = CAPITOL_HALF_U - 1;
-const LAWN_HALF_V = CAPITOL_HALF_V - 1;
+const LAWN_BACK_V = CAPITOL_HALF_V - 1;
+const LAWN_FRONT_V = CAPITOL_FRONT_EXTENT_V - 1;
 
 /**
  * Half-width of the ceremonial approach, in tiles.
@@ -53,7 +58,8 @@ const LAWN_HALF_V = CAPITOL_HALF_V - 1;
  * to the boulevard is the stair continued across the lawn, so the two have to
  * be the same span or the approach steps in and out as it crosses the grass.
  */
-const AXIS_HALF = 2;
+const AXIS_HALF = 1;
+const APPROACH_START_V = BUILDING_HALF_V - 1;
 
 /**
  * Classifies one tile of the mall, or returns undefined if the tile is not in
@@ -70,14 +76,19 @@ export function capitolCell(
   const du = x - mall.centerX;
   const dv = y - mall.centerY;
 
-  if (Math.abs(du) > CAPITOL_HALF_U || Math.abs(dv) > CAPITOL_HALF_V) {
+  if (!inCapitolDistrict(mall, x, y)) {
     return undefined;
   }
 
   // The boulevard. roadMask is filled in later by roadMaskAt, which sees these
   // cells exactly as it sees the city's own streets — that is what welds the
   // ring to the surrounding grid.
-  if (Math.abs(du) === CAPITOL_HALF_U || Math.abs(dv) === CAPITOL_HALF_V) {
+  if (
+    x === mall.minX ||
+    x === mall.maxX ||
+    y === mall.minY ||
+    y === mall.maxY
+  ) {
     return { x, y, kind: "road", variant: 0, roadMask: 0 };
   }
 
@@ -101,11 +112,12 @@ export function capitolCell(
  *
  * It is the only thing that crosses the lawn, and it does so on the building's
  * own axis at the stair's width, so the approach reads as one continuous line
- * from the road to the portico. It starts where the sprite's baked apron stops
- * overhanging, so the two meet without a seam of grass between them.
+ * from the road to the portico. The first plaza row meets the foot of the
+ * rearward-shifted sprite's baked apron, and the second carries the concrete
+ * cleanly into the scaled stair instead of leaving a grass seam.
  */
 function isPaved(du: number, dv: number): boolean {
-  return Math.abs(du) <= AXIS_HALF && dv >= BUILDING_HALF_V + APRON_SPILL;
+  return Math.abs(du) <= AXIS_HALF && dv >= APPROACH_START_V;
 }
 
 /**
@@ -118,10 +130,10 @@ function isPaved(du: number, dv: number): boolean {
  */
 function mallProp(du: number, dv: number): PropKind | undefined {
   // Planting is confined to the row against the boulevard — street trees, in
-  // effect. The lawn is only two tiles deep, and filling both rows would close
+  // effect. The lawn is only one tile deep, and filling it would close
   // the gap the mall is there to give the building.
   const edgeU = Math.abs(du) === LAWN_HALF_U;
-  const edgeV = Math.abs(dv) === LAWN_HALF_V;
+  const edgeV = dv === -LAWN_BACK_V || dv === LAWN_FRONT_V;
 
   // Corners get a fountain; the rest of the perimeter gets its avenue of
   // trees, broken only where the ceremonial approach crosses it.
@@ -152,5 +164,8 @@ export function capitolDepthTile(mall: CapitolDistrict): {
   x: number;
   y: number;
 } {
-  return { x: mall.centerX, y: mall.centerY + BUILDING_HALF_V };
+  return {
+    x: mall.centerX,
+    y: mall.centerY + CAPITOL_OFFSET_V + BUILDING_HALF_V,
+  };
 }
