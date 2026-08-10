@@ -24,6 +24,11 @@ import {
   type HarbourLayout,
   type HarbourPoint,
 } from "./harbour";
+import {
+  createNavyHarbourLayout,
+  navyHarbourLayoutKey,
+  type NavyHarbourLayout,
+} from "./navyHarbour";
 import { createIsoProjection } from "./iso";
 import { markerFor, rubbleMarkers } from "./overlay";
 import { archetypeFor, tierFor } from "./palette";
@@ -107,6 +112,53 @@ import {
   TILE_ANCHOR_Y,
   TILE_HEIGHT,
   TILE_WIDTH,
+  BATTLESHIP_KEYS,
+  BATTLESHIP_ANCHOR_Y,
+  NAVY_QUAY_KEY,
+  NAVY_QUAY_DECK,
+  NAVY_QUAY_ANCHOR_Y,
+  NAVY_PIER_KEY,
+  NAVY_PIER_ANCHOR_Y,
+  NAVY_COMMAND_KEY,
+  NAVY_COMMAND_ANCHOR_Y,
+  NAVY_HANGAR_KEY,
+  NAVY_HANGAR_ANCHOR_Y,
+  NAVY_BARRACKS_KEY,
+  NAVY_BARRACKS_ANCHOR_Y,
+  NAVY_RADAR_KEY,
+  NAVY_RADAR_ANCHOR_Y,
+  NAVY_RADAR_HUB_Z,
+  NAVY_RADAR_DISH_KEYS,
+  NAVY_RADAR_DISH_ANCHOR_Y,
+  NAVY_ROTOR_KEYS,
+  NAVY_ROTOR_ANCHOR_Y,
+  NAVY_ROTOR_HUB_Z,
+  NAVY_COMMAND_BEACON_Z,
+  NAVY_FLOODLIGHT_LAMP_Z,
+  NAVY_SIGN_BEACON_Z,
+  NAVY_MISSILE_KEY,
+  NAVY_MISSILE_ANCHOR_Y,
+  NAVY_TANK_KEY,
+  NAVY_TANK_ANCHOR_Y,
+  NAVY_GUN_KEY,
+  NAVY_GUN_ANCHOR_Y,
+  NAVY_FUEL_TANK_KEY,
+  NAVY_FUEL_TANK_ANCHOR_Y,
+  NAVY_HELIPAD_KEY,
+  NAVY_HELIPAD_ANCHOR_Y,
+  NAVY_HELICOPTER_KEY,
+  NAVY_HELICOPTER_ANCHOR_Y,
+  NAVY_FENCE_KEY,
+  NAVY_FENCE_ANCHOR_Y,
+  NAVY_FLOODLIGHT_KEY,
+  NAVY_FLOODLIGHT_ANCHOR_Y,
+  NAVY_FLAG_KEY,
+  NAVY_FLAG_ANCHOR_Y,
+  NAVY_CRATE_KEY,
+  NAVY_CRATE_ANCHOR_Y,
+  NAVY_BOLLARD_KEY,
+  NAVY_SIGN_KEY,
+  NAVY_SIGN_ANCHOR_Y,
   bakeBuilding,
   bakeTerrainTextures,
   propTextureKey,
@@ -208,6 +260,15 @@ const SHIP_TURN_END = 0.72;
 const YAW_OUTBOUND = 0;
 const YAW_SEAWARD = Math.PI / 2;
 const YAW_ALONGSIDE_IN = Math.PI;
+/**
+ * Ambient frame rates for the naval base's two turning props. The radar's 24
+ * bearings at this step come round in about 4.6 seconds — a plausible air-search
+ * sweep; the rotor's four blades take 32 steps to a revolution, so it turns in
+ * a little over a second and reads as idling rather than stopped.
+ */
+const NAVY_RADAR_SWEEP_STEP_MS = 190;
+const NAVY_ROTOR_STEP_MS = 45;
+
 const YAW_INBOUND = (3 * Math.PI) / 2;
 /** How long she takes to turn herself end-for-end in the basin. */
 const SHIP_TURNAROUND_MS = 2_400;
@@ -316,11 +377,15 @@ export class WorldScene extends Phaser.Scene {
   private diffScaffolds = new Map<string, Phaser.GameObjects.Sprite>();
   private rubbleSprites: Phaser.GameObjects.Sprite[] = [];
 
-  /** Ships link main to PR cities and provide every PR city a way home. */
-  private lastCities: CitySummary[] = [];
-  private shipSprites = new Map<string, Phaser.GameObjects.Sprite>();
-  private shipHoverListener?: (info?: ShipHoverInfo) => void;
-  private shipClickListener?: (cityId: string) => void;
+  private navySprites: Phaser.GameObjects.Sprite[] = [];
+  private navyGlows: Phaser.GameObjects.Arc[] = [];
+  /** Frame-cycling timers: the radar sweep and the helicopter's rotor. */
+  private navyTimers: Phaser.Time.TimerEvent[] = [];
+  private navyLayoutSignature?: string;
+  private navyBattleship?: Phaser.GameObjects.Sprite;
+  private navySignClickListener?: () => void;
+  private navyShipClickListener?: () => void;
+  private navyShipHoverListener?: (info?: ShipHoverInfo) => void;
   /** Individually drawn puffs; every travel creates a new set of silhouettes. */
   private transitionClouds: Phaser.GameObjects.Graphics[] = [];
   /** Whiteout layer beneath the clouds; it guarantees a fully covered map. */
@@ -415,12 +480,16 @@ export class WorldScene extends Phaser.Scene {
     this.selectionListener = listener;
   }
 
-  setShipHoverListener(listener: (info?: ShipHoverInfo) => void): void {
-    this.shipHoverListener = listener;
+  setNavyShipHoverListener(listener: (info?: ShipHoverInfo) => void): void {
+    this.navyShipHoverListener = listener;
   }
 
-  setShipClickListener(listener: (cityId: string) => void): void {
-    this.shipClickListener = listener;
+  setNavyShipClickListener(listener: () => void): void {
+    this.navyShipClickListener = listener;
+  }
+
+  setNavySignClickListener(listener: () => void): void {
+    this.navySignClickListener = listener;
   }
 
   setAirportHoverListener(listener: (info?: ShipHoverInfo) => void): void {
@@ -438,7 +507,7 @@ export class WorldScene extends Phaser.Scene {
       this.dragOrigin = undefined;
       this.pressOrigin = undefined;
       this.highlight?.setVisible(false);
-      this.shipHoverListener?.(undefined);
+      this.navyShipHoverListener?.(undefined);
       this.airportHoverListener?.(undefined);
     }
   }
@@ -480,10 +549,6 @@ export class WorldScene extends Phaser.Scene {
    * first world snapshot, layoutShips no-ops until setWorld has a snapshot.
    */
   setCities(cities: readonly CitySummary[]): void {
-    this.lastCities = [...cities];
-    if (this.currentCityId && this.scene?.isActive()) {
-      this.layoutShips();
-    }
   }
 
   /**
@@ -806,10 +871,10 @@ export class WorldScene extends Phaser.Scene {
     // it is standing beside.
     this.syncConstruction();
 
-    this.layoutShips();
-    this.layoutIssueShop();
-    this.layoutAirport();
     this.layoutHarbour();
+    this.layoutIssueShop();
+    this.layoutNavyHarbour();
+    this.layoutAirport();
 
     // hasFitCamera is reset to false by resetWorld() above, so this also
     // refits the camera for every newly-arrived city, not just the first
@@ -986,7 +1051,7 @@ export class WorldScene extends Phaser.Scene {
     this.rubbleSprites = [];
     this.overlay = undefined;
 
-    this.clearShips();
+    this.clearNavyHarbour();
     this.issueShop?.destroy();
     this.issueShop = undefined;
 
@@ -1467,118 +1532,403 @@ export class WorldScene extends Phaser.Scene {
   }
 
   // -------------------------------------------------------------------------
-  // Ships and city travel
+  // Navy Harbour
   // -------------------------------------------------------------------------
 
-  /**
-   * Moors one ship per open PR just past main's east coast. In a PR city a
-   * single, west-coast ship returns to main. Reuses sprites by destination
-   * city id so a roster refresh does not make ships flicker.
-   */
-  private layoutShips(): void {
-    const snapshot = this.snapshot;
-    if (!snapshot) {
+  private layoutNavyHarbour(): void {
+    if (!this.snapshot) {
+      this.clearNavyHarbour();
       return;
     }
-    const isMain = this.currentCityId === "main";
-    // An issue city's way home is the container ship at its harbour, so it
-    // gets no sailing-boat of its own -- two "sail to main" ships in one city
-    // would be two answers to the same question.
-    const isIssueCity = this.currentCityId?.startsWith("issue-") ?? false;
-    const destinations = isMain
-      ? this.lastCities.filter((city) => city.kind === "pull-request")
-      : isIssueCity
-        ? []
-        : [{ id: "main", title: "main city" }];
-    const { width, height } = snapshot.size;
-    // Just past the sand ring, safely in open water. The return ship docks
-    // on the opposite shore so its departure also reads as heading home.
-    const dockX = isMain
-      ? width - 1 + COUNTRYSIDE_RING + COAST_RING + 2
-      : -COUNTRYSIDE_RING - COAST_RING - 2;
-    const startY =
-      height / 2 - ((destinations.length - 1) * SHIP_SPACING) / 2;
+    if (!this.textures.exists(NAVY_COMMAND_KEY)) {
+      bakeTerrainTextures(this);
+    }
+    const { width, height } = this.snapshot.size;
+    const layout = createNavyHarbourLayout(width, height);
+    const signature = navyHarbourLayoutKey(layout);
+    if (signature === this.navyLayoutSignature && this.navySprites.length > 0) {
+      return;
+    }
+    this.clearNavyHarbour();
+    this.navyLayoutSignature = signature;
 
-    const seen = new Set<string>();
-    destinations.forEach((city, index) => {
-      seen.add(city.id);
-      const gy = startY + index * SHIP_SPACING;
-      const point = projection.project(dockX, gy);
+    const quayPoint = projection.project(layout.quay.x, layout.quay.y);
+    this.navySprites.push(
+      this.add
+        .sprite(quayPoint.x, quayPoint.y + NAVY_QUAY_ANCHOR_Y, NAVY_QUAY_KEY)
+        .setOrigin(0.5, 1)
+        .setDepth(
+          projection.depth(
+            layout.quay.x - layout.quayHalfU,
+            layout.quay.y - layout.quayHalfV,
+          ) + 2,
+        ),
+    );
 
-      let sprite = this.shipSprites.get(city.id);
-      if (!sprite) {
-        sprite = this.add
-          .sprite(point.x, point.y + TILE_ANCHOR_Y, SHIP_KEY)
+    for (const tile of layout.pier) {
+      const point = projection.project(tile.x, tile.y);
+      this.navySprites.push(
+        this.add
+          .sprite(point.x, point.y + NAVY_PIER_ANCHOR_Y, NAVY_PIER_KEY)
           .setOrigin(0.5, 1)
-          .setScale(1.55)
-          .setInteractive({ useHandCursor: true });
-        this.shipSprites.set(city.id, sprite);
-        this.bindShipInteractions(sprite, city.id);
-      } else {
-        this.tweens.killTweensOf(sprite);
-      }
+          .setDepth(projection.depth(tile.x, tile.y) + 4),
+      );
+    }
 
-      sprite
-        .setPosition(point.x, point.y + TILE_ANCHOR_Y)
-        .setDepth(projection.depth(dockX, gy))
-        .setAlpha(1);
-      sprite.setData("title", city.title);
-      sprite.setData("returning", !isMain);
+    const onBase = (
+      point: HarbourPoint,
+      key: string,
+      anchorY: number,
+      depthOffset = 12,
+      scale = 0.76,
+      yOffset = 0,
+    ): Phaser.GameObjects.Sprite => {
+      const projected = projection.project(point.x, point.y);
+      const sprite = this.add
+        .sprite(
+          projected.x,
+          projected.y + anchorY - NAVY_QUAY_DECK + yOffset,
+          key,
+        )
+        .setOrigin(0.5, 1)
+        .setDepth(projection.depth(point.x, point.y) + depthOffset)
+        .setScale(scale);
+      this.navySprites.push(sprite);
+      return sprite;
+    };
 
-      const restY = sprite.y;
+    const command = onBase(
+      layout.command,
+      NAVY_COMMAND_KEY,
+      NAVY_COMMAND_ANCHOR_Y,
+      18,
+    );
+    command.setData("hoverTitle", "NAVAL OPERATIONS HQ");
+    this.addNavyGlow(command, NAVY_COMMAND_ANCHOR_Y, NAVY_COMMAND_BEACON_Z, SKY_DEPTH - 4, {
+      color: 0xff5e65,
+      radius: 3,
+      peak: 0.82,
+      scale: 2.4,
+      duration: 1_050,
+    });
+    const hangar = onBase(
+      layout.hangar,
+      NAVY_HANGAR_KEY,
+      NAVY_HANGAR_ANCHOR_Y,
+      16,
+    );
+    hangar.setData("hoverTitle", "FLEET MAINTENANCE HANGAR");
+    onBase(layout.barracks, NAVY_BARRACKS_KEY, NAVY_BARRACKS_ANCHOR_Y, 14);
+
+    // The tower is one static texture; its head is a second sprite that cycles
+    // through baked headings. An isometric prop cannot be rotated at runtime --
+    // grid +u and +v are 127 degrees apart on screen, so no angle is correct --
+    // so the sweep is 24 baked bearings played in order.
+    layout.radar.forEach((point) => {
+      const tower = onBase(point, NAVY_RADAR_KEY, NAVY_RADAR_ANCHOR_Y, 18);
+      tower.setData("hoverTitle", "AIR SEARCH RADAR");
+      const hub = this.navyMastPoint(tower, NAVY_RADAR_ANCHOR_Y, NAVY_RADAR_HUB_Z);
+      const dish = this.add
+        .sprite(
+          hub.x,
+          hub.y + NAVY_RADAR_DISH_ANCHOR_Y * tower.scaleY,
+          NAVY_RADAR_DISH_KEYS[0]!,
+        )
+        .setOrigin(0.5, 1)
+        .setDepth(tower.depth + 2)
+        .setScale(tower.scaleX, tower.scaleY);
+      dish.setData("hoverTitle", "AIR SEARCH RADAR");
+      this.navySprites.push(dish);
+      this.spinNavyFrames(dish, NAVY_RADAR_DISH_KEYS, NAVY_RADAR_SWEEP_STEP_MS);
+      this.addNavyGlow(
+        tower,
+        NAVY_RADAR_ANCHOR_Y,
+        NAVY_RADAR_HUB_Z,
+        projection.depth(point.x, point.y) + 23,
+        { color: 0x74e5ef, radius: 3, peak: 0.62, scale: 1.9, duration: 1_200 },
+      );
+    });
+    layout.missileBatteries.forEach((point) =>
+      onBase(point, NAVY_MISSILE_KEY, NAVY_MISSILE_ANCHOR_Y, 18),
+    );
+    layout.gunEmplacements.forEach((point) =>
+      onBase(point, NAVY_GUN_KEY, NAVY_GUN_ANCHOR_Y, 18),
+    );
+    layout.panzers.forEach((point) =>
+      onBase(point, NAVY_TANK_KEY, NAVY_TANK_ANCHOR_Y, 20),
+    );
+    layout.fuelTanks.forEach((point) =>
+      onBase(point, NAVY_FUEL_TANK_KEY, NAVY_FUEL_TANK_ANCHOR_Y, 14),
+    );
+    layout.crates.forEach((point) =>
+      onBase(point, NAVY_CRATE_KEY, NAVY_CRATE_ANCHOR_Y, 20),
+    );
+    layout.fences.forEach((point) =>
+      onBase(point, NAVY_FENCE_KEY, NAVY_FENCE_ANCHOR_Y, 15),
+    );
+    layout.bollards.forEach((point) =>
+      onBase(point, NAVY_BOLLARD_KEY, TILE_ANCHOR_Y, 16),
+    );
+    layout.floodlights.forEach((point) => {
+      const mast = onBase(point, NAVY_FLOODLIGHT_KEY, NAVY_FLOODLIGHT_ANCHOR_Y, 21);
+      this.addNavyGlow(
+        mast,
+        NAVY_FLOODLIGHT_ANCHOR_Y,
+        NAVY_FLOODLIGHT_LAMP_Z,
+        projection.depth(point.x, point.y) + 25,
+        { color: 0xffc45c, radius: 3.5, peak: 0.44, scale: 1.55, duration: 2_200, nudgeX: 6 },
+      );
+    });
+    layout.flags.forEach((point) =>
+      onBase(point, NAVY_FLAG_KEY, NAVY_FLAG_ANCHOR_Y, 22),
+    );
+
+    onBase(
+      layout.helicopterPad,
+      NAVY_HELIPAD_KEY,
+      NAVY_HELIPAD_ANCHOR_Y,
+      16,
+    );
+    const helicopter = onBase(
+      layout.helicopter,
+      NAVY_HELICOPTER_KEY,
+      NAVY_HELICOPTER_ANCHOR_Y,
+      24,
+      0.72,
+    );
+    helicopter.setData("hoverTitle", "NAVAL AIR WING");
+    // The main rotor is its own sprite for the same reason the radar head is:
+    // the blades lie in the ground plane, so yawing them is a baked spin.
+    const rotorHub = this.navyMastPoint(
+      helicopter,
+      NAVY_HELICOPTER_ANCHOR_Y,
+      NAVY_ROTOR_HUB_Z,
+    );
+    const rotor = this.add
+      .sprite(
+        rotorHub.x,
+        rotorHub.y + NAVY_ROTOR_ANCHOR_Y * helicopter.scaleY,
+        NAVY_ROTOR_KEYS[0]!,
+      )
+      .setOrigin(0.5, 1)
+      .setDepth(helicopter.depth + 2)
+      .setScale(helicopter.scaleX, helicopter.scaleY);
+    rotor.setData("hoverTitle", "NAVAL AIR WING");
+    this.navySprites.push(rotor);
+    this.spinNavyFrames(rotor, NAVY_ROTOR_KEYS, NAVY_ROTOR_STEP_MS);
+    if (!prefersReducedMotion()) {
+      // One tween drives both, relatively, so the rotor never floats off the
+      // mast as the airframe settles on its dampers.
       this.tweens.add({
-        targets: sprite,
-        y: restY - 4,
-        duration: 1_400 + index * 90,
+        targets: [helicopter, rotor],
+        y: "-=3",
+        duration: 1_350,
         yoyo: true,
         repeat: -1,
         ease: "Sine.easeInOut",
       });
-    });
+    }
 
-    for (const [cityId, sprite] of this.shipSprites) {
-      if (!seen.has(cityId)) {
-        this.tweens.killTweensOf(sprite);
-        sprite.destroy();
-        this.shipSprites.delete(cityId);
+    // The gate board is parked for now — every other prop on the apron already
+    // opens the PR roster, so nothing is unreachable without it.
+    // const sign = onBase(
+    //   layout.sign,
+    //   NAVY_SIGN_KEY,
+    //   NAVY_SIGN_ANCHOR_Y,
+    //   24,
+    // );
+    // sign.setData("hoverTitle", "NAVAL BASE COMMAND");
+    // this.addNavyGlow(
+    //   sign,
+    //   NAVY_SIGN_ANCHOR_Y,
+    //   NAVY_SIGN_BEACON_Z,
+    //   projection.depth(layout.sign.x, layout.sign.y) + 26,
+    //   { color: 0xff5e65, radius: 2.5, peak: 0.7, scale: 2, duration: 1_400 },
+    // );
+
+    // The base itself is the board's front door: every land-side prop opens
+    // the PR roster, while the battleship keeps the voyage interaction.
+    for (const sprite of this.navySprites) {
+      this.bindNavyInteractions(sprite);
+    }
+
+    const isMain = this.currentCityId === "main";
+    const isPrCity = this.currentCityId?.startsWith("pr-") ?? false;
+    if (isMain || isPrCity) {
+      const shipPoint = projection.project(
+        layout.battleship.x,
+        layout.battleship.y,
+      );
+      this.navyBattleship = this.add
+        .sprite(
+          shipPoint.x,
+          shipPoint.y + BATTLESHIP_ANCHOR_Y,
+          BATTLESHIP_KEYS[0]!,
+        )
+        .setOrigin(0.5, 1)
+        .setDepth(
+          projection.depth(layout.battleship.x, layout.battleship.y) + 8,
+        )
+        .setScale(0.88)
+        .setInteractive({ pixelPerfect: true, useHandCursor: true });
+      this.navySprites.push(this.navyBattleship);
+
+      this.navyBattleship.on("pointerover", () => {
+        if (this.travelTransitionActive) return;
+        const camera = this.cameras.main;
+        this.navyShipHoverListener?.({
+          cityId: this.currentCityId ?? "",
+          title: "Navy Battleship",
+          action: isMain ? "Open PR deployment board" : "Return to main city",
+          screenX: (this.navyBattleship!.x - camera.scrollX) * camera.zoom,
+          screenY: (this.navyBattleship!.y - camera.scrollY) * camera.zoom,
+        });
+      });
+      this.navyBattleship.on("pointerout", () => {
+        this.navyShipHoverListener?.(undefined);
+      });
+      this.navyBattleship.on("pointerdown", () => {
+        if (this.travelTransitionActive) return;
+        playUiClickSound();
+        this.navyShipHoverListener?.(undefined);
+        this.navyShipClickListener?.();
+      });
+
+      const restY = this.navyBattleship.y;
+      this.navyBattleship.setData("restY", restY);
+      if (!prefersReducedMotion()) {
+        this.tweens.add({
+          targets: this.navyBattleship,
+          y: restY - 4,
+          duration: 1_600,
+          yoyo: true,
+          repeat: -1,
+          ease: "Sine.easeInOut",
+        });
       }
     }
+
   }
 
-  private bindShipInteractions(
+  /**
+   * Screen position of a point `z` texture-pixels up a prop already standing on
+   * the apron. Everything mounted on a mast -- the radar head, the rotor, a
+   * beacon glow -- hangs off this, so nothing has to re-derive the deck lift or
+   * the prop's scale for itself.
+   */
+  private navyMastPoint(
     sprite: Phaser.GameObjects.Sprite,
-    cityId: string,
+    anchorY: number,
+    z: number,
+  ): { x: number; y: number } {
+    return { x: sprite.x, y: sprite.y - (anchorY + z) * sprite.scaleY };
+  }
+
+  /** Cycles a sprite through its baked heading frames. Ambient, so reduced motion skips it. */
+  private spinNavyFrames(
+    sprite: Phaser.GameObjects.Sprite,
+    keys: readonly string[],
+    stepMs: number,
   ): void {
+    if (prefersReducedMotion() || keys.length < 2) return;
+    let frame = 0;
+    this.navyTimers.push(
+      this.time.addEvent({
+        delay: stepMs,
+        loop: true,
+        callback: () => {
+          if (!sprite.active) return;
+          frame = (frame + 1) % keys.length;
+          sprite.setTexture(keys[frame]!);
+        },
+      }),
+    );
+  }
+
+  private bindNavyInteractions(sprite: Phaser.GameObjects.Sprite): void {
+    sprite.setInteractive({ pixelPerfect: true, useHandCursor: true });
     sprite.on("pointerover", () => {
+      if (this.travelTransitionActive) return;
       const camera = this.cameras.main;
-      this.shipHoverListener?.({
-        cityId,
-        title: String(sprite.getData("title") ?? cityId),
-        action: sprite.getData("returning")
-          ? "Return to main city"
-          : `Sail to ${String(sprite.getData("title") ?? cityId)}`,
+      this.navyShipHoverListener?.({
+        cityId: "naval-base",
+        title: String(sprite.getData("hoverTitle") ?? "NAVAL BASE"),
+        action: "Open the PR deployment board",
         screenX: (sprite.x - camera.scrollX) * camera.zoom,
         screenY: (sprite.y - camera.scrollY) * camera.zoom,
       });
     });
-    sprite.on("pointerout", () => {
-      this.shipHoverListener?.(undefined);
-    });
+    sprite.on("pointerout", () => this.navyShipHoverListener?.(undefined));
     sprite.on("pointerdown", () => {
       if (this.travelTransitionActive) return;
       playUiClickSound();
-      this.shipHoverListener?.(undefined);
-      this.shipClickListener?.(cityId);
+      this.navyShipHoverListener?.(undefined);
+      this.navySignClickListener?.();
     });
   }
 
-  private clearShips(): void {
-    for (const sprite of this.shipSprites.values()) {
+  /**
+   * A soft light hung on a prop's own mast, at texture height `z`. Taking the
+   * owning sprite rather than a tile point is what keeps a beacon on its pole:
+   * the prop is lifted onto the deck and drawn at a scale the glow would
+   * otherwise have to guess at.
+   */
+  private addNavyGlow(
+    sprite: Phaser.GameObjects.Sprite,
+    anchorY: number,
+    z: number,
+    depth: number,
+    style: {
+      radius: number;
+      color: number;
+      peak: number;
+      scale: number;
+      duration: number;
+      nudgeX?: number;
+    },
+  ): void {
+    const mast = this.navyMastPoint(sprite, anchorY, z);
+    const glow = this.add
+      .circle(
+        mast.x + (style.nudgeX ?? 0) * sprite.scaleX,
+        mast.y,
+        style.radius,
+        style.color,
+        0.16,
+      )
+      .setDepth(depth)
+      .setBlendMode(Phaser.BlendModes.ADD);
+    if (!prefersReducedMotion()) {
+      this.tweens.add({
+        targets: glow,
+        alpha: style.peak,
+        scale: style.scale,
+        duration: style.duration,
+        yoyo: true,
+        repeat: -1,
+        ease: "Sine.easeInOut",
+      });
+    }
+    this.navyGlows.push(glow);
+  }
+
+  private clearNavyHarbour(): void {
+    for (const sprite of this.navySprites) {
       this.tweens.killTweensOf(sprite);
       sprite.destroy();
     }
-    this.shipSprites.clear();
-    this.shipHoverListener?.(undefined);
+    for (const glow of this.navyGlows) {
+      this.tweens.killTweensOf(glow);
+      glow.destroy();
+    }
+    for (const timer of this.navyTimers) {
+      timer.remove(false);
+    }
+    this.navySprites = [];
+    this.navyGlows = [];
+    this.navyTimers = [];
+    this.navyBattleship = undefined;
+    this.navyLayoutSignature = undefined;
   }
 
   /** Places the issue market on the marked grass plot behind the airport. */
@@ -3035,22 +3385,45 @@ export class WorldScene extends Phaser.Scene {
     return new Promise((resolve) => this.time.delayedCall(duration, resolve));
   }
 
-  /** Sails the clicked ship away from the island and out of view. */
-  private playShipDeparture(cityId: string): Promise<void> {
-    const sprite = this.shipSprites.get(cityId);
-    if (!sprite) {
-      return Promise.resolve();
-    }
+  private playNavyBattleshipDeparture(): Promise<void> {
+    if (!this.navyBattleship) return Promise.resolve();
     return new Promise((resolve) => {
-      this.tweens.killTweensOf(sprite);
+      this.tweens.killTweensOf(this.navyBattleship!);
       this.tweens.add({
-        targets: sprite,
-        x: sprite.x + (this.currentCityId === "main" ? 300 : -300),
-        y: sprite.y - 60,
+        targets: this.navyBattleship!,
+        x: this.navyBattleship!.x + (this.currentCityId === "main" ? 300 : -300),
+        y: this.navyBattleship!.y - 60,
         alpha: 0,
         duration: 700,
         ease: "Cubic.easeIn",
         onComplete: () => resolve(),
+      });
+    });
+  }
+
+  private playNavyBattleshipArrival(): Promise<void> {
+    if (!this.navyBattleship) return Promise.resolve();
+    return new Promise((resolve) => {
+      const restX = this.navyBattleship!.getData("arrivalX") as number;
+      const restY = this.navyBattleship!.getData("arrivalY") as number;
+      this.tweens.add({
+        targets: this.navyBattleship!,
+        x: restX,
+        y: restY,
+        alpha: 1,
+        duration: 800,
+        ease: "Cubic.easeOut",
+        onComplete: () => {
+          this.tweens.add({
+            targets: this.navyBattleship!,
+            y: restY - 4,
+            duration: 1_600,
+            yoyo: true,
+            repeat: -1,
+            ease: "Sine.easeInOut",
+          });
+          resolve();
+        },
       });
     });
   }
@@ -3137,7 +3510,7 @@ export class WorldScene extends Phaser.Scene {
 
   /** Covers an in-workspace ship voyage; airport traffic is deliberately separate. */
   async coverForTravel(cityId: string): Promise<void> {
-    await this.playShipDeparture(cityId);
+    await this.playNavyBattleshipDeparture();
     await this.playCoverTransition();
   }
 
@@ -3156,26 +3529,21 @@ export class WorldScene extends Phaser.Scene {
     departureCityId: string | undefined,
     destinationCityId: string,
   ): void {
-    const shipId = destinationCityId === "main" ? departureCityId : "main";
-    if (!shipId) {
-      return;
-    }
-    const ship = this.shipSprites.get(shipId);
-    if (!ship) {
-      return;
-    }
-    this.tweens.killTweensOf(ship);
-    ship.setData("arrivalX", ship.x);
-    ship.setData("arrivalY", ship.y);
-    ship.setPosition(
-      ship.x + (destinationCityId === "main" ? 300 : -300),
-      ship.y - 55,
+    if (!this.navyBattleship) return;
+    this.tweens.killTweensOf(this.navyBattleship);
+    this.navyBattleship.setData("arrivalX", this.navyBattleship.x);
+    this.navyBattleship.setData("arrivalY", this.navyBattleship.y);
+    this.navyBattleship.setPosition(
+      this.navyBattleship.x + (destinationCityId === "main" ? -300 : 300),
+      this.navyBattleship.y + 60,
     );
+    this.navyBattleship.setAlpha(0);
   }
 
   /** Parts clouds after an in-workspace ship voyage. */
-  revealAfterTravel(): Promise<void> {
-    return this.partCloudCover().then(() => this.playShipArrival());
+  async revealAfterTravel(): Promise<void> {
+    await this.partCloudCover();
+    await this.playNavyBattleshipArrival();
   }
 
   /**
@@ -3289,51 +3657,6 @@ export class WorldScene extends Phaser.Scene {
     }
     cloud.setData("travelSize", size);
     return cloud;
-  }
-
-  private playShipArrival(): Promise<void> {
-    const arrivals: Phaser.GameObjects.Sprite[] = [];
-    for (const ship of this.shipSprites.values()) {
-      const arrivalX = ship.getData("arrivalX") as number | undefined;
-      const arrivalY = ship.getData("arrivalY") as number | undefined;
-      if (arrivalX === undefined || arrivalY === undefined) {
-        continue;
-      }
-      arrivals.push(ship);
-    }
-    if (arrivals.length === 0) {
-      return Promise.resolve();
-    }
-
-    return new Promise((resolve) => {
-      let remaining = arrivals.length;
-      arrivals.forEach((ship) => {
-        const arrivalX = ship.getData("arrivalX") as number;
-        const arrivalY = ship.getData("arrivalY") as number;
-        ship.data?.remove(["arrivalX", "arrivalY"]);
-        this.tweens.add({
-          targets: ship,
-          x: arrivalX,
-          y: arrivalY,
-          duration: 900,
-          ease: "Sine.easeOut",
-          onComplete: () => {
-            this.tweens.add({
-              targets: ship,
-              y: arrivalY - 6,
-              duration: 1_400,
-              yoyo: true,
-              repeat: -1,
-              ease: "Sine.easeInOut",
-            });
-            remaining -= 1;
-            if (remaining === 0) {
-              resolve();
-            }
-          },
-        });
-      });
-    });
   }
 }
 

@@ -23,6 +23,7 @@ import {
   CRANE_WIDTH,
 } from "./crane";
 import { HARBOUR_QUAY_HALF_U, HARBOUR_QUAY_HALF_V } from "./harbour";
+import { NAVY_QUAY_HALF_U, NAVY_QUAY_HALF_V } from "./navyHarbour";
 import {
   PROP_COLORS,
   TERRAIN_COLORS,
@@ -369,6 +370,86 @@ export const HARBOUR_MARKER_KEY = "fx:harbour-marker";
 /** Pixels above the channel marker's tile point where its light belongs. */
 export const HARBOUR_MARKER_LAMP_Y = 38;
 
+export const BATTLESHIP_KEYS = Array.from(
+  { length: SHIP_HEADING_FRAMES },
+  (_unused, index) => `fx:navy-battleship:${index}`,
+);
+export const BATTLESHIP_KEY = BATTLESHIP_KEYS[0]!;
+export const BATTLESHIP_ANCHOR_Y = 76;
+
+/** Navy-base kit. Every anchor is the gap from the tile point to the texture's bottom. */
+export const NAVY_QUAY_KEY = "fx:navy-quay";
+export const NAVY_QUAY_DECK = 16;
+export const NAVY_QUAY_ANCHOR_Y =
+  (NAVY_QUAY_HALF_U + NAVY_QUAY_HALF_V) * (TILE_HEIGHT / 2) + 14;
+export const NAVY_PIER_KEY = "fx:navy-pier";
+export const NAVY_PIER_DECK = 12;
+export const NAVY_PIER_ANCHOR_Y = 38;
+export const NAVY_COMMAND_KEY = "fx:navy-command";
+export const NAVY_COMMAND_ANCHOR_Y = 60;
+/** Pixels above the HQ's tile point where its masthead obstruction light sits. */
+export const NAVY_COMMAND_BEACON_Z = 146;
+export const NAVY_HANGAR_KEY = "fx:navy-hangar";
+export const NAVY_HANGAR_ANCHOR_Y = 48;
+export const NAVY_BARRACKS_KEY = "fx:navy-barracks";
+export const NAVY_BARRACKS_ANCHOR_Y = 42;
+/** The lattice tower the dish turns on. Static — only the dish is baked per heading. */
+export const NAVY_RADAR_KEY = "fx:navy-radar";
+export const NAVY_RADAR_ANCHOR_Y = 40;
+/** Pixels above the radar's tile point where the dish's bearing sits. */
+export const NAVY_RADAR_HUB_Z = 116;
+/**
+ * The dish is its own sprite so the tower can stay one texture while the head
+ * sweeps. 24 headings is 15 degrees a step -- the coarsest that still reads as
+ * a turn rather than a stutter (see the isometric-animation notes).
+ */
+export const NAVY_RADAR_DISH_FRAMES = 24;
+export const NAVY_RADAR_DISH_KEYS = Array.from(
+  { length: NAVY_RADAR_DISH_FRAMES },
+  (_unused, index) => `fx:navy-radar-dish:${index}`,
+);
+/** The dish texture is drawn about its own bearing, so its anchor is its centre. */
+export const NAVY_RADAR_DISH_ANCHOR_Y = 54;
+export const NAVY_MISSILE_KEY = "fx:navy-missile";
+export const NAVY_MISSILE_ANCHOR_Y = 30;
+export const NAVY_TANK_KEY = "fx:navy-tank";
+export const NAVY_TANK_ANCHOR_Y = 26;
+export const NAVY_GUN_KEY = "fx:navy-gun";
+export const NAVY_GUN_ANCHOR_Y = 28;
+export const NAVY_FUEL_TANK_KEY = "fx:navy-fuel-tank";
+export const NAVY_FUEL_TANK_ANCHOR_Y = 34;
+export const NAVY_HELIPAD_KEY = "fx:navy-helipad";
+export const NAVY_HELIPAD_ANCHOR_Y = 40;
+export const NAVY_HELICOPTER_KEY = "fx:navy-helicopter";
+export const NAVY_HELICOPTER_ANCHOR_Y = 32;
+/** Pixels above the helicopter's tile point where the main rotor head sits. */
+export const NAVY_ROTOR_HUB_Z = 46;
+/**
+ * Four blades repeat every quarter turn, so eight frames over 90 degrees give
+ * an 11.25-degree step -- fast enough to blur rather than strobe.
+ */
+export const NAVY_ROTOR_FRAMES = 8;
+export const NAVY_ROTOR_KEYS = Array.from(
+  { length: NAVY_ROTOR_FRAMES },
+  (_unused, index) => `fx:navy-rotor:${index}`,
+);
+export const NAVY_ROTOR_ANCHOR_Y = 38;
+export const NAVY_FENCE_KEY = "fx:navy-fence";
+export const NAVY_FENCE_ANCHOR_Y = 20;
+export const NAVY_FLOODLIGHT_KEY = "fx:navy-floodlight";
+export const NAVY_FLOODLIGHT_ANCHOR_Y = 18;
+/** Pixels above a floodlight's tile point where its lamp head burns. */
+export const NAVY_FLOODLIGHT_LAMP_Z = 66;
+export const NAVY_FLAG_KEY = "fx:navy-flag";
+export const NAVY_FLAG_ANCHOR_Y = 18;
+export const NAVY_CRATE_KEY = "fx:navy-crate";
+export const NAVY_CRATE_ANCHOR_Y = 22;
+export const NAVY_BOLLARD_KEY = "fx:navy-bollard";
+export const NAVY_SIGN_KEY = "fx:navy-sign";
+export const NAVY_SIGN_ANCHOR_Y = 30;
+/** Pixels above the gate board's tile point where its beacon sits. */
+export const NAVY_SIGN_BEACON_Z = 84;
+
 const GRASS_VARIANTS = TERRAIN_COLORS.grass.length;
 const PARK_VARIANTS = 2;
 const SAND_VARIANTS = 2;
@@ -402,7 +483,10 @@ const ATLAS_COLUMNS = 8;
  * live sprites, which reference their Texture by key.
  */
 export function bakeTerrainTextures(scene: Phaser.Scene): void {
-  if (scene.textures.exists(TERRAIN_ATLAS_KEY)) {
+  if (
+    scene.textures.exists(TERRAIN_ATLAS_KEY) &&
+    scene.textures.exists(NAVY_COMMAND_KEY)
+  ) {
     return;
   }
 
@@ -463,6 +547,27 @@ export function bakeTerrainTextures(scene: Phaser.Scene): void {
   bakeHarbourLamp(baker);
   bakeHarbourMarker(baker);
 
+  BATTLESHIP_KEYS.forEach((key, index) => bakeNavyBattleship(baker, key, index));
+  bakeNavyPier(baker);
+  bakeNavyCommand(baker);
+  bakeNavyHangar(baker);
+  bakeNavyBarracks(baker);
+  bakeNavyRadar(baker);
+  NAVY_RADAR_DISH_KEYS.forEach((key, index) => bakeNavyRadarDish(baker, key, index));
+  bakeNavyMissile(baker);
+  bakeNavyTank(baker);
+  bakeNavyGun(baker);
+  bakeNavyFuelTank(baker);
+  bakeNavyHelipad(baker);
+  bakeNavyHelicopter(baker);
+  NAVY_ROTOR_KEYS.forEach((key, index) => bakeNavyRotor(baker, key, index));
+  bakeNavyFence(baker);
+  bakeNavyFloodlight(baker);
+  bakeNavyFlag(baker);
+  bakeNavyCrate(baker);
+  bakeNavyBollard(baker);
+  bakeNavyQuay(baker);
+  bakeNavySign(baker);
   bakeCrane(baker);
   bakeHook(baker);
   bakeCable(baker);
@@ -1710,6 +1815,10 @@ const HARBOUR_GLYPHS: Record<string, readonly string[]> = {
   O: ["111", "101", "101", "101", "111"],
   R: ["111", "101", "111", "110", "101"],
   T: ["111", "010", "010", "010", "010"],
+  N: ["101", "111", "111", "111", "101"],
+  A: ["010", "101", "111", "101", "101"],
+  V: ["101", "101", "101", "101", "010"],
+  Y: ["101", "101", "010", "010", "010"],
 };
 
 function drawHarbourLabel(
@@ -4440,4 +4549,1805 @@ function drawUtility(
     HALF_W,
     originY,
   );
+}
+
+
+// ---------------------------------------------------------------------------
+// Navy Harbour & Battleship
+// ---------------------------------------------------------------------------
+
+function bakeNavyBattleship(source: Baker, key: string, frame: number): void {
+  const width = 256;
+  const height = 256;
+  const originX = width / 2;
+  const originY = height - BATTLESHIP_ANCHOR_Y;
+  const deck = 22;
+
+  const angle = shipHeadingAngle(frame);
+  const cos = Math.cos(angle);
+  const sin = Math.sin(angle);
+  const baker: Baker =
+    frame === 0
+      ? source
+      : {
+          ...source,
+          at: (point, ox, oy) =>
+            source.at(
+              [
+                point[0] * cos - point[1] * sin,
+                point[0] * sin + point[1] * cos,
+                point[2],
+              ],
+              ox,
+              oy,
+            ),
+        };
+
+  const hull = {
+    navy: 0x2b333a,
+    navyDark: 0x1f262b,
+    boot: 0x992222,
+    deck: 0x47515a,
+    deckDark: 0x363e45,
+  };
+
+  const sheer: ReadonlyArray<readonly [number, number]> = [
+    [0, -2.2],
+    [0.15, -1.8],
+    [0.3, -1.0],
+    [0.35, -0.2],
+    [0.35, 1.4],
+    [0.2, 1.8],
+    [0, 1.8],
+  ];
+
+  const outline: ReadonlyArray<readonly [number, number]> = [
+    ...sheer,
+    ...[...sheer]
+      .reverse()
+      .map(([u, v]) => [-u, v] as const)
+      .slice(1, -1),
+  ];
+
+  const turned = (nu: number, nv: number): { u: number; v: number } => {
+    const length = Math.hypot(nu, nv) || 1;
+    return {
+      u: (nu * cos - nv * sin) / length,
+      v: (nu * sin + nv * cos) / length,
+    };
+  };
+
+  const facing = (nu: number, nv: number, color: number): number => {
+    const normal = turned(nu, nv);
+    return shade(color, Math.round(9 * normal.v - 28 * normal.u));
+  };
+  const showsFace = (nu: number, nv: number): boolean => {
+    const normal = turned(nu, nv);
+    return normal.u + normal.v > 0.02;
+  };
+
+  const solidBox = (
+    bounds: readonly [number, number, number, number, number, number],
+    color: number,
+  ): void => {
+    const [u0, u1, v0, v1, z0, z1] = bounds;
+    const sides: ReadonlyArray<{
+      normal: readonly [number, number];
+      face: Point3[];
+    }> = [
+      { normal: [0, 1], face: [[u0, v1, z1], [u1, v1, z1], [u1, v1, z0], [u0, v1, z0]] },
+      { normal: [1, 0], face: [[u1, v1, z1], [u1, v0, z1], [u1, v0, z0], [u1, v1, z0]] },
+      { normal: [0, -1], face: [[u0, v0, z1], [u1, v0, z1], [u1, v0, z0], [u0, v0, z0]] },
+      { normal: [-1, 0], face: [[u0, v1, z1], [u0, v0, z1], [u0, v0, z0], [u0, v1, z0]] },
+    ];
+    const ordered = [...sides].sort((left, right) => {
+      const a = turned(left.normal[0], left.normal[1]);
+      const b = turned(right.normal[0], right.normal[1]);
+      return a.u + a.v - (b.u + b.v);
+    });
+    for (const side of ordered) {
+      fillFace(baker, facing(side.normal[0], side.normal[1], color), 1, side.face, originX, originY);
+    }
+    fillFace(
+      baker,
+      shade(color, 14),
+      1,
+      [[u0, v0, z1], [u1, v0, z1], [u1, v1, z1], [u0, v1, z1]],
+      originX,
+      originY,
+    );
+  };
+
+  const waterline = baker.at([0, 0, 0], originX, originY);
+  baker.graphics.fillStyle(TERRAIN_COLORS.shadow, 0.2);
+  baker.graphics.fillEllipse(waterline.x + 6, waterline.y + 6, 170, 50);
+
+  for (let index = 0; index < outline.length; index += 1) {
+    const [u0, v0] = outline[index]!;
+    const [u1, v1] = outline[(index + 1) % outline.length]!;
+    const normalU = v1 - v0;
+    const normalV = -(u1 - u0);
+    fillFace(
+      baker,
+      facing(normalU, normalV, hull.navy),
+      1,
+      [[u0, v0, deck], [u1, v1, deck], [u1, v1, 0], [u0, v0, 0]],
+      originX,
+      originY,
+    );
+    fillFace(
+      baker,
+      facing(normalU, normalV, hull.boot),
+      1,
+      [[u0, v0, 5], [u1, v1, 5], [u1, v1, 0], [u0, v0, 0]],
+      originX,
+      originY,
+    );
+  }
+
+  fillFace(
+    baker,
+    hull.deck,
+    1,
+    outline.map(([u, v]) => [u, v, deck] as Point3),
+    originX,
+    originY,
+  );
+
+  // Superstructure
+  solidBox([-0.25, 0.25, -0.6, 0.8, deck, deck + 12], hull.deckDark);
+  solidBox([-0.2, 0.2, -0.4, 0.6, deck + 12, deck + 24], hull.deckDark);
+  solidBox([-0.15, 0.15, -0.2, 0.4, deck + 24, deck + 36], hull.deckDark);
+
+  // Bridge windows
+  if (showsFace(0, -1)) {
+    fillFace(
+      baker,
+      HARBOUR.glassDark,
+      1,
+      [[-0.12, -0.41, deck + 20], [0.12, -0.41, deck + 20], [0.12, -0.41, deck + 15], [-0.12, -0.41, deck + 15]],
+      originX,
+      originY,
+    );
+  }
+
+  // Turrets (Main Guns)
+  const drawTurret = (tu: number, tv: number, tz: number) => {
+    solidBox([tu - 0.1, tu + 0.1, tv - 0.1, tv + 0.1, tz, tz + 6], hull.deck);
+    solidBox([tu - 0.02, tu + 0.02, tv - 0.3, tv - 0.1, tz + 2, tz + 4], 0x111111);
+  };
+  drawTurret(0, -1.2, deck);
+  drawTurret(0, -0.8, deck);
+  drawTurret(0, 1.1, deck);
+
+  // Radar/Mast
+  solidBox([-0.05, 0.05, 0, 0.1, deck + 36, deck + 60], hull.navyDark);
+  // Helipad
+  fillFace(
+    baker,
+    0x333333,
+    1,
+    [[-0.2, 1.3, deck + 1], [0.2, 1.3, deck + 1], [0.2, 1.7, deck + 1], [-0.2, 1.7, deck + 1]],
+    originX,
+    originY,
+  );
+  // 'H'
+  baker.graphics.lineStyle(2, HARBOUR.white, 0.8);
+  const hPoints = [
+    [[-0.05, 1.4, deck + 1], [-0.05, 1.6, deck + 1]],
+    [[0.05, 1.4, deck + 1], [0.05, 1.6, deck + 1]],
+    [[-0.05, 1.5, deck + 1], [0.05, 1.5, deck + 1]],
+  ];
+  for (const pair of hPoints) {
+    const [u1, v1, z1] = pair[0] as [number, number, number];
+    const [u2, v2, z2] = pair[1] as [number, number, number];
+    const p1 = baker.at([u1, v1, z1], originX, originY);
+    const p2 = baker.at([u2, v2, z2], originX, originY);
+    baker.graphics.lineBetween(p1.x, p1.y, p2.x, p2.y);
+  }
+
+  baker.finish(key, width, height);
+}
+
+/**
+ * The naval base kit.
+ *
+ * Cooler and harder than the cargo harbour next door — grey concrete, olive
+ * steel and glass instead of warm stone and timber — but it keeps the same
+ * amber accent, which is what makes the two installations read as one port.
+ */
+const NAVY_BASE = {
+  deck: 0x53616b,
+  deckLight: 0x71818b,
+  deckDark: 0x2c3944,
+  concrete: 0x9aa7ad,
+  concreteLight: 0xc8d0d1,
+  concreteDark: 0x58656d,
+  steel: 0xd4e0e2,
+  steelDark: 0x68777f,
+  olive: 0x4f625e,
+  oliveLight: 0x718064,
+  oliveDark: 0x2d3c35,
+  glass: 0x8bd7e4,
+  glassDark: 0x24566b,
+  warning: 0xf3bd42,
+  warningDark: 0x9c6d22,
+  red: 0xd45147,
+  redDark: 0x702d32,
+  blue: 0x4e9ab3,
+  white: 0xe8f0eb,
+  black: 0x172027,
+  rope: 0xd4c99e,
+  /** Painted asphalt for the service road that runs the length of the apron. */
+  tarmac: 0x3b4750,
+} as const;
+
+function navyShadow(
+  baker: Baker,
+  originX: number,
+  originY: number,
+  halfU: number,
+  halfV: number,
+): void {
+  fillFace(
+    baker,
+    TERRAIN_COLORS.shadow,
+    0.28,
+    [
+      [-halfU + 0.1, -halfV + 0.12, 0],
+      [halfU + 0.1, -halfV + 0.12, 0],
+      [halfU + 0.1, halfV + 0.12, 0],
+      [-halfU + 0.1, halfV + 0.12, 0],
+    ],
+    originX,
+    originY,
+  );
+}
+
+/**
+ * A horizontal circle in grid space. A screen-space ellipse is a guess at the
+ * projection; this is the projection, so painted circles and cylinder lids sit
+ * on the ground at the same angle as everything else.
+ */
+function navyRing(radius: number, z: number, segments = 20): Point3[] {
+  return Array.from({ length: segments }, (_unused, index) => {
+    const angle = (index / segments) * Math.PI * 2;
+    return [Math.cos(angle) * radius, Math.sin(angle) * radius, z] as const;
+  });
+}
+
+/**
+ * An upright cylinder — tanks, revetments, gun pits. Side plates are shaded by
+ * where each one faces under the world's fixed upper-left sun and drawn
+ * furthest-first, so the near plating always wins.
+ */
+function navyCylinder(
+  baker: Baker,
+  originX: number,
+  originY: number,
+  radius: number,
+  z0: number,
+  z1: number,
+  color: number,
+  segments = 18,
+): void {
+  const plates = Array.from({ length: segments }, (_unused, index) => {
+    const a0 = (index / segments) * Math.PI * 2;
+    const a1 = ((index + 1) / segments) * Math.PI * 2;
+    const mid = (a0 + a1) / 2;
+    return { a0, a1, nu: Math.cos(mid), nv: Math.sin(mid) };
+  }).sort((a, b) => a.nu + a.nv - (b.nu + b.nv));
+
+  for (const plate of plates) {
+    const u0 = Math.cos(plate.a0) * radius;
+    const v0 = Math.sin(plate.a0) * radius;
+    const u1 = Math.cos(plate.a1) * radius;
+    const v1 = Math.sin(plate.a1) * radius;
+    fillFace(
+      baker,
+      shade(color, Math.round(11 * plate.nv - 27 * plate.nu)),
+      1,
+      [[u0, v0, z1], [u1, v1, z1], [u1, v1, z0], [u0, v0, z0]],
+      originX,
+      originY,
+    );
+  }
+  fillFace(baker, shade(color, 16), 1, navyRing(radius, z1, segments), originX, originY);
+}
+
+function navyWindow(
+  baker: Baker,
+  originX: number,
+  originY: number,
+  u0: number,
+  u1: number,
+  v0: number,
+  v1: number,
+  z0: number,
+  z1: number,
+): void {
+  fillFace(
+    baker,
+    NAVY_BASE.glassDark,
+    1,
+    [[u0, v1, z1], [u1, v1, z1], [u1, v1, z0], [u0, v1, z0]],
+    originX,
+    originY,
+  );
+  fillFace(
+    baker,
+    NAVY_BASE.glass,
+    0.82,
+    [[u1, v0, z1], [u1, v1, z1], [u1, v1, z0], [u1, v0, z0]],
+    originX,
+    originY,
+  );
+  baker.graphics.lineStyle(1, NAVY_BASE.steel, 0.46);
+  for (const u of [u0 + (u1 - u0) / 2]) {
+    const a = baker.at([u, v1 + 0.01, z1], originX, originY);
+    const b = baker.at([u, v1 + 0.01, z0], originX, originY);
+    baker.graphics.lineBetween(a.x, a.y, b.x, b.y);
+  }
+}
+
+function navyScreenLine(
+  baker: Baker,
+  originX: number,
+  originY: number,
+  from: Point3,
+  to: Point3,
+  width: number,
+  color: number,
+  alpha = 1,
+): void {
+  const a = baker.at(from, originX, originY);
+  const b = baker.at(to, originX, originY);
+  baker.graphics.lineStyle(width, color, alpha);
+  baker.graphics.lineBetween(a.x, a.y, b.x, b.y);
+}
+
+/** Paint on the apron: a strip of line marking laid flat on the deck. */
+function navyDeckLine(
+  baker: Baker,
+  originX: number,
+  originY: number,
+  from: readonly [number, number],
+  to: readonly [number, number],
+  width: number,
+  color: number,
+  alpha = 1,
+): void {
+  navyScreenLine(
+    baker,
+    originX,
+    originY,
+    [from[0], from[1], NAVY_QUAY_DECK + 1],
+    [to[0], to[1], NAVY_QUAY_DECK + 1],
+    width,
+    color,
+    alpha,
+  );
+}
+
+function bakeNavyPier(baker: Baker): void {
+  const width = 120;
+  const height = 112;
+  const originX = width / 2;
+  const originY = height - NAVY_PIER_ANCHOR_Y;
+  const half = 0.5;
+  const deck = NAVY_PIER_DECK;
+
+  navyShadow(baker, originX, originY, half, half);
+  fillFace(baker, NAVY_BASE.deckDark, 1, diamond(half, deck), originX, originY);
+  fillFace(
+    baker,
+    NAVY_BASE.concreteDark,
+    1,
+    [[-half, half, deck], [half, half, deck], [half, half, 0], [-half, half, 0]],
+    originX,
+    originY,
+  );
+  fillFace(
+    baker,
+    shade(NAVY_BASE.concreteDark, -20),
+    1,
+    [[half, half, deck], [half, -half, deck], [half, -half, 0], [half, half, 0]],
+    originX,
+    originY,
+  );
+  for (const u of [-0.3, 0, 0.3]) {
+    navyScreenLine(
+      baker,
+      originX,
+      originY,
+      [u, -half + 0.05, deck + 1],
+      [u, half - 0.05, deck + 1],
+      1,
+      NAVY_BASE.deckLight,
+      0.58,
+    );
+  }
+  navyScreenLine(
+    baker,
+    originX,
+    originY,
+    [-half + 0.08, half - 0.1, deck + 1],
+    [half - 0.08, half - 0.1, deck + 1],
+    2,
+    NAVY_BASE.warning,
+    0.9,
+  );
+  for (const [u, v] of [[-0.36, -0.36], [0.36, -0.36], [-0.36, 0.36], [0.36, 0.36]] as const) {
+    harbourPost(baker, originX, originY, u, v, -8, deck, 5, NAVY_BASE.oliveDark);
+    const water = baker.at([u, v, 0], originX, originY);
+    baker.graphics.fillStyle(NAVY_BASE.white, 0.48);
+    baker.graphics.fillEllipse(water.x, water.y + 1, 13, 4);
+  }
+  baker.finish(NAVY_PIER_KEY, width, height);
+}
+
+/**
+ * Naval Operations HQ. Three stepped masses under a glazed operations bridge:
+ * the setback is what gives the building a silhouette you can pick out at fit
+ * zoom, where a single box just reads as another warehouse.
+ */
+function bakeNavyCommand(baker: Baker): void {
+  const half = 0.72;
+  const plinthHalf = half + 0.06;
+  const plinth = 6;
+  const body = 44;
+  const band = 48;
+  const setbackHalf = 0.52;
+  const setback = 72;
+  const bridgeHalf = 0.44;
+  const bridge = 96;
+  const cap = 102;
+  const mast = 146;
+
+  const width = Math.ceil(plinthHalf * 4 * HALF_W) + 24;
+  const height = NAVY_COMMAND_ANCHOR_Y + Math.ceil(plinthHalf * 2 * HALF_H) + mast + 10;
+  const originX = width / 2;
+  const originY = height - NAVY_COMMAND_ANCHOR_Y;
+
+  navyShadow(baker, originX, originY, plinthHalf + 0.1, plinthHalf + 0.08);
+
+  // Stepped concrete: plinth, main block, string course, setback storey.
+  harbourBox(baker, originX, originY, [-plinthHalf, plinthHalf, -plinthHalf, plinthHalf, 0, plinth], NAVY_BASE.concreteDark);
+  harbourBox(baker, originX, originY, [-half, half, -half, half, plinth, body], NAVY_BASE.concreteLight);
+  harbourBox(baker, originX, originY, [-half - 0.04, half + 0.04, -half - 0.04, half + 0.04, body, band], NAVY_BASE.deckDark);
+  harbourBox(baker, originX, originY, [-setbackHalf, setbackHalf, -setbackHalf, setbackHalf, band, setback], NAVY_BASE.concrete);
+
+  // Two window bands on the main block and one on the setback.
+  for (const z of [14, 30] as const) {
+    for (const u of [-0.5, -0.17, 0.16, 0.49]) {
+      navyWindow(baker, originX, originY, u - 0.1, u + 0.1, half + 0.02, half + 0.02, z, z + 11);
+    }
+  }
+  for (const u of [-0.34, -0.02, 0.3]) {
+    navyWindow(baker, originX, originY, u - 0.09, u + 0.09, setbackHalf + 0.02, setbackHalf + 0.02, 54, 64);
+  }
+
+  // Entrance: a cantilevered canopy over the doors, with a lit sign band.
+  fillFace(
+    baker,
+    NAVY_BASE.redDark,
+    1,
+    [[-0.26, half + 0.02, 24], [0.26, half + 0.02, 24], [0.26, half + 0.02, plinth], [-0.26, half + 0.02, plinth]],
+    originX,
+    originY,
+  );
+  harbourBox(baker, originX, originY, [-0.36, 0.36, half, half + 0.26, 24, 28], NAVY_BASE.deckDark);
+  navyScreenLine(baker, originX, originY, [-0.36, half + 0.26, 25], [0.36, half + 0.26, 25], 2, NAVY_BASE.warning, 0.9);
+
+  // Operations bridge: glazed on all four sides, on a flared sill.
+  harbourBox(baker, originX, originY, [-bridgeHalf - 0.09, bridgeHalf + 0.09, -bridgeHalf - 0.09, bridgeHalf + 0.09, setback, setback + 5], NAVY_BASE.deckDark);
+  harbourBox(baker, originX, originY, [-bridgeHalf, bridgeHalf, -bridgeHalf, bridgeHalf, setback + 5, bridge], NAVY_BASE.glassDark);
+  fillFace(
+    baker,
+    NAVY_BASE.glass,
+    0.86,
+    [[-bridgeHalf, bridgeHalf + 0.01, bridge - 2], [bridgeHalf, bridgeHalf + 0.01, bridge - 2], [bridgeHalf, bridgeHalf + 0.01, setback + 8], [-bridgeHalf, bridgeHalf + 0.01, setback + 8]],
+    originX,
+    originY,
+  );
+  fillFace(
+    baker,
+    NAVY_BASE.glass,
+    0.6,
+    [[bridgeHalf + 0.01, bridgeHalf, bridge - 2], [bridgeHalf + 0.01, -bridgeHalf, bridge - 2], [bridgeHalf + 0.01, -bridgeHalf, setback + 8], [bridgeHalf + 0.01, bridgeHalf, setback + 8]],
+    originX,
+    originY,
+  );
+  for (const u of [-0.2, 0.06]) {
+    navyScreenLine(baker, originX, originY, [u, bridgeHalf + 0.03, bridge - 2], [u, bridgeHalf + 0.03, setback + 8], 1, NAVY_BASE.steelDark, 0.7);
+  }
+  harbourBox(baker, originX, originY, [-bridgeHalf - 0.06, bridgeHalf + 0.06, -bridgeHalf - 0.06, bridgeHalf + 0.06, bridge, cap], NAVY_BASE.deckDark);
+
+  // Roof furniture: mast with a yardarm, a radome and the obstruction light.
+  harbourPost(baker, originX, originY, 0.06, -0.08, cap, mast, 4, NAVY_BASE.steelDark);
+  navyScreenLine(baker, originX, originY, [-0.22, -0.08, mast - 22], [0.34, -0.08, mast - 22], 2, NAVY_BASE.steel, 0.92);
+  navyScreenLine(baker, originX, originY, [-0.22, -0.08, mast - 22], [0.06, -0.08, mast - 6], 1, NAVY_BASE.rope, 0.6);
+  navyScreenLine(baker, originX, originY, [0.34, -0.08, mast - 22], [0.06, -0.08, mast - 6], 1, NAVY_BASE.rope, 0.6);
+  const radome = baker.at([-0.3, 0.16, cap], originX, originY);
+  baker.graphics.fillStyle(NAVY_BASE.steelDark, 1);
+  baker.graphics.fillRect(radome.x - 3, radome.y - 12, 6, 12);
+  baker.graphics.fillStyle(NAVY_BASE.concreteLight, 1);
+  baker.graphics.fillCircle(radome.x, radome.y - 15, 7);
+  baker.graphics.fillStyle(NAVY_BASE.steel, 0.7);
+  baker.graphics.fillCircle(radome.x - 2, radome.y - 17, 3);
+  const beacon = baker.at([0.06, -0.08, mast], originX, originY);
+  baker.graphics.fillStyle(NAVY_BASE.red, 1);
+  baker.graphics.fillCircle(beacon.x, beacon.y - 1, 3);
+
+  const plaque = baker.at([0, half + 0.03, 30], originX, originY);
+  drawHarbourLabel(baker, "NAVY", plaque.x, plaque.y - 4, NAVY_BASE.white, 1);
+  baker.finish(NAVY_COMMAND_KEY, width, height);
+}
+
+/**
+ * Fleet maintenance hangar. The barrel vault is the whole point: an arched
+ * roof is unmistakable at any zoom, where the flat-topped shed it replaced was
+ * indistinguishable from the barracks.
+ */
+function bakeNavyHangar(baker: Baker): void {
+  const halfU = 0.86;
+  const halfV = 0.78;
+  const wall = 24;
+  const crown = 62;
+  const segments = 14;
+
+  const width = Math.ceil((halfU + halfV) * 2 * HALF_W) + 24;
+  const height = NAVY_HANGAR_ANCHOR_Y + Math.ceil((halfU + halfV) * HALF_H) + crown + 12;
+  const originX = width / 2;
+  const originY = height - NAVY_HANGAR_ANCHOR_Y;
+
+  /** Height of the vault a fraction `t` of the way across the span. */
+  const archZ = (v: number): number =>
+    wall + (crown - wall) * Math.sqrt(Math.max(0, 1 - (v / halfV) ** 2));
+
+  navyShadow(baker, originX, originY, halfU + 0.12, halfV + 0.12);
+
+  // Side wall under the lit (+v) eaves, then the vault laid on far-to-near.
+  harbourBox(baker, originX, originY, [-halfU, halfU, halfV - 0.06, halfV, 0, wall], NAVY_BASE.olive);
+  for (let index = 0; index < segments; index += 1) {
+    const v0 = -halfV + (index / segments) * halfV * 2;
+    const v1 = -halfV + ((index + 1) / segments) * halfV * 2;
+    const mid = (v0 + v1) / 2;
+    fillFace(
+      baker,
+      shade(NAVY_BASE.olive, Math.round(6 + 22 * (mid / halfV))),
+      1,
+      [[-halfU, v0, archZ(v0)], [halfU, v0, archZ(v0)], [halfU, v1, archZ(v1)], [-halfU, v1, archZ(v1)]],
+      originX,
+      originY,
+    );
+    // Corrugation: one rib per segment, drawn on the segment's own crown.
+    navyScreenLine(baker, originX, originY, [-halfU, v1, archZ(v1) + 0.4], [halfU, v1, archZ(v1) + 0.4], 1, NAVY_BASE.oliveDark, 0.5);
+  }
+
+  // Gable end facing the apron, following the same arch.
+  const gable: Point3[] = [[halfU, -halfV, 0]];
+  for (let index = 0; index <= segments; index += 1) {
+    const v = -halfV + (index / segments) * halfV * 2;
+    gable.push([halfU, v, archZ(v)]);
+  }
+  gable.push([halfU, halfV, 0]);
+  fillFace(baker, shade(NAVY_BASE.olive, -22), 1, gable, originX, originY);
+  strokeFace(baker, NAVY_BASE.oliveDark, 0.8, 1, gable, originX, originY);
+
+  // The main door: a black opening with a lit slot where it stands part-open.
+  const doorHalf = 0.58;
+  const doorTop = 40;
+  fillFace(
+    baker,
+    NAVY_BASE.black,
+    1,
+    [[halfU + 0.01, -doorHalf, 4], [halfU + 0.01, -doorHalf, doorTop], [halfU + 0.01, doorHalf, doorTop], [halfU + 0.01, doorHalf, 4]],
+    originX,
+    originY,
+  );
+  fillFace(
+    baker,
+    NAVY_BASE.warning,
+    0.28,
+    [[halfU + 0.02, 0.12, 6], [halfU + 0.02, 0.12, 30], [halfU + 0.02, doorHalf - 0.04, 30], [halfU + 0.02, doorHalf - 0.04, 6]],
+    originX,
+    originY,
+  );
+  for (const v of [-0.34, -0.06, 0.3]) {
+    navyScreenLine(baker, originX, originY, [halfU + 0.03, v, doorTop - 2], [halfU + 0.03, v, 5], 1, NAVY_BASE.steelDark, 0.6);
+  }
+  // Hazard chevrons across the door sill.
+  for (const v of [-0.5, -0.24, 0.02, 0.28]) {
+    navyScreenLine(baker, originX, originY, [halfU + 0.04, v, 3], [halfU + 0.04, v + 0.14, 11], 3, NAVY_BASE.warning, 0.92);
+  }
+  // Door rail and header beam.
+  navyScreenLine(baker, originX, originY, [halfU + 0.04, -doorHalf - 0.06, doorTop + 2], [halfU + 0.04, doorHalf + 0.06, doorTop + 2], 3, NAVY_BASE.steelDark, 1);
+
+  // Roof ridge vents and a beacon on the near apex.
+  for (const u of [-0.5, 0, 0.5]) {
+    harbourBox(baker, originX, originY, [u - 0.13, u + 0.13, -0.1, 0.1, crown - 2, crown + 6], NAVY_BASE.steelDark);
+  }
+  const apex = baker.at([halfU, 0, crown], originX, originY);
+  baker.graphics.fillStyle(NAVY_BASE.red, 1);
+  baker.graphics.fillCircle(apex.x, apex.y - 4, 3);
+  baker.graphics.fillStyle(NAVY_BASE.white, 0.9);
+  baker.graphics.fillCircle(apex.x - 1, apex.y - 5, 1);
+
+  // Unit number stencilled on the gable, above the door.
+  const stencil = baker.at([halfU + 0.05, 0, doorTop + 12], originX, originY);
+  drawHarbourLabel(baker, "NAVY", stencil.x, stencil.y - 4, NAVY_BASE.warning, 1);
+
+  baker.finish(NAVY_HANGAR_KEY, width, height);
+}
+
+/** Crew barracks: two storeys under a pitched roof, with a porch on the apron side. */
+function bakeNavyBarracks(baker: Baker): void {
+  const half = 0.64;
+  const body = 36;
+  const eave = body + 3;
+  const ridge = body + 19;
+
+  const width = Math.ceil(half * 4 * HALF_W) + 22;
+  const height = NAVY_BARRACKS_ANCHOR_Y + Math.ceil(half * 2 * HALF_H) + ridge + 12;
+  const originX = width / 2;
+  const originY = height - NAVY_BARRACKS_ANCHOR_Y;
+
+  navyShadow(baker, originX, originY, half + 0.1, half + 0.1);
+  harbourBox(baker, originX, originY, [-half, half, -half, half, 0, 5], NAVY_BASE.concreteDark);
+  harbourBox(baker, originX, originY, [-half, half, -half, half, 5, body], NAVY_BASE.concreteLight);
+
+  // Pitched roof: the lit +v slope, the shaded gable end, and the ridge.
+  const overhang = half + 0.08;
+  fillFace(
+    baker,
+    shade(NAVY_BASE.redDark, 18),
+    1,
+    [[-overhang, 0, ridge], [overhang, 0, ridge], [overhang, overhang, eave], [-overhang, overhang, eave]],
+    originX,
+    originY,
+  );
+  fillFace(
+    baker,
+    NAVY_BASE.redDark,
+    1,
+    [[overhang, 0, ridge], [overhang, overhang, eave], [overhang, overhang, eave - 3], [overhang, 0, ridge - 3]],
+    originX,
+    originY,
+  );
+  fillFace(
+    baker,
+    shade(NAVY_BASE.redDark, -18),
+    1,
+    [[overhang, -overhang, eave], [overhang, 0, ridge], [overhang, 0, ridge - 3], [overhang, -overhang, eave - 3]],
+    originX,
+    originY,
+  );
+  fillFace(
+    baker,
+    NAVY_BASE.concrete,
+    1,
+    [[half, -half, body], [half, 0, ridge - 4], [half, half, body]],
+    originX,
+    originY,
+  );
+  navyScreenLine(baker, originX, originY, [-overhang, 0, ridge], [overhang, 0, ridge], 2, shade(NAVY_BASE.redDark, -26), 1);
+
+  // Two rows of windows, and a porch over the door at the near end.
+  for (const z of [11, 24] as const) {
+    for (const u of [-0.44, -0.15, 0.14, 0.43]) {
+      navyWindow(baker, originX, originY, u - 0.08, u + 0.08, half + 0.02, half + 0.02, z, z + 9);
+    }
+  }
+  fillFace(
+    baker,
+    NAVY_BASE.deckDark,
+    1,
+    [[0.36, half + 0.02, 20], [0.6, half + 0.02, 20], [0.6, half + 0.02, 5], [0.36, half + 0.02, 5]],
+    originX,
+    originY,
+  );
+  harbourBox(baker, originX, originY, [0.3, 0.66, half, half + 0.2, 20, 23], NAVY_BASE.deckDark);
+  harbourPost(baker, originX, originY, 0.64, half + 0.18, 0, 20, 2, NAVY_BASE.steelDark);
+  navyScreenLine(baker, originX, originY, [-0.5, half + 0.04, 6], [0.66, half + 0.04, 6], 2, NAVY_BASE.warning, 0.6);
+
+  // Roof vents and a flue keep the ridge from reading as a bare line.
+  for (const u of [-0.34, 0.16]) {
+    harbourPost(baker, originX, originY, u, -0.14, ridge - 6, ridge + 8, 3, NAVY_BASE.steelDark);
+  }
+  baker.finish(NAVY_BARRACKS_KEY, width, height);
+}
+
+/**
+ * The radar tower — the mast only. Its dish is a separate sprite baked once per
+ * heading (`bakeNavyRadarDish`), because an isometric prop cannot be rotated at
+ * runtime; spinning the sprite would read as a spinning picture.
+ */
+function bakeNavyRadar(baker: Baker): void {
+  const foundationHalf = 0.46;
+  const footHalf = 0.3;
+  const headHalf = 0.14;
+  const legFoot = 12;
+  const platform = 92;
+  const railing = platform + 11;
+  const top = NAVY_RADAR_HUB_Z;
+
+  const width = Math.ceil((foundationHalf + 0.1) * 4 * HALF_W) + 20;
+  const height = NAVY_RADAR_ANCHOR_Y + Math.ceil(foundationHalf * 2 * HALF_H) + top + 14;
+  const originX = width / 2;
+  const originY = height - NAVY_RADAR_ANCHOR_Y;
+
+  navyShadow(baker, originX, originY, foundationHalf + 0.12, foundationHalf + 0.12);
+
+  // Poured foundation with a hazard border and holding-down bolts.
+  harbourBox(baker, originX, originY, [-foundationHalf, foundationHalf, -foundationHalf, foundationHalf, 0, 10], NAVY_BASE.concreteDark);
+  fillFace(baker, NAVY_BASE.concreteLight, 1, diamond(foundationHalf - 0.03, 11), originX, originY);
+  strokeFace(baker, NAVY_BASE.warning, 0.9, 2, diamond(foundationHalf - 0.08, 12), originX, originY);
+  for (const [u, v] of [[-footHalf, -footHalf], [footHalf, -footHalf], [footHalf, footHalf], [-footHalf, footHalf]] as const) {
+    const bolt = baker.at([u, v, 12], originX, originY);
+    baker.graphics.fillStyle(NAVY_BASE.black, 1);
+    baker.graphics.fillCircle(bolt.x, bolt.y, 2);
+    baker.graphics.fillStyle(NAVY_BASE.warning, 1);
+    baker.graphics.fillCircle(bolt.x, bolt.y - 1, 1);
+  }
+
+  // Signal cabinet at the foot, with its status panel facing the apron.
+  harbourBox(baker, originX, originY, [0.16, 0.44, 0.12, 0.4, 11, 32], NAVY_BASE.oliveDark);
+  navyScreenLine(baker, originX, originY, [0.17, 0.4, 25], [0.43, 0.4, 25], 2, NAVY_BASE.warning, 0.82);
+  const panel = baker.at([0.3, 0.41, 20], originX, originY);
+  baker.graphics.fillStyle(NAVY_BASE.black, 1);
+  baker.graphics.fillRect(panel.x - 5, panel.y - 4, 10, 7);
+  baker.graphics.fillStyle(NAVY_BASE.blue, 1);
+  baker.graphics.fillRect(panel.x - 3, panel.y - 2, 2, 2);
+  baker.graphics.fillStyle(NAVY_BASE.warning, 1);
+  baker.graphics.fillRect(panel.x + 1, panel.y - 2, 2, 2);
+
+  // Tapering lattice: four legs that converge toward the platform, which is
+  // what makes it read as an engineered mast rather than a chimney.
+  const legs = [
+    [-1, -1],
+    [1, -1],
+    [1, 1],
+    [-1, 1],
+  ] as const;
+  for (const [su, sv] of legs) {
+    navyScreenLine(
+      baker,
+      originX,
+      originY,
+      [su * footHalf, sv * footHalf, legFoot],
+      [su * headHalf, sv * headHalf, platform],
+      3,
+      NAVY_BASE.steelDark,
+      1,
+    );
+  }
+  // X-bracing on the two faces the viewer can see (+u and +v).
+  const bays = 5;
+  for (let index = 0; index < bays; index += 1) {
+    const t0 = index / bays;
+    const t1 = (index + 1) / bays;
+    const z0 = legFoot + (platform - legFoot) * t0;
+    const z1 = legFoot + (platform - legFoot) * t1;
+    const w0 = footHalf + (headHalf - footHalf) * t0;
+    const w1 = footHalf + (headHalf - footHalf) * t1;
+    for (const face of [
+      { a: [-1, 1], b: [1, 1] },
+      { a: [1, 1], b: [1, -1] },
+    ] as const) {
+      navyScreenLine(baker, originX, originY, [face.a[0] * w0, face.a[1] * w0, z0], [face.b[0] * w1, face.b[1] * w1, z1], 1, NAVY_BASE.steel, 0.85);
+      navyScreenLine(baker, originX, originY, [face.b[0] * w0, face.b[1] * w0, z0], [face.a[0] * w1, face.a[1] * w1, z1], 1, NAVY_BASE.steelDark, 0.9);
+      navyScreenLine(baker, originX, originY, [face.a[0] * w1, face.a[1] * w1, z1], [face.b[0] * w1, face.b[1] * w1, z1], 1, NAVY_BASE.steelDark, 0.75);
+    }
+  }
+  // Access ladder up the near leg.
+  for (let z = legFoot + 6; z < platform - 6; z += 7) {
+    const t = (z - legFoot) / (platform - legFoot);
+    const w = footHalf + (headHalf - footHalf) * t;
+    navyScreenLine(baker, originX, originY, [w + 0.06, w, z], [w - 0.04, w, z], 1, NAVY_BASE.steel, 0.8);
+  }
+
+  // Service platform, kick plate and railing.
+  fillFace(baker, NAVY_BASE.deckDark, 1, diamond(0.34, platform), originX, originY);
+  strokeFace(baker, NAVY_BASE.warning, 0.85, 1, diamond(0.3, platform + 1), originX, originY);
+  const railPosts = [
+    [-0.32, -0.32],
+    [0.32, -0.32],
+    [0.32, 0.32],
+    [-0.32, 0.32],
+  ] as const;
+  for (const [u, v] of railPosts) {
+    harbourPost(baker, originX, originY, u, v, platform, railing, 2, NAVY_BASE.steelDark);
+  }
+  for (const z of [railing, platform + 5]) {
+    navyScreenLine(baker, originX, originY, [-0.32, 0.32, z], [0.32, 0.32, z], 1, NAVY_BASE.steel, 0.9);
+    navyScreenLine(baker, originX, originY, [0.32, 0.32, z], [0.32, -0.32, z], 1, NAVY_BASE.steel, 0.72);
+  }
+
+  // King post the dish's bearing sits on, plus obstruction lights.
+  harbourPost(baker, originX, originY, 0, 0, platform, top, 6, NAVY_BASE.black);
+  harbourPost(baker, originX, originY, 0.02, -0.02, platform + 2, top - 2, 2, NAVY_BASE.steel);
+  for (const z of [40, 66]) {
+    const light = baker.at([0.16, 0.16, z], originX, originY);
+    baker.graphics.fillStyle(NAVY_BASE.warning, 1);
+    baker.graphics.fillCircle(light.x, light.y, 2);
+  }
+  baker.finish(NAVY_RADAR_KEY, width, height);
+}
+
+/**
+ * One heading of the radar head. Wrapping the baker's `at` rotates every point
+ * the drawing puts down about the mast, so the same authored dish gives all 24
+ * bearings and the feed horn swings round with it.
+ */
+function bakeNavyRadarDish(source: Baker, key: string, frame: number): void {
+  const width = 116;
+  const height = 112;
+  const originX = width / 2;
+  const originY = height - NAVY_RADAR_DISH_ANCHOR_Y;
+
+  const angle = (frame / NAVY_RADAR_DISH_FRAMES) * Math.PI * 2;
+  const cos = Math.cos(angle);
+  const sin = Math.sin(angle);
+  const baker: Baker =
+    frame === 0
+      ? source
+      : {
+          ...source,
+          at: (point, ox, oy) =>
+            source.at(
+              [point[0] * cos - point[1] * sin, point[0] * sin + point[1] * cos, point[2]],
+              ox,
+              oy,
+            ),
+        };
+
+  const radius = 0.6;
+  /** How far the dish face leans back over its pedestal, per unit of rise. */
+  const lean = 0.3;
+  /** Pixels of height per unit of dish radius — sets how upright the face is. */
+  const rise = 44;
+  const segments = 26;
+
+  /** A point on the dish rim: `phi` runs round the face, 0 at the lit side. */
+  const rim = (phi: number, scale: number, out: number): Point3 => {
+    const across = Math.cos(phi) * radius * scale;
+    const up = Math.sin(phi) * radius * scale;
+    return [-up * lean + out, across, up * rise];
+  };
+  const face = (scale: number, out: number): Point3[] =>
+    Array.from({ length: segments }, (_unused, index) =>
+      rim((index / segments) * Math.PI * 2, scale, out),
+    );
+
+  // Bearing housing and counterweight, below the dish and turning with it.
+  harbourBox(baker, originX, originY, [-0.3, -0.08, -0.2, 0.2, -30, -12], NAVY_BASE.deckDark);
+  harbourBox(baker, originX, originY, [-0.17, 0.17, -0.22, 0.22, -14, -2], NAVY_BASE.oliveDark);
+  for (const v of [-0.19, 0.19]) {
+    navyScreenLine(baker, originX, originY, [0.02, v, -4], [-0.09, v, 12], 3, NAVY_BASE.steelDark, 1);
+  }
+
+  // Dish: dark back shell, then the face, then the rim and ribs.
+  fillFace(baker, NAVY_BASE.black, 1, face(1.02, -0.07), originX, originY);
+  fillFace(baker, NAVY_BASE.deckDark, 1, face(1, -0.03), originX, originY);
+  fillFace(baker, NAVY_BASE.concreteDark, 1, face(0.94, 0.02), originX, originY);
+  fillFace(baker, NAVY_BASE.concrete, 1, face(0.78, 0.05), originX, originY);
+  strokeFace(baker, NAVY_BASE.steel, 0.9, 2, face(1, -0.02), originX, originY);
+  strokeFace(baker, NAVY_BASE.steelDark, 0.6, 1, face(0.6, 0.06), originX, originY);
+  for (let index = 0; index < 8; index += 1) {
+    const phi = (index / 8) * Math.PI * 2;
+    navyScreenLine(baker, originX, originY, rim(phi, 0.96, 0.03), rim(phi, 0.08, 0.07), 1, NAVY_BASE.steelDark, 0.55);
+  }
+
+  // Feed horn on a tripod, out in front of the face.
+  const feed: Point3 = [0.42, 0, 12];
+  for (const phi of [Math.PI / 2, (7 * Math.PI) / 6, (11 * Math.PI) / 6]) {
+    navyScreenLine(baker, originX, originY, rim(phi, 0.8, 0.04), feed, 1, NAVY_BASE.steel, 0.85);
+  }
+  const horn = baker.at(feed, originX, originY);
+  baker.graphics.fillStyle(NAVY_BASE.black, 1);
+  baker.graphics.fillCircle(horn.x, horn.y, 5);
+  baker.graphics.fillStyle(NAVY_BASE.warning, 1);
+  baker.graphics.fillCircle(horn.x - 1, horn.y - 1, 3);
+
+  // Rim beacon, so the sweep is legible even when the dish is edge-on.
+  const marker = baker.at(rim(Math.PI / 2, 1.02, 0), originX, originY);
+  baker.graphics.fillStyle(NAVY_BASE.red, 1);
+  baker.graphics.fillCircle(marker.x, marker.y, 3);
+  baker.graphics.fillStyle(NAVY_BASE.white, 0.9);
+  baker.graphics.fillCircle(marker.x - 1, marker.y - 1, 1);
+
+  baker.finish(key, width, height);
+}
+
+/** A tracked launcher on the quayside lip, tubes elevated out over the water. */
+function bakeNavyMissile(baker: Baker): void {
+  const width = 128;
+  const height = 104;
+  const originX = width / 2;
+  const originY = height - NAVY_MISSILE_ANCHOR_Y;
+  const half = 0.5;
+
+  navyShadow(baker, originX, originY, half + 0.08, half * 0.8);
+
+  // Hardstanding with a painted turning circle.
+  fillFace(baker, NAVY_BASE.concreteDark, 1, navyRing(half + 0.02, 2), originX, originY);
+  strokeFace(baker, NAVY_BASE.warning, 0.7, 2, navyRing(half - 0.08, 3), originX, originY);
+
+  // Chassis: road wheels, hull, and outriggers planted for firing.
+  for (const v of [-0.26, 0.26]) {
+    for (const u of [-0.3, -0.1, 0.1, 0.3]) {
+      fillFace(
+        baker,
+        NAVY_BASE.black,
+        1,
+        [[u - 0.07, v, 3], [u, v - 0.05, 3], [u + 0.07, v, 3], [u, v + 0.05, 3]],
+        originX,
+        originY,
+      );
+    }
+  }
+  harbourBox(baker, originX, originY, [-0.38, 0.38, -0.28, 0.28, 6, 18], NAVY_BASE.oliveDark);
+  fillFace(baker, NAVY_BASE.olive, 1, [[-0.38, -0.28, 18], [0.38, -0.28, 18], [0.38, 0.28, 18], [-0.38, 0.28, 18]], originX, originY);
+  for (const [u, v] of [[-0.42, 0.32], [0.42, 0.32], [-0.42, -0.32], [0.42, -0.32]] as const) {
+    navyScreenLine(baker, originX, originY, [u * 0.85, v * 0.85, 10], [u, v, 1], 3, NAVY_BASE.steelDark, 1);
+  }
+  // Cab at the inland end.
+  harbourBox(baker, originX, originY, [-0.36, -0.14, -0.22, 0.22, 18, 30], NAVY_BASE.olive);
+  fillFace(
+    baker,
+    NAVY_BASE.glassDark,
+    1,
+    [[-0.36, 0.23, 28], [-0.16, 0.23, 28], [-0.16, 0.23, 21], [-0.36, 0.23, 21]],
+    originX,
+    originY,
+  );
+
+  // Elevated launcher: a four-tube block hinged up toward the sea (+u).
+  const hinge: Point3 = [-0.06, 0, 20];
+  const muzzle: Point3 = [0.46, 0, 54];
+  navyScreenLine(baker, originX, originY, hinge, [0.02, 0, 30], 4, NAVY_BASE.steelDark, 1);
+  for (const v of [-0.15, 0.15]) {
+    for (const lift of [0, 9]) {
+      const from: Point3 = [hinge[0], v, hinge[2] + lift];
+      const to: Point3 = [muzzle[0], v, muzzle[2] + lift];
+      navyScreenLine(baker, originX, originY, from, to, 9, NAVY_BASE.black, 1);
+      navyScreenLine(baker, originX, originY, from, to, 6, NAVY_BASE.oliveDark, 1);
+      navyScreenLine(baker, originX, originY, [from[0], from[1], from[2] + 1], [to[0], to[1], to[2] + 1], 2, NAVY_BASE.oliveLight, 0.8);
+      const mouth = baker.at(to, originX, originY);
+      baker.graphics.fillStyle(NAVY_BASE.black, 1);
+      baker.graphics.fillCircle(mouth.x, mouth.y, 4);
+      baker.graphics.fillStyle(NAVY_BASE.red, 1);
+      baker.graphics.fillCircle(mouth.x, mouth.y, 2);
+    }
+  }
+  // Cradle band and hazard stencil on the tube pack.
+  navyScreenLine(baker, originX, originY, [0.16, -0.2, 32], [0.16, 0.2, 32], 3, NAVY_BASE.warning, 0.9);
+  navyScreenLine(baker, originX, originY, [-0.4, 0.3, 8], [0.4, 0.3, 8], 2, NAVY_BASE.warning, 0.85);
+  baker.finish(NAVY_MISSILE_KEY, width, height);
+}
+
+function bakeNavyTank(baker: Baker): void {
+  const width = 112;
+  const height = 82;
+  const originX = width / 2;
+  const originY = height - NAVY_TANK_ANCHOR_Y;
+
+  navyShadow(baker, originX, originY, 0.5, 0.36);
+
+  // The gun faces grid -v. Keep the two track lanes separated on u and make
+  // their long edges run along v; screen-space ellipses would turn the wheels
+  // away from the hull by the isometric projection angle.
+  const drawTrack = (u: number): void => {
+    const outerTrack: Point3[] = [
+      [u - 0.12, -0.42, 8],
+      [u + 0.12, -0.42, 8],
+      [u + 0.12, 0.32, 8],
+      [u + 0.06, 0.42, 8],
+      [u - 0.06, 0.42, 8],
+      [u - 0.12, 0.32, 8],
+    ];
+    fillFace(baker, NAVY_BASE.black, 1, outerTrack, originX, originY);
+    fillFace(
+      baker,
+      NAVY_BASE.oliveDark,
+      1,
+      [
+        [u - 0.085, -0.35, 9],
+        [u + 0.085, -0.35, 9],
+        [u + 0.085, 0.27, 9],
+        [u + 0.04, 0.34, 9],
+        [u - 0.04, 0.34, 9],
+        [u - 0.085, 0.27, 9],
+      ],
+      originX,
+      originY,
+    );
+
+    // Crossbars are perpendicular to the -v travel direction.
+    for (const v of [-0.3, -0.15, 0, 0.15, 0.3]) {
+      navyScreenLine(
+        baker,
+        originX,
+        originY,
+        [u - 0.105, v, 9.5],
+        [u + 0.105, v, 9.5],
+        2,
+        NAVY_BASE.steelDark,
+        0.82,
+      );
+    }
+
+    // Isometric diamond wheels follow the same grid orientation instead of
+    // using screen-aligned circles.
+    for (const v of [-0.28, -0.14, 0, 0.14, 0.28]) {
+      fillFace(
+        baker,
+        NAVY_BASE.black,
+        1,
+        [
+          [u - 0.075, v, 10],
+          [u, v - 0.055, 10],
+          [u + 0.075, v, 10],
+          [u, v + 0.055, 10],
+        ],
+        originX,
+        originY,
+      );
+      fillFace(
+        baker,
+        NAVY_BASE.steelDark,
+        0.95,
+        [
+          [u - 0.043, v, 10.5],
+          [u, v - 0.031, 10.5],
+          [u + 0.043, v, 10.5],
+          [u, v + 0.031, 10.5],
+        ],
+        originX,
+        originY,
+      );
+    }
+  };
+  drawTrack(-0.25);
+  drawTrack(0.25);
+
+  // Lower hull with a sloped glacis and raised side skirts.
+  harbourBox(baker, originX, originY, [-0.46, 0.46, -0.32, 0.32, 8, 20], NAVY_BASE.oliveDark);
+  fillFace(
+    baker,
+    NAVY_BASE.olive,
+    1,
+    [[-0.4, -0.28, 21], [0.4, -0.28, 21], [0.31, 0.28, 24], [-0.31, 0.28, 24]],
+    originX,
+    originY,
+  );
+  fillFace(
+    baker,
+    NAVY_BASE.oliveLight,
+    1,
+    [[-0.31, 0.28, 24], [0.31, 0.28, 24], [0.22, 0.34, 16], [-0.22, 0.34, 16]],
+    originX,
+    originY,
+  );
+  // Side skirts and spaced reactive-armor tiles.
+  for (const u of [-0.38, -0.13, 0.13, 0.38]) {
+    harbourBox(baker, originX, originY, [u - 0.045, u + 0.045, 0.3, 0.38, 10, 18], NAVY_BASE.oliveLight);
+  }
+  for (const u of [-0.28, 0, 0.28]) {
+    const plate = baker.at([u, 0.36, 19], originX, originY);
+    baker.graphics.fillStyle(NAVY_BASE.warning, 0.86);
+    baker.graphics.fillRect(plate.x - 3, plate.y - 2, 6, 2);
+  }
+
+  // Low angular turret, commander's hatch, periscope, and long main gun.
+  harbourBox(baker, originX, originY, [-0.22, 0.22, -0.16, 0.16, 22, 29], NAVY_BASE.oliveDark);
+  fillFace(baker, NAVY_BASE.oliveLight, 1, diamond(0.23, 29), originX, originY);
+  const turret = baker.at([0, -0.01, 30], originX, originY);
+  baker.graphics.fillStyle(NAVY_BASE.steelDark, 1);
+  baker.graphics.fillEllipse(turret.x, turret.y, 19, 8);
+  baker.graphics.fillStyle(NAVY_BASE.black, 1);
+  baker.graphics.fillEllipse(turret.x - 3, turret.y - 1, 8, 4);
+  // The hull fronts toward +v: keep the cannon on the same tread axis, but
+  // send its muzzle down-screen rather than up-screen toward -v.
+  navyScreenLine(baker, originX, originY, [0, -0.02, 30], [0.05, 0.72, 33], 5, NAVY_BASE.black, 1);
+  navyScreenLine(baker, originX, originY, [0, -0.02, 30], [0.05, 0.72, 33], 2, NAVY_BASE.steelDark, 1);
+  navyScreenLine(baker, originX, originY, [0.03, 0.22, 30], [0.08, 0.44, 31], 2, NAVY_BASE.black, 1);
+  harbourPost(baker, originX, originY, 0.12, 0.02, 29, 36, 2, NAVY_BASE.steelDark);
+  const hatch = baker.at([-0.12, 0.03, 31], originX, originY);
+  baker.graphics.lineStyle(1, NAVY_BASE.warning, 0.95);
+  baker.graphics.strokeEllipse(hatch.x, hatch.y, 9, 5);
+  // Twin headlights and a small red unit marker on the glacis.
+  for (const u of [-0.28, 0.28]) {
+    const lamp = baker.at([u, 0.34, 17], originX, originY);
+    baker.graphics.fillStyle(NAVY_BASE.warning, 1);
+    baker.graphics.fillCircle(lamp.x, lamp.y, 2);
+    baker.graphics.fillStyle(NAVY_BASE.white, 0.9);
+    baker.graphics.fillRect(lamp.x - 1, lamp.y - 1, 2, 1);
+  }
+  const marker = baker.at([0.32, 0.35, 21], originX, originY);
+  baker.graphics.fillStyle(NAVY_BASE.red, 1);
+  baker.graphics.fillRect(marker.x - 3, marker.y - 2, 6, 3);
+
+  baker.finish(NAVY_TANK_KEY, width, height);
+}
+
+/** A twin-barrelled mount in a revetment, laid out over the water. */
+function bakeNavyGun(baker: Baker): void {
+  const width = 120;
+  const height = 96;
+  const originX = width / 2;
+  const originY = height - NAVY_GUN_ANCHOR_Y;
+
+  navyShadow(baker, originX, originY, 0.46, 0.46);
+
+  // Circular revetment with a painted arc of fire, then the pedestal.
+  navyCylinder(baker, originX, originY, 0.44, 0, 9, NAVY_BASE.concreteDark, 16);
+  strokeFace(baker, NAVY_BASE.warning, 0.75, 2, navyRing(0.32, 10), originX, originY);
+  navyCylinder(baker, originX, originY, 0.19, 9, 20, NAVY_BASE.steelDark, 12);
+
+  // Turret: an angular shield with a hatch, mounted on the pedestal.
+  harbourBox(baker, originX, originY, [-0.2, 0.16, -0.2, 0.2, 20, 30], NAVY_BASE.olive);
+  fillFace(
+    baker,
+    NAVY_BASE.oliveLight,
+    1,
+    [[-0.2, -0.2, 30], [0.16, -0.2, 30], [0.26, -0.1, 24], [0.26, 0.1, 24], [0.16, 0.2, 30], [-0.2, 0.2, 30]],
+    originX,
+    originY,
+  );
+  const hatch = baker.at([-0.08, 0, 31], originX, originY);
+  baker.graphics.lineStyle(1, NAVY_BASE.warning, 0.9);
+  baker.graphics.strokeEllipse(hatch.x, hatch.y, 11, 6);
+
+  // Twin barrels laid out over the sea (+u), with muzzle brakes.
+  for (const v of [-0.09, 0.09]) {
+    const breech: Point3 = [0.14, v, 27];
+    const muzzle: Point3 = [0.86, v, 34];
+    navyScreenLine(baker, originX, originY, breech, muzzle, 5, NAVY_BASE.black, 1);
+    navyScreenLine(baker, originX, originY, breech, [muzzle[0] - 0.1, v, muzzle[2] - 1], 3, NAVY_BASE.steelDark, 1);
+    const tip = baker.at(muzzle, originX, originY);
+    baker.graphics.fillStyle(NAVY_BASE.steel, 1);
+    baker.graphics.fillRect(tip.x - 5, tip.y - 3, 7, 5);
+    baker.graphics.fillStyle(NAVY_BASE.black, 1);
+    baker.graphics.fillRect(tip.x - 1, tip.y - 2, 3, 3);
+  }
+
+  // Ready-use ammunition boxes stacked behind the mount.
+  harbourBox(baker, originX, originY, [-0.42, -0.24, 0.06, 0.3, 9, 17], NAVY_BASE.warningDark);
+  harbourBox(baker, originX, originY, [-0.4, -0.26, 0.1, 0.28, 17, 24], NAVY_BASE.oliveDark);
+  baker.finish(NAVY_GUN_KEY, width, height);
+}
+
+/** Bunded fuel tank with a ladder and a pipe run to the quayside manifold. */
+function bakeNavyFuelTank(baker: Baker): void {
+  const width = 104;
+  const height = 108;
+  const originX = width / 2;
+  const originY = height - NAVY_FUEL_TANK_ANCHOR_Y;
+  const radius = 0.32;
+  const body = 46;
+
+  navyShadow(baker, originX, originY, 0.46, 0.46);
+
+  // Bund wall: a low containment ring the tank stands inside.
+  navyCylinder(baker, originX, originY, 0.46, 0, 7, NAVY_BASE.concreteDark, 16);
+  fillFace(baker, NAVY_BASE.deckDark, 1, navyRing(0.42, 7.5), originX, originY);
+
+  navyCylinder(baker, originX, originY, radius, 4, body, NAVY_BASE.olive, 18);
+  // Girth bands and the amber contents stripe.
+  for (const z of [18, 32]) {
+    strokeFace(baker, NAVY_BASE.oliveDark, 0.7, 2, navyRing(radius + 0.01, z), originX, originY);
+  }
+  strokeFace(baker, NAVY_BASE.warning, 0.85, 2, navyRing(radius + 0.01, 26), originX, originY);
+  strokeFace(baker, NAVY_BASE.steelDark, 0.8, 2, navyRing(radius - 0.03, body + 1), originX, originY);
+
+  // Domed roof cap, vent and inspection hatch.
+  navyCylinder(baker, originX, originY, radius - 0.09, body, body + 5, NAVY_BASE.oliveLight, 14);
+  harbourPost(baker, originX, originY, 0.06, -0.06, body + 5, body + 15, 3, NAVY_BASE.steelDark);
+  const vent = baker.at([0.06, -0.06, body + 15], originX, originY);
+  baker.graphics.fillStyle(NAVY_BASE.red, 1);
+  baker.graphics.fillCircle(vent.x, vent.y - 1, 3);
+
+  // Caged ladder up the near face, and the outlet pipe over the bund.
+  for (let z = 8; z < body; z += 6) {
+    navyScreenLine(baker, originX, originY, [radius - 0.03, 0.16, z], [radius + 0.07, 0.16, z], 1, NAVY_BASE.steel, 0.85);
+  }
+  navyScreenLine(baker, originX, originY, [radius + 0.02, 0.16, 8], [radius + 0.02, 0.16, body], 1, NAVY_BASE.steelDark, 0.9);
+  navyScreenLine(baker, originX, originY, [0.2, 0.3, 10], [0.62, 0.42, 10], 4, NAVY_BASE.steelDark, 1);
+  navyScreenLine(baker, originX, originY, [0.62, 0.42, 10], [0.62, 0.42, 2], 4, NAVY_BASE.steelDark, 1);
+  const valve = baker.at([0.42, 0.36, 12], originX, originY);
+  baker.graphics.fillStyle(NAVY_BASE.red, 1);
+  baker.graphics.fillCircle(valve.x, valve.y, 3);
+
+  // Flammable placard on the bund wall.
+  const placard = baker.at([0.1, 0.44, 4], originX, originY);
+  baker.graphics.fillStyle(NAVY_BASE.warning, 1);
+  baker.graphics.fillTriangle(placard.x, placard.y - 7, placard.x - 5, placard.y + 1, placard.x + 5, placard.y + 1);
+  baker.graphics.fillStyle(NAVY_BASE.black, 1);
+  baker.graphics.fillRect(placard.x - 1, placard.y - 4, 2, 3);
+  baker.finish(NAVY_FUEL_TANK_KEY, width, height);
+}
+
+/** The helipad: a marked TLOF square with perimeter lights and tie-downs. */
+function bakeNavyHelipad(baker: Baker): void {
+  const halfU = 0.72;
+  const halfV = 0.6;
+  const width = Math.ceil((halfU + halfV) * 2 * HALF_W) + 20;
+  const height = NAVY_HELIPAD_ANCHOR_Y + Math.ceil((halfU + halfV + 0.25) * HALF_H) + 12;
+  const originX = width / 2;
+  const originY = height - NAVY_HELIPAD_ANCHOR_Y;
+
+  navyShadow(baker, originX, originY, halfU + 0.1, halfV + 0.1);
+  fillFace(baker, NAVY_BASE.deckDark, 1, [[-halfU - 0.06, -halfV - 0.06, 2], [halfU + 0.06, -halfV - 0.06, 2], [halfU + 0.06, halfV + 0.06, 2], [-halfU - 0.06, halfV + 0.06, 2]], originX, originY);
+  fillFace(baker, NAVY_BASE.tarmac, 1, [[-halfU, -halfV, 4], [halfU, -halfV, 4], [halfU, halfV, 4], [-halfU, halfV, 4]], originX, originY);
+  strokeFace(baker, NAVY_BASE.warning, 0.92, 2, [[-halfU + 0.07, -halfV + 0.07, 5], [halfU - 0.07, -halfV + 0.07, 5], [halfU - 0.07, halfV - 0.07, 5], [-halfU + 0.07, halfV - 0.07, 5]], originX, originY);
+
+  // Touchdown circle and the H, drawn in grid space so they lie on the deck.
+  strokeFace(baker, NAVY_BASE.white, 0.9, 3, navyRing(0.42, 5.5), originX, originY);
+  for (const v of [-0.17, 0.17]) {
+    navyScreenLine(baker, originX, originY, [-0.24, v, 6], [0.24, v, 6], 4, NAVY_BASE.white, 0.95);
+  }
+  navyScreenLine(baker, originX, originY, [0, -0.17, 6], [0, 0.17, 6], 4, NAVY_BASE.white, 0.95);
+
+  // Perimeter lights on the corners and mid-sides, plus four tie-down rings.
+  for (const [u, v] of [
+    [-halfU + 0.04, -halfV + 0.04],
+    [halfU - 0.04, -halfV + 0.04],
+    [halfU - 0.04, halfV - 0.04],
+    [-halfU + 0.04, halfV - 0.04],
+    [0, -halfV + 0.04],
+    [0, halfV - 0.04],
+  ] as const) {
+    const light = baker.at([u, v, 6], originX, originY);
+    baker.graphics.fillStyle(NAVY_BASE.warningDark, 1);
+    baker.graphics.fillCircle(light.x, light.y + 1, 3);
+    baker.graphics.fillStyle(NAVY_BASE.warning, 1);
+    baker.graphics.fillCircle(light.x, light.y, 2);
+  }
+  for (const [u, v] of [[-0.34, -0.28], [0.34, -0.28], [0.34, 0.28], [-0.34, 0.28]] as const) {
+    strokeFace(baker, NAVY_BASE.steelDark, 0.85, 1, navyRing(0.05, 5.5).map(
+      (point) => [point[0] + u, point[1] + v, point[2]] as const,
+    ), originX, originY);
+  }
+  baker.finish(NAVY_HELIPAD_KEY, width, height);
+}
+
+/**
+ * The naval helicopter, less its main rotor — that is a separate sprite so it
+ * can spin (`bakeNavyRotor`).
+ *
+ * Authored nose-toward-+u and then yawed once, so the aircraft sits across the
+ * screen at three-quarters rather than square-on: that is the pose where both
+ * the long flank and the nose are visible at the same time.
+ */
+function bakeNavyHelicopter(source: Baker): void {
+  const width = 148;
+  const height = 120;
+  const originX = width / 2;
+  const originY = height - NAVY_HELICOPTER_ANCHOR_Y;
+
+  const yaw = -0.55;
+  const cos = Math.cos(yaw);
+  const sin = Math.sin(yaw);
+  const baker: Baker = {
+    ...source,
+    at: (point, ox, oy) =>
+      source.at(
+        [point[0] * cos - point[1] * sin, point[0] * sin + point[1] * cos, point[2]],
+        ox,
+        oy,
+      ),
+  };
+
+  const belly = 14;
+  const deck = 33;
+  /** Half-widths of the cabin down its length, nose last. */
+  const sheer: ReadonlyArray<readonly [number, number]> = [
+    [-0.34, 0.14],
+    [-0.2, 0.22],
+    [0.02, 0.24],
+    [0.24, 0.23],
+    [0.42, 0.19],
+    [0.55, 0.12],
+    [0.62, 0],
+  ];
+  const outline: Array<readonly [number, number]> = [
+    ...sheer.map(([u, v]) => [u, v] as const),
+    ...[...sheer].reverse().slice(1).map(([u, v]) => [u, -v] as const),
+  ];
+
+  navyShadow(baker, originX, originY, 0.5, 0.24);
+
+  // Skids: two rails on struts, under the cabin.
+  for (const v of [-0.27, 0.27]) {
+    navyScreenLine(baker, originX, originY, [-0.28, v, 1], [0.44, v, 1], 4, NAVY_BASE.black, 1);
+    navyScreenLine(baker, originX, originY, [-0.26, v, 2], [0.42, v, 2], 2, NAVY_BASE.steelDark, 1);
+    for (const u of [-0.14, 0.3]) {
+      navyScreenLine(baker, originX, originY, [u, v, 1], [u + 0.03, v * 0.5, belly + 2], 3, NAVY_BASE.steelDark, 1);
+    }
+  }
+
+  // Tail boom, stabiliser and fin, drawn before the cabin so the cabin reads
+  // as the nearest mass.
+  navyScreenLine(baker, originX, originY, [-0.24, 0, deck - 8], [-0.92, 0, deck - 2], 9, NAVY_BASE.black, 1);
+  navyScreenLine(baker, originX, originY, [-0.24, 0, deck - 8], [-0.92, 0, deck - 2], 6, NAVY_BASE.olive, 1);
+  navyScreenLine(baker, originX, originY, [-0.26, 0, deck - 5], [-0.9, 0, deck + 1], 2, NAVY_BASE.oliveLight, 0.8);
+  fillFace(
+    baker,
+    NAVY_BASE.oliveDark,
+    1,
+    [[-0.66, -0.26, deck - 2], [-0.56, -0.26, deck - 2], [-0.56, 0.26, deck - 2], [-0.66, 0.26, deck - 2]],
+    originX,
+    originY,
+  );
+  fillFace(
+    baker,
+    NAVY_BASE.olive,
+    1,
+    [[-0.86, 0, deck], [-1.0, 0, deck + 26], [-0.86, 0, deck + 26], [-0.8, 0, deck + 6]],
+    originX,
+    originY,
+  );
+  fillFace(
+    baker,
+    NAVY_BASE.red,
+    1,
+    [[-0.99, 0.01, deck + 20], [-0.87, 0.01, deck + 20], [-0.87, 0.01, deck + 26], [-1.0, 0.01, deck + 26]],
+    originX,
+    originY,
+  );
+
+  // Tail rotor: a blurred disc with two ghost blades, on the fin's near face.
+  const tail = baker.at([-0.9, 0.04, deck + 13], originX, originY);
+  baker.graphics.fillStyle(NAVY_BASE.steelDark, 0.28);
+  baker.graphics.fillCircle(tail.x, tail.y, 11);
+  baker.graphics.lineStyle(2, NAVY_BASE.black, 0.55);
+  baker.graphics.lineBetween(tail.x - 9, tail.y - 6, tail.x + 9, tail.y + 6);
+  baker.graphics.lineBetween(tail.x - 5, tail.y + 9, tail.x + 5, tail.y - 9);
+  baker.graphics.fillStyle(NAVY_BASE.warning, 1);
+  baker.graphics.fillCircle(tail.x, tail.y, 2);
+
+  // Cabin: hull plating dropped from the outline, then the roof.
+  for (let index = 0; index < outline.length; index += 1) {
+    const [u0, v0] = outline[index]!;
+    const [u1, v1] = outline[(index + 1) % outline.length]!;
+    // Outward normal of edge A->B on a counter-clockwise outline.
+    const length = Math.hypot(v1 - v0, u1 - u0) || 1;
+    const nu = (v1 - v0) / length;
+    const nv = -(u1 - u0) / length;
+    fillFace(
+      baker,
+      shade(NAVY_BASE.olive, Math.round(11 * nv - 26 * nu)),
+      1,
+      [[u0, v0, deck], [u1, v1, deck], [u1, v1, belly], [u0, v0, belly]],
+      originX,
+      originY,
+    );
+  }
+  fillFace(
+    baker,
+    NAVY_BASE.oliveLight,
+    1,
+    outline.map(([u, v]) => [u * 0.94, v * 0.88, deck] as const),
+    originX,
+    originY,
+  );
+
+  // Cockpit glazing over the nose, and a cabin window on the near flank.
+  fillFace(
+    baker,
+    NAVY_BASE.glassDark,
+    1,
+    [[0.26, 0.2, deck - 1], [0.46, 0.17, deck - 1], [0.58, 0.1, deck - 4], [0.62, 0, deck - 6], [0.62, 0, belly + 3], [0.5, 0.14, belly + 3], [0.3, 0.2, belly + 4]],
+    originX,
+    originY,
+  );
+  fillFace(
+    baker,
+    NAVY_BASE.glass,
+    0.85,
+    [[0.3, 0.19, deck - 3], [0.46, 0.16, deck - 3], [0.54, 0.11, deck - 6], [0.44, 0.15, belly + 6], [0.32, 0.18, belly + 6]],
+    originX,
+    originY,
+  );
+  navyScreenLine(baker, originX, originY, [0.44, 0.16, deck - 2], [0.44, 0.16, belly + 4], 1, NAVY_BASE.steelDark, 0.85);
+  fillFace(
+    baker,
+    NAVY_BASE.glassDark,
+    1,
+    [[0.0, 0.235, deck - 4], [0.2, 0.23, deck - 4], [0.2, 0.23, belly + 7], [0.0, 0.235, belly + 7]],
+    originX,
+    originY,
+  );
+
+  // Engine deck, exhaust and the rotor mast.
+  harbourBox(baker, originX, originY, [-0.24, 0.08, -0.13, 0.13, deck - 1, deck + 6], NAVY_BASE.oliveDark);
+  navyScreenLine(baker, originX, originY, [-0.26, 0.1, deck + 3], [-0.36, 0.14, deck + 1], 4, NAVY_BASE.black, 1);
+  harbourPost(baker, originX, originY, 0.02, 0, deck + 5, NAVY_ROTOR_HUB_Z, 5, NAVY_BASE.steelDark);
+  const hub = baker.at([0.02, 0, NAVY_ROTOR_HUB_Z], originX, originY);
+  baker.graphics.fillStyle(NAVY_BASE.black, 1);
+  baker.graphics.fillCircle(hub.x, hub.y, 5);
+
+  // Livery: a red flank stripe, the roundel, and the navigation lamps.
+  navyScreenLine(baker, originX, originY, [-0.2, 0.235, belly + 10], [0.36, 0.215, belly + 10], 3, NAVY_BASE.red, 0.95);
+  const roundel = baker.at([0.06, 0.24, belly + 16], originX, originY);
+  baker.graphics.fillStyle(NAVY_BASE.white, 0.95);
+  baker.graphics.fillCircle(roundel.x, roundel.y, 5);
+  baker.graphics.fillStyle(NAVY_BASE.red, 1);
+  baker.graphics.fillCircle(roundel.x, roundel.y, 3);
+  const nose = baker.at([0.62, 0, belly + 2], originX, originY);
+  baker.graphics.fillStyle(NAVY_BASE.white, 1);
+  baker.graphics.fillCircle(nose.x, nose.y, 2);
+  const port = baker.at([-0.3, 0.24, deck - 2], originX, originY);
+  baker.graphics.fillStyle(NAVY_BASE.red, 1);
+  baker.graphics.fillCircle(port.x, port.y, 2);
+
+  source.finish(NAVY_HELICOPTER_KEY, width, height);
+}
+
+/**
+ * One frame of the main rotor. The blades lie in the ground plane, so yawing
+ * (u, v) about the hub is exactly the spin — no sprite rotation involved.
+ */
+function bakeNavyRotor(source: Baker, key: string, frame: number): void {
+  const width = 136;
+  const height = 80;
+  const originX = width / 2;
+  const originY = height - NAVY_ROTOR_ANCHOR_Y;
+
+  // Four blades repeat every quarter turn, so the frames only need to cover 90.
+  const angle = (frame / NAVY_ROTOR_FRAMES) * (Math.PI / 2);
+  const cos = Math.cos(angle);
+  const sin = Math.sin(angle);
+  const baker: Baker = {
+    ...source,
+    at: (point, ox, oy) =>
+      source.at(
+        [point[0] * cos - point[1] * sin, point[0] * sin + point[1] * cos, point[2]],
+        ox,
+        oy,
+      ),
+  };
+
+  const radius = 0.84;
+
+  // The blur disc the blades sweep, laid flat so it reads as a rotor plane.
+  fillFace(baker, NAVY_BASE.steel, 0.1, navyRing(radius, 0, 24), originX, originY);
+  strokeFace(baker, NAVY_BASE.steel, 0.22, 1, navyRing(radius, 0, 24), originX, originY);
+
+  for (let index = 0; index < 4; index += 1) {
+    const phi = (index / 4) * Math.PI * 2;
+    const du = Math.cos(phi);
+    const dv = Math.sin(phi);
+    // A blade tapers: wide at the root, thin at the tip.
+    const across = 0.055;
+    fillFace(
+      baker,
+      NAVY_BASE.black,
+      0.95,
+      [
+        [du * 0.08 - dv * across, dv * 0.08 + du * across, 1],
+        [du * radius - dv * across * 0.45, dv * radius + du * across * 0.45, 1],
+        [du * radius + dv * across * 0.45, dv * radius - du * across * 0.45, 1],
+        [du * 0.08 + dv * across, dv * 0.08 - du * across, 1],
+      ],
+      originX,
+      originY,
+    );
+    navyScreenLine(
+      baker,
+      originX,
+      originY,
+      [du * 0.12, dv * 0.12, 2],
+      [du * (radius - 0.02), dv * (radius - 0.02), 2],
+      1,
+      NAVY_BASE.steel,
+      0.5,
+    );
+    const tip = baker.at([du * (radius - 0.06), dv * (radius - 0.06), 2], originX, originY);
+    baker.graphics.fillStyle(index % 2 === 0 ? NAVY_BASE.warning : NAVY_BASE.white, 0.95);
+    baker.graphics.fillCircle(tip.x, tip.y, 2);
+  }
+
+  const hub = baker.at([0, 0, 3], originX, originY);
+  baker.graphics.fillStyle(NAVY_BASE.steelDark, 1);
+  baker.graphics.fillCircle(hub.x, hub.y, 6);
+  baker.graphics.fillStyle(NAVY_BASE.warning, 1);
+  baker.graphics.fillCircle(hub.x - 1, hub.y - 1, 2);
+
+  source.finish(key, width, height);
+}
+
+/**
+ * One panel of the perimeter fence. It runs along grid v so a row of panels at
+ * a constant u forms a continuous line — the old panel lay crosswise to the
+ * run it was supposed to make.
+ */
+function bakeNavyFence(baker: Baker): void {
+  const width = 84;
+  const height = 96;
+  const originX = width / 2;
+  const originY = height - NAVY_FENCE_ANCHOR_Y;
+  const half = 0.46;
+  const top = 30;
+
+  navyShadow(baker, originX, originY, 0.12, half);
+  for (const v of [-half, half]) {
+    harbourPost(baker, originX, originY, 0, v, 0, top, 3, NAVY_BASE.steelDark);
+    // Barbed-wire arm, canted outward over the countryside.
+    navyScreenLine(baker, originX, originY, [0, v, top], [-0.13, v, top + 8], 2, NAVY_BASE.steelDark, 1);
+  }
+  // Mesh: a light diagonal weave between rails reads as wire at fit zoom.
+  for (let v = -half; v < half; v += 0.115) {
+    navyScreenLine(baker, originX, originY, [0, v, 3], [0, v + 0.115, top - 3], 1, NAVY_BASE.steel, 0.26);
+    navyScreenLine(baker, originX, originY, [0, v, top - 3], [0, v + 0.115, 3], 1, NAVY_BASE.steel, 0.2);
+  }
+  for (const z of [4, top - 2]) {
+    navyScreenLine(baker, originX, originY, [0, -half, z], [0, half, z], 1, NAVY_BASE.steel, 0.85);
+  }
+  for (const z of [top + 3, top + 7]) {
+    navyScreenLine(baker, originX, originY, [-0.05, -half, z - 3], [-0.13, half, z + 1], 1, NAVY_BASE.steelDark, 0.75);
+  }
+  baker.finish(NAVY_FENCE_KEY, width, height);
+}
+
+/** Perimeter floodlight: a lattice column under a three-lamp crossbar. */
+function bakeNavyFloodlight(baker: Baker): void {
+  const width = 88;
+  const height = 104;
+  const originX = width / 2;
+  const originY = height - NAVY_FLOODLIGHT_ANCHOR_Y;
+  const column = 62;
+
+  navyShadow(baker, originX, originY, 0.18, 0.18);
+  harbourBox(baker, originX, originY, [-0.16, 0.16, -0.16, 0.16, 0, 6], NAVY_BASE.concreteDark);
+  for (const [u, v] of [[-0.09, -0.09], [0.09, 0.09]] as const) {
+    harbourPost(baker, originX, originY, u, v, 5, column, 3, NAVY_BASE.steelDark);
+  }
+  for (let z = 12; z < column - 6; z += 11) {
+    navyScreenLine(baker, originX, originY, [-0.09, -0.09, z], [0.09, 0.09, z + 11], 1, NAVY_BASE.steel, 0.7);
+    navyScreenLine(baker, originX, originY, [0.09, 0.09, z], [-0.09, -0.09, z + 11], 1, NAVY_BASE.steelDark, 0.75);
+  }
+
+  // Head: a crossbar of three lamps, canted down over the apron.
+  navyScreenLine(baker, originX, originY, [0, 0, column], [0.1, 0.1, column + 5], 3, NAVY_BASE.steelDark, 1);
+  const bar = baker.at([0.1, 0.1, column + 5], originX, originY);
+  baker.graphics.fillStyle(NAVY_BASE.steelDark, 1);
+  baker.graphics.fillRect(bar.x - 16, bar.y - 2, 32, 3);
+  for (const offset of [-11, 0, 11]) {
+    baker.graphics.fillStyle(NAVY_BASE.black, 1);
+    baker.graphics.fillRect(bar.x + offset - 4, bar.y, 9, 7);
+    baker.graphics.fillStyle(NAVY_BASE.warning, 1);
+    baker.graphics.fillRect(bar.x + offset - 3, bar.y + 2, 7, 5);
+    baker.graphics.fillStyle(NAVY_BASE.white, 0.85);
+    baker.graphics.fillRect(bar.x + offset - 2, bar.y + 3, 3, 2);
+  }
+  baker.finish(NAVY_FLOODLIGHT_KEY, width, height);
+}
+
+/** Ensign staff: a plinth, a stayed pole and a three-panel flag. */
+function bakeNavyFlag(baker: Baker): void {
+  const width = 96;
+  const height = 104;
+  const originX = width / 2;
+  const originY = height - NAVY_FLAG_ANCHOR_Y;
+  const pole = 74;
+
+  navyShadow(baker, originX, originY, 0.22, 0.22);
+  harbourBox(baker, originX, originY, [-0.18, 0.18, -0.18, 0.18, 0, 6], NAVY_BASE.concreteLight);
+  strokeFace(baker, NAVY_BASE.warning, 0.7, 1, diamond(0.16, 7), originX, originY);
+  harbourPost(baker, originX, originY, 0, 0, 5, pole, 3, NAVY_BASE.steel);
+  const truck = baker.at([0, 0, pole], originX, originY);
+  baker.graphics.fillStyle(NAVY_BASE.warning, 1);
+  baker.graphics.fillCircle(truck.x, truck.y - 1, 3);
+
+  // The ensign, in three panels so it reads as flying rather than as a decal.
+  const head = baker.at([0, 0, pole - 4], originX, originY);
+  const panels = [
+    { x0: 0, x1: 11, y0: 0, y1: 15, drop: 0 },
+    { x0: 11, x1: 22, y0: 1, y1: 17, drop: 2 },
+    { x0: 22, x1: 32, y0: 4, y1: 17, drop: 5 },
+  ];
+  panels.forEach((panel, index) => {
+    baker.graphics.fillStyle(index === 1 ? shade(NAVY_BASE.red, -12) : NAVY_BASE.red, 1);
+    baker.graphics.fillPoints(
+      [
+        new Phaser.Math.Vector2(head.x + panel.x0, head.y + panel.y0),
+        new Phaser.Math.Vector2(head.x + panel.x1, head.y + panel.y0 + panel.drop),
+        new Phaser.Math.Vector2(head.x + panel.x1, head.y + panel.y1 + panel.drop),
+        new Phaser.Math.Vector2(head.x + panel.x0, head.y + panel.y1),
+      ],
+      true,
+    );
+  });
+  baker.graphics.fillStyle(NAVY_BASE.white, 1);
+  baker.graphics.fillRect(head.x + 3, head.y + 4, 9, 3);
+  baker.graphics.fillRect(head.x + 6, head.y + 4, 3, 9);
+  // Halyard down the pole.
+  baker.graphics.lineStyle(1, NAVY_BASE.rope, 0.7);
+  baker.graphics.lineBetween(head.x - 1, head.y, head.x - 1, head.y + 34);
+  baker.finish(NAVY_FLAG_KEY, width, height);
+}
+
+/** Stores pallet: two crates, a fuel drum and a lashed tarpaulin. */
+function bakeNavyCrate(baker: Baker): void {
+  const width = 92;
+  const height = 84;
+  const originX = width / 2;
+  const originY = height - NAVY_CRATE_ANCHOR_Y;
+
+  navyShadow(baker, originX, originY, 0.4, 0.34);
+  // Pallet.
+  harbourBox(baker, originX, originY, [-0.38, 0.38, -0.3, 0.3, 0, 4], NAVY_BASE.warningDark);
+  // Two stacked ammunition crates.
+  harbourBox(baker, originX, originY, [-0.36, 0.06, -0.26, 0.26, 4, 18], NAVY_BASE.oliveDark);
+  harbourBox(baker, originX, originY, [-0.3, 0.0, -0.22, 0.22, 18, 29], NAVY_BASE.olive);
+  navyScreenLine(baker, originX, originY, [-0.34, 0.27, 11], [0.04, 0.27, 11], 1, NAVY_BASE.warning, 0.8);
+  navyScreenLine(baker, originX, originY, [-0.28, 0.23, 24], [-0.02, 0.23, 24], 1, NAVY_BASE.warning, 0.7);
+  // A drum beside the stack, and a tarp thrown over the near corner.
+  navyCylinder(baker, originX, originY, 0.14, 4, 22, NAVY_BASE.red, 12);
+  strokeFace(baker, NAVY_BASE.black, 0.4, 1, navyRing(0.145, 13), originX, originY);
+  fillFace(
+    baker,
+    NAVY_BASE.deckDark,
+    1,
+    [[0.1, -0.3, 4], [0.4, -0.24, 4], [0.4, 0.1, 4], [0.16, 0.12, 14], [0.06, -0.16, 14]],
+    originX,
+    originY,
+  );
+  baker.finish(NAVY_CRATE_KEY, width, height);
+}
+
+function bakeNavyBollard(baker: Baker): void {
+  const width = 52;
+  const height = 58;
+  const originX = width / 2;
+  const originY = height - TILE_ANCHOR_Y;
+  const base = baker.at([0, 0, 0], originX, originY);
+  baker.graphics.fillStyle(TERRAIN_COLORS.shadow, 0.24);
+  baker.graphics.fillEllipse(base.x + 2, base.y + 1, 18, 7);
+  baker.graphics.fillStyle(NAVY_BASE.black, 1);
+  baker.graphics.fillEllipse(base.x, base.y - 1, 17, 7);
+  baker.graphics.fillRect(base.x - 5, base.y - 16, 10, 15);
+  baker.graphics.fillStyle(NAVY_BASE.steelDark, 1);
+  baker.graphics.fillRect(base.x - 5, base.y - 16, 3, 15);
+  baker.graphics.fillStyle(NAVY_BASE.black, 1);
+  baker.graphics.fillEllipse(base.x, base.y - 18, 14, 6);
+  baker.graphics.lineStyle(2, NAVY_BASE.rope, 0.9);
+  baker.graphics.strokeEllipse(base.x, base.y - 13, 14, 6);
+  baker.graphics.lineBetween(base.x + 6, base.y - 10, base.x + 15, base.y - 3);
+  baker.finish(NAVY_BOLLARD_KEY, width, height);
+}
+
+/**
+ * The apron. Baked as one texture — like the cargo wharf — because a slab drawn
+ * per tile would show a seam down every expansion joint. The markings are laid
+ * out from the same named rows the layout module places props on, so the paint
+ * and the props can never drift apart.
+ */
+function bakeNavyQuay(baker: Baker): void {
+  const halfU = NAVY_QUAY_HALF_U;
+  const halfV = NAVY_QUAY_HALF_V;
+  const deck = NAVY_QUAY_DECK;
+  const spanX = (halfU + halfV) * HALF_W;
+  const spanY = (halfU + halfV) * HALF_H;
+  const width = Math.ceil(spanX * 2) + 22;
+  const height = Math.ceil(spanY * 2) + deck + 30;
+  const originX = width / 2;
+  const originY = height - NAVY_QUAY_ANCHOR_Y;
+  const slab: Point3[] = [[-halfU, -halfV, deck], [halfU, -halfV, deck], [halfU, halfV, deck], [-halfU, halfV, deck]];
+
+  navyShadow(baker, originX, originY, halfU, halfV);
+  fillFace(baker, NAVY_BASE.concreteDark, 1, [[-halfU, halfV, deck], [halfU, halfV, deck], [halfU, halfV, 0], [-halfU, halfV, 0]], originX, originY);
+  fillFace(baker, shade(NAVY_BASE.concreteDark, -28), 1, [[halfU, halfV, deck], [halfU, -halfV, deck], [halfU, -halfV, 0], [halfU, halfV, 0]], originX, originY);
+  fillFace(baker, NAVY_BASE.deck, 1, slab, originX, originY);
+
+  // Expansion joints across the whole slab, so it reads as poured bays.
+  for (let v = -halfV + 0.6; v < halfV; v += 1.24) {
+    navyDeckLine(baker, originX, originY, [-halfU + 0.06, v], [halfU - 0.06, v], 1, NAVY_BASE.deckLight, 0.26);
+  }
+  navyDeckLine(baker, originX, originY, [0.0, -halfV + 0.1], [0.0, halfV - 0.1], 1, NAVY_BASE.deckLight, 0.22);
+
+  // Service road: an asphalt band down the middle with a dashed centre line.
+  fillFace(
+    baker,
+    NAVY_BASE.tarmac,
+    0.9,
+    [[-0.18, -halfV + 0.3, deck + 0.4], [0.9, -halfV + 0.3, deck + 0.4], [0.9, halfV - 0.3, deck + 0.4], [-0.18, halfV - 0.3, deck + 0.4]],
+    originX,
+    originY,
+  );
+  for (let v = -halfV + 0.5; v < halfV - 0.5; v += 0.62) {
+    navyDeckLine(baker, originX, originY, [0.36, v], [0.36, v + 0.3], 2, NAVY_BASE.warning, 0.55);
+  }
+
+  // Hardstanding under the inland building row, and the vehicle bays that the
+  // panzers park in.
+  fillFace(
+    baker,
+    shade(NAVY_BASE.deck, 8),
+    1,
+    [[-halfU + 0.18, -halfV + 0.4, deck + 0.3], [-0.3, -halfV + 0.4, deck + 0.3], [-0.3, halfV - 0.4, deck + 0.3], [-halfU + 0.18, halfV - 0.4, deck + 0.3]],
+    originX,
+    originY,
+  );
+  for (const v of [0.9, 2.4]) {
+    for (const edgeV of [v - 0.5, v + 0.5]) {
+      navyDeckLine(baker, originX, originY, [0.02, edgeV], [0.68, edgeV], 2, NAVY_BASE.white, 0.55);
+    }
+  }
+
+  // Keep-clear box on the berth, the one part of the apron nothing stands on.
+  for (const [from, to] of [
+    [[0.86, -0.95], [1.66, -0.95]],
+    [[0.86, 0.95], [1.66, 0.95]],
+    [[0.86, -0.95], [0.86, 0.95]],
+  ] as const) {
+    navyDeckLine(baker, originX, originY, from, to, 2, NAVY_BASE.warning, 0.8);
+  }
+  navyDeckLine(baker, originX, originY, [0.9, -0.9], [1.62, 0.9], 1, NAVY_BASE.warning, 0.45);
+  navyDeckLine(baker, originX, originY, [0.9, 0.9], [1.62, -0.9], 1, NAVY_BASE.warning, 0.45);
+
+  // Hazard chevrons and the continuous edge line along the seaward lip.
+  navyDeckLine(baker, originX, originY, [halfU - 0.1, -halfV + 0.1], [halfU - 0.1, halfV - 0.1], 3, NAVY_BASE.warning, 0.9);
+  for (let v = -halfV + 0.35; v < halfV - 0.3; v += 0.5) {
+    navyDeckLine(baker, originX, originY, [halfU - 0.24, v], [halfU - 0.02, v + 0.24], 2, NAVY_BASE.warning, 0.4);
+  }
+  // Kerb along the inland lip, where the fence stands.
+  navyDeckLine(baker, originX, originY, [-halfU + 0.08, -halfV + 0.1], [-halfU + 0.08, halfV - 0.1], 2, NAVY_BASE.concreteLight, 0.4);
+  strokeFace(baker, NAVY_BASE.concreteLight, 0.34, 1, slab, originX, originY);
+
+  // Bolted sea wall and a broken foam line make the apron feel raised above water.
+  for (const z of [5, 10]) {
+    navyScreenLine(baker, originX, originY, [-halfU, halfV, z], [halfU, halfV, z], 1, NAVY_BASE.steelDark, 0.55);
+    navyScreenLine(baker, originX, originY, [halfU, halfV, z], [halfU, -halfV, z], 1, NAVY_BASE.steelDark, 0.55);
+  }
+  baker.graphics.fillStyle(NAVY_BASE.white, 0.38);
+  for (let u = -halfU + 0.25; u < halfU; u += 0.38) {
+    const point = baker.at([u, halfV, 0], originX, originY);
+    baker.graphics.fillEllipse(point.x, point.y + 1, 11, 3);
+  }
+  baker.finish(NAVY_QUAY_KEY, width, height);
+}
+
+/** The gate board: the base's front door, and the one prop that names it. */
+function bakeNavySign(baker: Baker): void {
+  const width = 152;
+  const height = 124;
+  const originX = width / 2;
+  const originY = height - NAVY_SIGN_ANCHOR_Y;
+  const board = 58;
+
+  navyShadow(baker, originX, originY, 0.32, 0.24);
+  harbourBox(baker, originX, originY, [-0.3, 0.3, -0.14, 0.14, 0, 7], NAVY_BASE.concreteDark);
+  const base = baker.at([0, 0, 6], originX, originY);
+  for (const offset of [-40, 40]) {
+    baker.graphics.fillStyle(NAVY_BASE.black, 1);
+    baker.graphics.fillRect(base.x + offset - 3, base.y - board - 12, 6, board + 12);
+    baker.graphics.fillStyle(NAVY_BASE.steelDark, 1);
+    baker.graphics.fillRect(base.x + offset - 3, base.y - board - 12, 2, board + 12);
+  }
+  const panel = baker.at([0, 0, board], originX, originY);
+  baker.graphics.fillStyle(NAVY_BASE.deckDark, 1);
+  baker.graphics.fillRect(panel.x - 54, panel.y - 20, 108, 40);
+  baker.graphics.fillStyle(NAVY_BASE.deck, 1);
+  baker.graphics.fillRect(panel.x - 51, panel.y - 17, 102, 34);
+  baker.graphics.lineStyle(2, NAVY_BASE.warning, 1);
+  baker.graphics.strokeRect(panel.x - 54, panel.y - 20, 108, 40);
+  // Crest block on the left, then the name.
+  baker.graphics.fillStyle(NAVY_BASE.redDark, 1);
+  baker.graphics.fillRect(panel.x - 48, panel.y - 14, 22, 28);
+  baker.graphics.fillStyle(NAVY_BASE.warning, 1);
+  baker.graphics.fillTriangle(panel.x - 37, panel.y - 11, panel.x - 45, panel.y + 2, panel.x - 29, panel.y + 2);
+  baker.graphics.fillStyle(NAVY_BASE.white, 1);
+  baker.graphics.fillRect(panel.x - 39, panel.y + 4, 5, 7);
+  drawHarbourLabel(baker, "NAVY", panel.x + 12, panel.y - 12, NAVY_BASE.white, 2);
+  drawHarbourLabel(baker, "PORT", panel.x + 12, panel.y + 3, NAVY_BASE.warning, 1);
+  const beacon = baker.at([0, 0, board + 26], originX, originY);
+  baker.graphics.fillStyle(NAVY_BASE.black, 1);
+  baker.graphics.fillRect(beacon.x - 4, beacon.y, 8, 4);
+  baker.graphics.fillStyle(NAVY_BASE.red, 1);
+  baker.graphics.fillCircle(beacon.x, beacon.y - 1, 3);
+  baker.finish(NAVY_SIGN_KEY, width, height);
 }
