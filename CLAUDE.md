@@ -310,6 +310,4 @@ sequence.
 ## Scope discipline
 
 The game layer is easy to wander in — one visual fix suggests three more. Do
-what was asked, note what else you saw, and let the user decide. When a change
-is visual, say plainly what you verified and what you only reasoned about; a
-render is evidence, a compile is not.
+what was asked, note what else you saw, and let the user decide.

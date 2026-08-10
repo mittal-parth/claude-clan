@@ -250,6 +250,10 @@ const NAVY_SHIP_SAIL_MS = 1_650;
 const HARBOUR_HOVER_LABEL_LIFT = 190;
 /** Pixels the naval base's hover label sits above the HQ building -- clear of its mast. */
 const NAVY_HOVER_LABEL_LIFT = 190;
+/** Clears the command building's mast and the radar dish, the base's two tallest structures. */
+const NAVY_HIT_ZONE_LIFT = 100;
+/** Clears the crane's jib, the harbour's tallest structure. */
+const HARBOUR_HIT_ZONE_LIFT = 100;
 /**
  * The stretch of the run over which the helm is over, as a fraction of the
  * voyage. Outside it she is on a steady heading, so both legs read straight.
@@ -394,6 +398,17 @@ export class WorldScene extends Phaser.Scene {
   private navySignClickListener?: () => void;
   private navyShipClickListener?: () => void;
   private navyShipHoverListener?: (info?: ShipHoverInfo) => void;
+  /**
+   * Bridges the gap between adjacent props' hit areas. The base is dozens of
+   * separate pixel-perfect sprites with real transparent margins between
+   * them, so the cursor crossing from one to the next fires pointerout then
+   * pointerover on the same tick -- without this, the tooltip blinked off
+   * and back on every time it happened, reading as the whole base flickering
+   * instead of one landmark.
+   */
+  private navyHoverHideTimer?: Phaser.Time.TimerEvent;
+  /** One invisible hit zone standing in for every land-side prop; see {@link createFootprintHitZone}. */
+  private navyHitZone?: Phaser.GameObjects.Zone;
   /** Individually drawn puffs; every travel creates a new set of silhouettes. */
   private transitionClouds: Phaser.GameObjects.Graphics[] = [];
   /** Whiteout layer beneath the clouds; it guarantees a fully covered map. */
@@ -451,6 +466,12 @@ export class WorldScene extends Phaser.Scene {
   private harbourShipClickListener?: () => void;
   private harbourShipHoverListener?: (info?: ShipHoverInfo) => void;
   private harbourSignClickListener?: () => void;
+  /** Same debounce as the naval base's, and for the same reason: separate
+   * pixel-perfect props with real gaps between them must still read as one
+   * hoverable harbour instead of blinking as the cursor crosses those gaps. */
+  private harbourHoverHideTimer?: Phaser.Time.TimerEvent;
+  /** One invisible hit zone standing in for every quayside prop; see {@link createFootprintHitZone}. */
+  private harbourHitZone?: Phaser.GameObjects.Zone;
 
   constructor() {
     super("world");
@@ -1758,11 +1779,18 @@ export class WorldScene extends Phaser.Scene {
     //   { color: 0xff5e65, radius: 2.5, peak: 0.7, scale: 2, duration: 1_400 },
     // );
 
-    // The base itself is the board's front door: every land-side prop opens
-    // the PR roster, while the battleship keeps the voyage interaction.
-    for (const sprite of this.navySprites) {
-      this.bindNavyInteractions(sprite);
-    }
+    // The base itself is the board's front door: the whole apron opens the
+    // PR roster as one hoverable/clickable landmark, while the battleship
+    // keeps the voyage interaction.
+    this.navyHitZone = this.createFootprintHitZone(
+      layout.quay.x,
+      layout.quay.y,
+      layout.quayHalfU,
+      layout.quayHalfV,
+      NAVY_HIT_ZONE_LIFT,
+      projection.depth(layout.quay.x, layout.quay.y) + 50,
+    );
+    this.bindNavyInteractions(this.navyHitZone);
 
     const isMain = this.currentCityId === "main";
     const isPrCity = this.currentCityId?.startsWith("pr-") ?? false;
@@ -1792,7 +1820,7 @@ export class WorldScene extends Phaser.Scene {
           y: this.navyBattleship!.y,
         };
         const screen = this.worldToScreen(anchor.x, anchor.y);
-        this.navyShipHoverListener?.({
+        this.showNavyHover({
           cityId: this.currentCityId ?? "",
           title: "Navy Battleship",
           action: isMain ? "Open the PR review board" : "Return to main city",
@@ -1801,11 +1829,12 @@ export class WorldScene extends Phaser.Scene {
         });
       });
       this.navyBattleship.on("pointerout", () => {
-        this.navyShipHoverListener?.(undefined);
+        this.scheduleHideNavyHover();
       });
       this.navyBattleship.on("pointerdown", () => {
         if (this.travelTransitionActive) return;
         playUiClickSound();
+        this.cancelNavyHoverHide();
         this.navyShipHoverListener?.(undefined);
         this.navyShipClickListener?.();
       });
@@ -1864,13 +1893,38 @@ export class WorldScene extends Phaser.Scene {
     return { x: command.x, y: command.y - NAVY_HOVER_LABEL_LIFT };
   }
 
-  private bindNavyInteractions(sprite: Phaser.GameObjects.Sprite): void {
-    sprite.setInteractive({ pixelPerfect: true, useHandCursor: true });
+  /** Cancels any pending hide and shows the tooltip immediately. */
+  private showNavyHover(info: ShipHoverInfo): void {
+    this.cancelNavyHoverHide();
+    this.navyShipHoverListener?.(info);
+  }
+
+  /**
+   * Defers hiding the tooltip by one frame so a pointerover on the next prop
+   * -- across the transparent gap between two adjacent sprites -- can cancel
+   * it before it fires. See {@link navyHoverHideTimer}.
+   */
+  private scheduleHideNavyHover(): void {
+    this.cancelNavyHoverHide();
+    this.navyHoverHideTimer = this.time.delayedCall(32, () => {
+      this.navyHoverHideTimer = undefined;
+      this.navyShipHoverListener?.(undefined);
+    });
+  }
+
+  private cancelNavyHoverHide(): void {
+    this.navyHoverHideTimer?.remove(false);
+    this.navyHoverHideTimer = undefined;
+  }
+
+  private bindNavyInteractions(
+    sprite: Phaser.GameObjects.Sprite | Phaser.GameObjects.Zone,
+  ): void {
     sprite.on("pointerover", () => {
       if (this.travelTransitionActive) return;
       const anchor = this.navyHoverAnchor() ?? { x: sprite.x, y: sprite.y };
       const screen = this.worldToScreen(anchor.x, anchor.y);
-      this.navyShipHoverListener?.({
+      this.showNavyHover({
         cityId: "naval-base",
         title: String(sprite.getData("hoverTitle") ?? "NAVAL BASE"),
         action: "Open the PR review board",
@@ -1878,10 +1932,11 @@ export class WorldScene extends Phaser.Scene {
         screenY: screen.y,
       });
     });
-    sprite.on("pointerout", () => this.navyShipHoverListener?.(undefined));
+    sprite.on("pointerout", () => this.scheduleHideNavyHover());
     sprite.on("pointerdown", () => {
       if (this.travelTransitionActive) return;
       playUiClickSound();
+      this.cancelNavyHoverHide();
       this.navyShipHoverListener?.(undefined);
       this.navySignClickListener?.();
     });
@@ -1944,6 +1999,9 @@ export class WorldScene extends Phaser.Scene {
     for (const timer of this.navyTimers) {
       timer.remove(false);
     }
+    this.cancelNavyHoverHide();
+    this.navyHitZone?.destroy();
+    this.navyHitZone = undefined;
     this.navySprites = [];
     this.navyGlows = [];
     this.navyTimers = [];
@@ -1951,6 +2009,7 @@ export class WorldScene extends Phaser.Scene {
     this.navyLayoutSignature = undefined;
     this.navyLayout = undefined;
     this.navyHoverAnchorSprite = undefined;
+    this.navyShipHoverListener?.(undefined);
   }
 
   /** Places the issue market on the marked grass plot behind the airport. */
@@ -2275,15 +2334,20 @@ export class WorldScene extends Phaser.Scene {
     this.layoutContainerShip(harbour);
     this.layoutQuayCargo(harbour);
 
-    // The whole harbour is one click target, not just the name board: every
-    // piece of it shares the ship's handler. Two exceptions: the ship keeps
-    // her own click (she carries the voyage), and the lighthouse is scenery
-    // out on its own rock -- clicking the coast's landmark shouldn't open
-    // anything.
-    for (const sprite of this.harbourSprites) {
-      if (sprite === this.harbourShip || sprite === lighthouseSprite) continue;
-      this.bindHarbourInteractions(sprite);
-    }
+    // The whole harbour is one click target, not just the name board: one
+    // hit zone over the quay's footprint shares the ship's handler. The
+    // lighthouse sits outside that footprint on its own rock -- clicking
+    // the coast's landmark shouldn't open anything, and it never falls
+    // inside the zone to begin with.
+    this.harbourHitZone = this.createFootprintHitZone(
+      harbour.quay.x,
+      harbour.quay.y,
+      harbour.quayHalfU,
+      harbour.quayHalfV,
+      HARBOUR_HIT_ZONE_LIFT,
+      projection.depth(harbour.quay.x, harbour.quay.y) + 50,
+    );
+    this.bindHarbourInteractions(this.harbourHitZone);
 
     this.addHarbourGlow(
       harbour.lighthouse,
@@ -2338,7 +2402,7 @@ export class WorldScene extends Phaser.Scene {
       const homeward = this.currentCityId !== "main";
       const anchor = this.harbourHoverAnchor() ?? { x: ship.x, y: ship.y };
       const screen = this.worldToScreen(anchor.x, anchor.y);
-      this.harbourShipHoverListener?.({
+      this.showHarbourHover({
         cityId: "container-ship",
         title: "MV CLAUDE FEEDER",
         action: homeward ? "Sail home to main city" : "Sail out to your own PRs and worktrees",
@@ -2346,10 +2410,11 @@ export class WorldScene extends Phaser.Scene {
         screenY: screen.y,
       });
     });
-    ship.on("pointerout", () => this.harbourShipHoverListener?.(undefined));
+    ship.on("pointerout", () => this.scheduleHideHarbourHover());
     ship.on("pointerdown", () => {
       if (this.travelTransitionActive) return;
       playUiClickSound();
+      this.cancelHarbourHoverHide();
       this.harbourShipHoverListener?.(undefined);
       this.harbourShipClickListener?.();
     });
@@ -2376,6 +2441,69 @@ export class WorldScene extends Phaser.Scene {
   }
 
   /**
+   * One invisible interactive zone covering a landmark's whole reserved
+   * ground rectangle, lifted `liftPx` clear of its top edge to cover the
+   * tallest structure standing on it. Replaces hanging pixel-perfect hit
+   * areas off dozens of separate props -- those have real transparent gaps
+   * between them, so the cursor crossing one fired pointerout then
+   * pointerover on the same tick and read as the whole landmark blinking.
+   * One continuous hit area has no gaps to cross.
+   *
+   * Safe to cover the full rectangle rather than pixel-testing it, unlike a
+   * single prop's texture: the layout allocator reserves this ground
+   * exclusively for the landmark (see "Reserving ground for a landmark" in
+   * CLAUDE.md), so nothing else is ever drawn inside it to be swallowed.
+   */
+  private createFootprintHitZone(
+    centreX: number,
+    centreY: number,
+    halfU: number,
+    halfV: number,
+    liftPx: number,
+    depth: number,
+  ): Phaser.GameObjects.Zone {
+    const corner = (du: number, dv: number) => projection.project(centreX + du, centreY + dv);
+    const corners = [
+      corner(-halfU, -halfV),
+      corner(halfU, -halfV),
+      corner(halfU, halfV),
+      corner(-halfU, halfV),
+    ];
+    const top = corners.reduce((a, b) => (b.y < a.y ? b : a));
+    const bottom = corners.reduce((a, b) => (b.y > a.y ? b : a));
+    const left = corners.reduce((a, b) => (b.x < a.x ? b : a));
+    const right = corners.reduce((a, b) => (b.x > a.x ? b : a));
+    // The diamond's own outline, unioned with a copy of itself shifted
+    // `liftPx` up: same left/right/bottom, but the top two edges come from
+    // the shifted copy so the hit area covers the mast/roof above the slab.
+    const points = [
+      { x: top.x, y: top.y - liftPx },
+      { x: right.x, y: right.y - liftPx },
+      right,
+      bottom,
+      left,
+      { x: left.x, y: left.y - liftPx },
+    ];
+    const minX = Math.min(...points.map((p) => p.x));
+    const minY = Math.min(...points.map((p) => p.y));
+    const maxX = Math.max(...points.map((p) => p.x));
+    const maxY = Math.max(...points.map((p) => p.y));
+    const zone = this.add
+      .zone(minX, minY, Math.max(1, maxX - minX), Math.max(1, maxY - minY))
+      .setOrigin(0, 0)
+      .setDepth(depth);
+    const polygon = new Phaser.Geom.Polygon(
+      points.map((p) => ({ x: p.x - minX, y: p.y - minY })),
+    );
+    zone.setInteractive({
+      hitArea: polygon,
+      hitAreaCallback: Phaser.Geom.Polygon.Contains,
+      useHandCursor: true,
+    });
+    return zone;
+  }
+
+  /**
    * A single screen point standing in for the whole harbour, well clear of
    * the crane and warehouse roofs. Every quayside prop's hover uses this
    * instead of its own position, so the tooltip always reads above the port
@@ -2388,6 +2516,30 @@ export class WorldScene extends Phaser.Scene {
     return { x: sign.x, y: sign.y - HARBOUR_HOVER_LABEL_LIFT };
   }
 
+  /** Cancels any pending hide and shows the tooltip immediately. */
+  private showHarbourHover(info: ShipHoverInfo): void {
+    this.cancelHarbourHoverHide();
+    this.harbourShipHoverListener?.(info);
+  }
+
+  /**
+   * Defers hiding the tooltip by one frame so a pointerover on the next prop
+   * -- across the transparent gap between two adjacent sprites -- can cancel
+   * it before it fires. See {@link harbourHoverHideTimer}.
+   */
+  private scheduleHideHarbourHover(): void {
+    this.cancelHarbourHoverHide();
+    this.harbourHoverHideTimer = this.time.delayedCall(32, () => {
+      this.harbourHoverHideTimer = undefined;
+      this.harbourShipHoverListener?.(undefined);
+    });
+  }
+
+  private cancelHarbourHoverHide(): void {
+    this.harbourHoverHideTimer?.remove(false);
+    this.harbourHoverHideTimer = undefined;
+  }
+
   /**
    * Opens the roster of the mayor's own PRs and worktrees from any part of
    * the harbour. Hit-testing is pixel-perfect because these textures are
@@ -2396,13 +2548,14 @@ export class WorldScene extends Phaser.Scene {
    * above half the city on depth and swallow clicks meant for the buildings
    * behind it.
    */
-  private bindHarbourInteractions(sprite: Phaser.GameObjects.Sprite): void {
-    sprite.setInteractive({ pixelPerfect: true, useHandCursor: true });
+  private bindHarbourInteractions(
+    sprite: Phaser.GameObjects.Sprite | Phaser.GameObjects.Zone,
+  ): void {
     sprite.on("pointerover", () => {
       if (this.travelTransitionActive) return;
       const anchor = this.harbourHoverAnchor() ?? { x: sprite.x, y: sprite.y };
       const screen = this.worldToScreen(anchor.x, anchor.y);
-      this.harbourShipHoverListener?.({
+      this.showHarbourHover({
         cityId: "harbour",
         title: String(sprite.getData("hoverTitle") ?? "CLAUDE CITY PORT"),
         action: "Sail out to your own PRs and worktrees",
@@ -2410,10 +2563,11 @@ export class WorldScene extends Phaser.Scene {
         screenY: screen.y,
       });
     });
-    sprite.on("pointerout", () => this.harbourShipHoverListener?.(undefined));
+    sprite.on("pointerout", () => this.scheduleHideHarbourHover());
     sprite.on("pointerdown", () => {
       if (this.travelTransitionActive) return;
       playUiClickSound();
+      this.cancelHarbourHoverHide();
       this.harbourShipHoverListener?.(undefined);
       this.harbourSignClickListener?.();
     });
@@ -3026,6 +3180,9 @@ export class WorldScene extends Phaser.Scene {
       glow.destroy();
     }
     this.tweens.killTweensOf(this.harbourHoist);
+    this.cancelHarbourHoverHide();
+    this.harbourHitZone?.destroy();
+    this.harbourHitZone = undefined;
     this.harbourSprites = [];
     this.harbourShapes = [];
     this.harbourGlows = [];
