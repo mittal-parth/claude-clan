@@ -5,14 +5,16 @@ import {
   createHarbourLayout,
   harbourLayoutKey,
 } from "./harbour";
+import { coastLanes } from "./coast";
+import { createNavyHarbourLayout, NAVY_QUAY_HALF_V } from "./navyHarbour";
 import { COAST_RING, COUNTRYSIDE_RING } from "./terrain";
 
 describe("createHarbourLayout", () => {
-  it("sits on the east coast, centred on the lane the ships moor in", () => {
+  it("sits on the east coast, in the centre of its lower half", () => {
     const layout = createHarbourLayout(20, 14);
     const edge = 19;
 
-    expect(layout.mooringLane).toBe(7);
+    expect(layout.mooringLane).toBe(coastLanes(14).harbour);
     // The slab is centred down-coast of the mooring lane, because the yard
     // extension only lengthens the screen-left end -- but the berths it serves
     // still straddle that lane.
@@ -173,27 +175,23 @@ describe("createHarbourLayout", () => {
     }
   });
 
-  it("stands the lighthouse off to the screen-right of the wharf, set back inland", () => {
-    const layout = createHarbourLayout(20, 14);
-    // Screen-x runs along (gx - gy), so that difference is the gap the eye
-    // actually sees between the wharf's right corner and the tower.
-    const quayRightCorner =
-      layout.quay.x + HARBOUR_QUAY_HALF_U - (layout.quay.y - HARBOUR_QUAY_HALF_V);
-    const tower = layout.lighthouse.x - layout.lighthouse.y;
+  it("stands the lighthouse mid-coast, in clear water between the two ports", () => {
+    const width = 20;
+    const height = 40;
+    const layout = createHarbourLayout(width, height);
+    const navy = createNavyHarbourLayout(width, height);
 
-    // Clear to the right of the stone. The size of the gap is a tuning knob,
-    // so only the sense is pinned here.
-    expect(tower).toBeGreaterThan(quayRightCorner);
-    // Still clear of the moorings, so it never sits on top of a PR ship.
-    expect(layout.lighthouse.x).toBeLessThan(layout.mooringX);
-    // Set back up the screen -- toward the island -- which is screen-y, i.e.
-    // (gx + gy). The exact inset is a tuning knob, so only the sense is
-    // pinned here.
-    expect(layout.lighthouse.x + layout.lighthouse.y).toBeLessThan(
-      layout.quay.x + layout.quay.y,
-    );
-    // Off the stone entirely, standing in open water.
+    // Mid-coast: the seam between the naval base's half and the harbour's.
+    expect(layout.lighthouse.y).toBe(coastLanes(height).lighthouse);
+    // Clear of both aprons, so the tower never stands on either slab.
+    expect(layout.lighthouse.y).toBeGreaterThan(navy.quay.y + NAVY_QUAY_HALF_V);
     expect(layout.lighthouse.y).toBeLessThan(layout.quay.y - HARBOUR_QUAY_HALF_V);
+    // Out at the water line rather than back on the beach, and still inshore
+    // of the moorings so it never sits on top of a PR ship.
+    expect(layout.lighthouse.x).toBeGreaterThan(
+      19 + COUNTRYSIDE_RING + COAST_RING - 1,
+    );
+    expect(layout.lighthouse.x).toBeLessThan(layout.mooringX);
   });
 
   it("scales with the city and stays stable for an unchanged size", () => {
@@ -201,8 +199,10 @@ describe("createHarbourLayout", () => {
     const large = createHarbourLayout(60, 40);
 
     expect(small.quay.x).toBeLessThan(large.quay.x);
-    expect(small.mooringLane).toBe(4);
-    expect(large.mooringLane).toBe(20);
+    expect(small.mooringLane).toBe(coastLanes(8).harbour);
+    expect(large.mooringLane).toBe(coastLanes(40).harbour);
+    // A taller city pushes the wharf further down its own coast.
+    expect(small.mooringLane).toBeLessThan(large.mooringLane);
     expect(harbourLayoutKey(createHarbourLayout(20, 14))).toBe(
       harbourLayoutKey(createHarbourLayout(20, 14)),
     );

@@ -11,6 +11,13 @@
  * lane, and the pier reaches out towards the ships without touching them.
  */
 
+import {
+  COAST_QUAY_HALF_U,
+  COAST_QUAY_HALF_V,
+  coastLanes,
+  coastLighthouse,
+  coastQuayX,
+} from "./coast";
 import { COAST_RING, COUNTRYSIDE_RING } from "./terrain";
 
 export interface HarbourPoint {
@@ -59,22 +66,22 @@ export interface HarbourLayout {
   mooringX: number;
 }
 
-/**
- * Depth of the wharf, and the half-length of its berthing section: enough
- * coast to berth the four cranes a clear tile apart, and enough depth for a
- * working strip of cargo behind them.
- */
-export const HARBOUR_QUAY_HALF_U = 1.8;
-const QUAY_BERTH_HALF_V = 4.2;
+/** The wharf is one of the coast's two identical aprons. */
+export const HARBOUR_QUAY_HALF_U = COAST_QUAY_HALF_U;
+export const HARBOUR_QUAY_HALF_V = COAST_QUAY_HALF_V;
 
 /**
- * Extra deck added at the screen-left end of the wharf — grid +v, which runs
+ * Extra deck at the screen-left end of the wharf — grid +v, which runs
  * screen-left — given over to a container yard.
  */
 const QUAY_YARD_LENGTH = 4;
 /** Growing only one end slides the slab's centre half that far down-coast. */
 const QUAY_CENTRE_SHIFT = QUAY_YARD_LENGTH / 2;
-export const HARBOUR_QUAY_HALF_V = QUAY_BERTH_HALF_V + QUAY_CENTRE_SHIFT;
+/**
+ * What is left for berthing once the yard has taken its end. The cranes and
+ * their cargo piles are laid out against this, not the whole slab.
+ */
+const QUAY_BERTH_HALF_V = HARBOUR_QUAY_HALF_V - QUAY_CENTRE_SHIFT;
 
 /** Cranes and their cargo piles, paired off along the quay. */
 const BERTHS = 4;
@@ -92,27 +99,6 @@ const PIER_STRIDE = 0.9;
  * water, and a fixed-length pier would end up planked under a ship's hull.
  */
 const PIER_MAX_TILES = 3;
-
-/**
- * The lighthouse is positioned in screen space rather than grid space, because
- * "right of" and "back towards the island" are things you judge by eye.
- *
- * Screen-x is (gx - gy) and screen-y is (gx + gy), so the two axes are driven
- * independently: an equal +u/-v pair slides purely sideways, and an equal
- * -u/-v pair slides purely up the screen.
- */
-/** Clear water, in tiles of screen-x, from the wharf's right corner. */
-const LIGHTHOUSE_GAP = 1;
-/** Tiles up the screen, i.e. back inland, from the wharf's own height. */
-const LIGHTHOUSE_INSET = 6;
-/**
- * Half the quay's screen half-width clears the stone; the gap adds to that.
- * Measured against the berthing section, not the full slab: the yard extends
- * the wharf away from the lighthouse, so counting it would push the tower out
- * to sea every time the yard grew.
- */
-const LIGHTHOUSE_SIDE =
-  (HARBOUR_QUAY_HALF_U + QUAY_BERTH_HALF_V + LIGHTHOUSE_GAP) / 2;
 
 /**
  * The name board is nudged off the wharf's corner in the same screen-space
@@ -141,12 +127,10 @@ export function createHarbourLayout(width: number, height: number): HarbourLayou
   const safeWidth = Math.max(1, Math.round(width));
   const safeHeight = Math.max(1, Math.round(height));
   const edge = safeWidth - 1;
-  const lane = safeHeight / 2;
+  const lane = coastLanes(safeHeight).harbour;
 
-  // Sand runs from COUNTRYSIDE_RING to COUNTRYSIDE_RING + COAST_RING outside
-  // the city. Seating the wharf's centre just inside that band lets its
-  // landward half meet the grass and its seaward wall stand in the water.
-  const quayX = edge + COUNTRYSIDE_RING + 0.35;
+  // Seated so the sea wall lands on the water line -- see coast.ts.
+  const quayX = coastQuayX(safeWidth);
   const seawardEdge = quayX + HARBOUR_QUAY_HALF_U;
 
   const mooringX = edge + COUNTRYSIDE_RING + COAST_RING + 2;
@@ -221,11 +205,8 @@ export function createHarbourLayout(width: number, height: number): HarbourLayou
       x: quayX + HARBOUR_QUAY_HALF_U - 0.35 - (SIGN_LEFT + SIGN_INSET) / 2,
       y: lane - QUAY_BERTH_HALF_V + 0.35 + (SIGN_LEFT - SIGN_INSET) / 2,
     },
-    // Stands off the wharf on its own rock, marking the harbour approach.
-    lighthouse: {
-      x: quayX + LIGHTHOUSE_SIDE - LIGHTHOUSE_INSET / 2,
-      y: lane - LIGHTHOUSE_SIDE - LIGHTHOUSE_INSET / 2,
-    },
+    // Mid-coast, on its own rock between the two ports -- see coast.ts.
+    lighthouse: coastLighthouse(safeWidth, safeHeight),
     // Outboard of the crane rails, interleaved with the berths so a bollard
     // never lands under a portal leg. The corner slot is given over to the
     // name board, so the run starts inboard of it.

@@ -2,9 +2,10 @@
  * Naval base layout — pure geometry, no Phaser, so it stays unit-testable the
  * same way the cargo harbour's does.
  *
- * The base shares the island's east coast with the commercial harbour, sitting
- * up-coast of it on an apron of exactly the same size, so the two installations
- * read as one port authority rather than two unrelated slabs.
+ * The base takes the centre of the coast's top half, opposite the commercial
+ * harbour in the bottom half, with the lighthouse between them -- see coast.ts,
+ * which owns that division. Its apron is exactly the harbour's, so the two
+ * installations read as one port authority rather than two unrelated slabs.
  *
  * In the isometric projection screen-x is (u - v) and screen-y is (u + v), so
  * on the apron:
@@ -21,7 +22,12 @@
  * middle band is left deliberately empty for the jetty and the battleship.
  */
 
-import { HARBOUR_QUAY_HALF_U, HARBOUR_QUAY_HALF_V } from "./harbour";
+import {
+  COAST_QUAY_HALF_U,
+  COAST_QUAY_HALF_V,
+  coastLanes,
+  coastQuayX,
+} from "./coast";
 import { COAST_RING, COUNTRYSIDE_RING } from "./terrain";
 
 export interface HarbourPoint {
@@ -62,11 +68,8 @@ export interface NavyHarbourLayout {
  * length. What separates the two is how they are laid out, not how big they
  * are, so these are derived rather than re-tuned.
  */
-export const NAVY_QUAY_HALF_U = HARBOUR_QUAY_HALF_U;
-export const NAVY_QUAY_HALF_V = HARBOUR_QUAY_HALF_V;
-
-/** Clear coast between the two aprons, so they never read as a single slab. */
-const APRON_CLEARANCE = 2;
+export const NAVY_QUAY_HALF_U = COAST_QUAY_HALF_U;
+export const NAVY_QUAY_HALF_V = COAST_QUAY_HALF_V;
 
 const PIER_STRIDE = 0.9;
 const PIER_MAX_TILES = 3;
@@ -96,13 +99,11 @@ export function createNavyHarbourLayout(width: number, height: number): NavyHarb
   const safeWidth = Math.max(1, Math.round(width));
   const safeHeight = Math.max(1, Math.round(height));
   const edge = safeWidth - 1;
-  // The cargo harbour owns `height / 2`; back off by both aprons plus the gap.
-  const lane =
-    safeHeight / 2 - (HARBOUR_QUAY_HALF_V + APRON_CLEARANCE + NAVY_QUAY_HALF_V);
+  const lane = coastLanes(safeHeight).navy;
 
   // Seated on the coast exactly as the cargo wharf is: the landward half meets
-  // the grass and the seaward wall stands in the water.
-  const quayX = edge + COUNTRYSIDE_RING + 0.35;
+  // the grass and the seaward wall lands on the water line.
+  const quayX = coastQuayX(safeWidth);
   const seawardEdge = quayX + NAVY_QUAY_HALF_U;
   const mooringX = edge + COUNTRYSIDE_RING + COAST_RING + 2;
 
