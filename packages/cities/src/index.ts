@@ -291,17 +291,43 @@ export class GitHubApiClient implements GitHubClient {
 
   async viewerLogin(overrideToken?: string): Promise<string | undefined> {
     const token = overrideToken ?? this.token;
-    if (!token) {
-      return undefined;
+    if (token) {
+      try {
+        const response = await fetch("https://api.github.com/user", {
+          headers: this.headers(overrideToken),
+        });
+        if (response.ok) {
+          const body = (await response.json()) as { login?: string };
+          if (body.login) {
+            return body.login;
+          }
+        }
+      } catch {
+        // fallback to CLI / git config below
+      }
     }
-    const response = await fetch("https://api.github.com/user", {
-      headers: this.headers(overrideToken),
-    });
-    if (!response.ok) {
-      return undefined;
+
+    try {
+      const { stdout } = await execFileAsync("gh", ["api", "user", "--jq", ".login"]);
+      const login = stdout.trim();
+      if (login) {
+        return login;
+      }
+    } catch {
+      // fallback to git config below
     }
-    const body = (await response.json()) as { login?: string };
-    return body.login;
+
+    try {
+      const { stdout } = await execFileAsync("git", ["config", "github.user"]);
+      const login = stdout.trim();
+      if (login) {
+        return login;
+      }
+    } catch {
+      // ignore
+    }
+
+    return undefined;
   }
 }
 
@@ -375,6 +401,46 @@ export function issueCityIdFor(issue: Pick<IssueRef, "number">): string {
 
 export function worktreePath(repoPath: string, cityId: string): string {
   return join(repoPath, ".sudocity", "worktrees", cityId);
+}
+
+export interface LocalWorktreeRef {
+  path: string;
+  branch: string;
+  headSha: string;
+}
+
+export async function listLocalWorktrees(repoPath: string): Promise<LocalWorktreeRef[]> {
+  try {
+    const { stdout } = await execFileAsync("git", ["worktree", "list", "--porcelain"], {
+      cwd: repoPath,
+    });
+    const worktrees: LocalWorktreeRef[] = [];
+    const blocks = stdout.trim().split("\n\n");
+    for (const block of blocks) {
+      if (!block.trim()) continue;
+      let path = "";
+      let headSha = "";
+      let branch = "";
+      for (const line of block.split("\n")) {
+        if (line.startsWith("worktree ")) {
+          path = line.slice("worktree ".length).trim();
+        } else if (line.startsWith("HEAD ")) {
+          headSha = line.slice("HEAD ".length).trim();
+        } else if (line.startsWith("branch ")) {
+          branch = line.slice("branch ".length).trim().replace(/^refs\/heads\//, "");
+        }
+      }
+      if (path) {
+        const normalizedPath = path.replaceAll("\\", "/");
+        const folderName = normalizedPath.slice(normalizedPath.lastIndexOf("/") + 1);
+        const resolvedBranch = branch || folderName || "detached";
+        worktrees.push({ path, headSha, branch: resolvedBranch });
+      }
+    }
+    return worktrees;
+  } catch {
+    return [];
+  }
 }
 
 async function pathExists(path: string): Promise<boolean> {

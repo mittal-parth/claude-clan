@@ -1248,19 +1248,26 @@ export default function App({
   // (e.g. the demo's local GITHUB_TOKEN) so the split still works for a
   // visitor who never signed in through the app.
   const mayorLogin = user?.login ?? viewerLogin;
+  const isMayorAuthor = (author?: string): boolean => {
+    if (!author || !mayorLogin) return false;
+    const a = author.toLowerCase().replace(/[-_]/g, "");
+    const m = mayorLogin.toLowerCase().replace(/[-_]/g, "");
+    return a === m;
+  };
   const ownWorkCities = useMemo(
     () =>
       cities.filter(
         (city) =>
           city.kind === "issue" ||
-          (city.kind === "pull-request" && city.author === mayorLogin),
+          (city.kind === "pull-request" && isMayorAuthor(city.author)),
       ),
     [cities, mayorLogin],
   );
   const reviewPrCities = useMemo(
     () =>
       cities.filter(
-        (city) => city.kind === "pull-request" && city.author !== mayorLogin,
+        (city) =>
+          city.kind === "pull-request" && !isMayorAuthor(city.author),
       ),
     [cities, mayorLogin],
   );

@@ -13,9 +13,11 @@ import {
   ensureWorktree,
   fileDiff,
   issueCityIdFor,
+  listLocalWorktrees,
   pruneWorktrees,
   type GitHubClient,
   type IssueRef,
+  type LocalWorktreeRef,
   type PullRequestRef,
 } from "@sudo-city/cities";
 import { layoutWorld } from "@sudo-city/layout";
@@ -148,14 +150,15 @@ class CityRegistry {
       });
     }
     for (const [id, issue] of this.issues) {
-      if (!this.cities.has(id) && !this.pendingBuilds.has(id)) {
+      const isLocalWorktree = issue.url?.startsWith("file://");
+      if (!this.cities.has(id) && !this.pendingBuilds.has(id) && !isLocalWorktree) {
         continue;
       }
       entries.push({
         id,
         kind: "issue",
-        title: `#${issue.number} ${issue.title}`,
-        ref: "main",
+        title: isLocalWorktree ? issue.title : `#${issue.number} ${issue.title}`,
+        ref: isLocalWorktree ? issue.title.replace(/^Local Worktree:\s*/, "") : "main",
         number: issue.number,
         author: issue.author,
         url: issue.url,
@@ -438,16 +441,57 @@ export class Workspace {
   async refreshRoster(): Promise<void> {
     let pullRequests: PullRequestRef[] = [];
     let issues: IssueRef[] = [];
+    let localWorktrees: LocalWorktreeRef[] = [];
     try {
-      [pullRequests, issues] = await Promise.all([
+      [pullRequests, issues, localWorktrees] = await Promise.all([
         this.githubClient.listOpenPullRequests(this.repoPath, this.githubToken),
         this.githubClient.listOpenIssues(this.repoPath, this.githubToken),
+        listLocalWorktrees(this.repoPath),
       ]);
     } catch (error) {
       this.log.warn(
         { error, workspace: this.key },
         "Failed to list GitHub work; only the main city is available",
       );
+    }
+
+    const reviewPrCityIds = new Set(
+      pullRequests
+        .filter((pr) => {
+          const m = this.viewerLoginValue?.toLowerCase().replace(/[-_]/g, "");
+          const a = pr.author?.toLowerCase().replace(/[-_]/g, "");
+          return Boolean(m && a && a !== m);
+        })
+        .map((pr) => cityIdFor(pr)),
+    );
+
+    const mainRepoResolved = resolve(this.repoPath);
+    for (const wt of localWorktrees) {
+      const wtResolved = resolve(wt.path);
+      if (wtResolved === mainRepoResolved) continue;
+
+      const isReviewPrWorktree = Array.from(reviewPrCityIds).some((id) =>
+        wtResolved.endsWith(`${sep}${id}`) || wtResolved.endsWith(`/${id}`),
+      );
+      if (isReviewPrWorktree) continue;
+
+      const existingCityId = wtResolved.slice(wtResolved.lastIndexOf(sep) + 1);
+      const isKnownIssue = issues.some((iss) => issueCityIdFor(iss) === existingCityId);
+      if (!isKnownIssue) {
+        const localIssueNumber =
+          (Math.abs(
+            wt.branch.split("").reduce((acc, char) => (acc * 31 + char.charCodeAt(0)) | 0, 9000),
+          ) %
+            9000) +
+          1000;
+        issues.push({
+          number: localIssueNumber,
+          title: `Local Worktree: ${wt.branch}`,
+          body: `Local git worktree checked out at ${wt.path}`,
+          author: this.viewerLoginValue ?? "local",
+          url: `file://${wt.path}`,
+        });
+      }
     }
 
     const keep = new Set<CityId>([

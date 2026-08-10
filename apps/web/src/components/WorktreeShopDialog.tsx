@@ -156,26 +156,6 @@ export default function WorktreeShopDialog({
               </DialogDescription>
             </DialogHeader>
           </div>
-
-          <div className="relative z-10 mt-4 grid grid-cols-[1fr_auto_1fr] items-center gap-3 border border-white/10 bg-black/20 px-3 py-2.5">
-            <div className="min-w-0">
-              <span className="retro block text-[7px] text-sky-200/45">DEPARTING</span>
-              <span className="retro mt-1 block truncate text-[9px] text-white">
-                {activeCityId.toUpperCase()}
-              </span>
-            </div>
-            <div className="airport-route-line flex items-center gap-2 text-amber-300" aria-hidden="true">
-              <span />
-              <Ship className="size-4" />
-              <span />
-            </div>
-            <div className="min-w-0 text-right">
-              <span className="retro block text-[7px] text-sky-200/45">DESTINATION</span>
-              <span className="retro mt-1 block text-[9px] text-sky-200">
-                OWN WORKTREE
-              </span>
-            </div>
-          </div>
         </div>
 
         <div className="flex flex-col gap-3 p-4 sm:p-5">
