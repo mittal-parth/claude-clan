@@ -11,7 +11,7 @@ import {
   type PullRequestOverlay,
   type WorldSnapshot,
 } from "@sudo-city/protocol";
-import { FormEvent, useEffect, useRef, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import {
   Command,
   LogOut,
@@ -68,6 +68,7 @@ import CrewSelectDialog, {
 } from "./components/CrewSelectDialog";
 import IssueShopDialog from "@/components/IssueShopDialog";
 import PrShopDialog from "@/components/PrShopDialog";
+import WorktreeShopDialog from "@/components/WorktreeShopDialog";
 import ShareCityCard from "./components/ShareCityCard";
 import ShareCityModal from "./components/ShareCityModal";
 import ShutterFlash from "./components/ShutterFlash";
@@ -761,6 +762,8 @@ export default function App({
   const [reconnectAttempt, setReconnectAttempt] = useState(0);
   const [cities, setCities] = useState<CitySummary[]>([]);
   const [issues, setIssues] = useState<Issue[]>([]);
+  /** The GitHub login behind the workspace's own credential -- set even when nobody signed in through the app, e.g. the demo workspace's local GITHUB_TOKEN. */
+  const [viewerLogin, setViewerLogin] = useState<string>();
   const [activeCityId, setActiveCityId] = useState("main");
   const [eventsByCity, setEventsByCity] = useState<
     Record<string, GameEvent[]>
@@ -801,6 +804,7 @@ export default function App({
   const [shipTransitioning, setShipTransitioning] = useState(false);
   const [issueShopOpen, setIssueShopOpen] = useState(false);
   const [prShopOpen, setPrShopOpen] = useState(false);
+  const [worktreeShopOpen, setWorktreeShopOpen] = useState(false);
   const [issueTravelRequest, setIssueTravelRequest] =
     useState<CanvasTravelRequest>();
   const [navyTravelRequest, setNavyTravelRequest] =
@@ -1046,6 +1050,11 @@ export default function App({
           return;
         }
 
+        if (decoded.data.kind === "viewer") {
+          setViewerLogin(decoded.data.login);
+          return;
+        }
+
         if (decoded.data.kind === "error") {
           if (
             decoded.data.code === "PERMIT_NOT_FOUND" &&
@@ -1240,13 +1249,39 @@ export default function App({
     setIssueTravelRequest({
       id: `issue-${issue.number}-${Date.now()}`,
       cityId: `issue-${issue.number}`,
+      ship: "container",
       carriesContainer: true,
     });
   }
 
+  // The container ship is the mayor's own fleet: their own open PRs, plus
+  // whatever issue worktrees they already have checked out. The naval base
+  // is the opposing fleet -- everyone else's open PRs, to review or attack.
+  // Prefer the app's own sign-in; fall back to the workspace's credential
+  // (e.g. the demo's local GITHUB_TOKEN) so the split still works for a
+  // visitor who never signed in through the app.
+  const mayorLogin = user?.login ?? viewerLogin;
+  const ownWorkCities = useMemo(
+    () =>
+      cities.filter(
+        (city) =>
+          city.kind === "issue" ||
+          (city.kind === "pull-request" && city.author === mayorLogin),
+      ),
+    [cities, mayorLogin],
+  );
+  const reviewPrCities = useMemo(
+    () =>
+      cities.filter(
+        (city) => city.kind === "pull-request" && city.author !== mayorLogin,
+      ),
+    [cities, mayorLogin],
+  );
+
   /**
    * The container ship is the harbour's way in and out. In the main city she
-   * is waiting to be loaded, so clicking her opens the issue market; anywhere
+   * is waiting to be loaded, so clicking her (or anywhere else on the
+   * harbour) opens the roster of the mayor's own PRs and worktrees; anywhere
    * else she is the way home, and sails back empty.
    */
   function handleHarbourShipClick(): void {
@@ -1254,23 +1289,22 @@ export default function App({
     setSelected(undefined);
     setDiff(undefined);
     if (activeCityId === "main") {
-      setIssueShopOpen(true);
+      setWorktreeShopOpen(true);
       return;
     }
     setIssueTravelRequest({
       id: `home-${activeCityId}-${Date.now()}`,
       cityId: "main",
+      ship: "container",
       carriesContainer: false,
     });
   }
 
-  function handleNavyHarbourClick(): void {
-    if (shipTransitioning) return;
-    setSelected(undefined);
-    setDiff(undefined);
-    setPrShopOpen(true);
-  }
-
+  /**
+   * The naval battleship (and the whole base behind her) is the way to the
+   * PR review board. In the main city she opens the roster of PRs to review;
+   * anywhere else she is the way home.
+   */
   function handleNavyShipClick(): void {
     if (shipTransitioning) return;
     setSelected(undefined);
@@ -1282,7 +1316,27 @@ export default function App({
     setNavyTravelRequest({
       id: `navy-home-${activeCityId}-${Date.now()}`,
       cityId: "main",
+      ship: "navy",
       carriesContainer: false,
+    });
+  }
+
+  function takeOwnWorkToDeploy(item: CitySummary): void {
+    if (item.id === activeCityId) {
+      setWorktreeShopOpen(false);
+      return;
+    }
+    setWorktreeShopOpen(false);
+    setSelected(undefined);
+    setDiff(undefined);
+    // She carries your own PR or worktree out as cargo, same as she used to
+    // carry an issue: the crane loads it aboard before the clouds close, and
+    // unloads it onto the destination quay when she berths.
+    setIssueTravelRequest({
+      id: `worktree-${item.id}-${Date.now()}`,
+      cityId: item.id,
+      ship: "container",
+      carriesContainer: true,
     });
   }
 
@@ -1297,6 +1351,7 @@ export default function App({
     setNavyTravelRequest({
       id: `navy-pr-${pr.id}-${Date.now()}`,
       cityId: pr.id,
+      ship: "navy",
       carriesContainer: false,
     });
   }
@@ -1432,7 +1487,6 @@ export default function App({
           setIssueShopOpen(true);
         }}
         onHarbourShipClick={handleHarbourShipClick}
-        onNavyHarbourClick={handleNavyHarbourClick}
         onNavyShipClick={handleNavyShipClick}
         onShipHover={setShipHover}
         onSelectBuilding={selectBuilding}
@@ -1452,9 +1506,17 @@ export default function App({
       <PrShopDialog
         open={prShopOpen}
         onOpenChange={setPrShopOpen}
-        prs={cities.filter((city) => city.kind === "pull-request")}
+        prs={reviewPrCities}
         activeCityId={activeCityId}
         onTakePr={takePrToDeploy}
+      />
+
+      <WorktreeShopDialog
+        open={worktreeShopOpen}
+        onOpenChange={setWorktreeShopOpen}
+        items={ownWorkCities}
+        activeCityId={activeCityId}
+        onTakeItem={takeOwnWorkToDeploy}
       />
 
       {shipHover ? (

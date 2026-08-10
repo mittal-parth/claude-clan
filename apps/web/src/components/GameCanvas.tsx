@@ -24,10 +24,13 @@ export interface CanvasFileChange {
 export interface CanvasTravelRequest {
   id: string;
   cityId: string;
+  /** Which fleet carries this trip. Defaults to the container ship. */
+  ship?: "container" | "navy";
   /**
    * Voyages of the harbour's container ship. Set when the trip is carrying a
    * container -- taking an issue out -- and cleared when she sails home empty.
    * A request without this flag still travels, just without the crane work.
+   * Only meaningful when `ship` is "container".
    */
   carriesContainer?: boolean;
 }
@@ -90,7 +93,6 @@ interface GameCanvasProps {
   onIssueShopClick?: () => void;
   /** Clicking the harbour's container ship: take an issue, or sail home. */
   onHarbourShipClick?: () => void;
-  onNavyHarbourClick?: () => void;
   onNavyShipClick?: () => void;
   onAirportClick?: () => void;
   onAirportHover?: (info?: ShipHoverInfo) => void;
@@ -133,7 +135,6 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
       onAirportArrivalComplete,
       onIssueShopClick,
       onHarbourShipClick,
-      onNavyHarbourClick,
       onNavyShipClick,
       onAirportClick,
       onAirportHover,
@@ -159,7 +160,6 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
     const airportArrivalCompleteRef = useRef(onAirportArrivalComplete);
     const issueShopClickRef = useRef(onIssueShopClick);
     const harbourShipClickRef = useRef(onHarbourShipClick);
-    const navyHarbourClickRef = useRef(onNavyHarbourClick);
     const navyShipClickRef = useRef(onNavyShipClick);
     const cityIdRef = useRef(cityId);
     const worldKeyRef = useRef(worldKey);
@@ -201,7 +201,6 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
     airportArrivalCompleteRef.current = onAirportArrivalComplete;
     issueShopClickRef.current = onIssueShopClick;
     harbourShipClickRef.current = onHarbourShipClick;
-    navyHarbourClickRef.current = onNavyHarbourClick;
     navyShipClickRef.current = onNavyShipClick;
     cityIdRef.current = cityId;
     worldKeyRef.current = worldKey;
@@ -241,10 +240,7 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
       if (voyage) {
         scene?.prepareContainerArrival(voyage.carriesContainer);
       } else {
-        scene?.prepareArrivalForTravel(
-          departureCityRef.current,
-          destinationCityId,
-        );
+        scene?.prepareArrivalForTravel();
       }
       const reveal = voyage
         ? scene?.revealAfterContainerVoyage(voyage.carriesContainer)
@@ -401,12 +397,16 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
         (airportHoverRef.current ?? shipHoverRef.current)?.(info),
       );
       scene.setAirportClickListener(() => airportClickRef.current?.());
-      scene.setHarbourSignClickListener(() => issueShopClickRef.current?.());
+      // The whole harbour is one click target -- the sign shares the ship's
+      // own handler rather than opening the (currently unwired) issue shop.
+      scene.setHarbourSignClickListener(() => harbourShipClickRef.current?.());
       scene.setHarbourShipHoverListener((info) =>
         (airportHoverRef.current ?? shipHoverRef.current)?.(info),
       );
       scene.setHarbourShipClickListener(() => harbourShipClickRef.current?.());
-      scene.setNavySignClickListener(() => navyHarbourClickRef.current?.());
+      // The whole naval base is one click target -- land-side props share the
+      // battleship's own handler.
+      scene.setNavySignClickListener(() => navyShipClickRef.current?.());
       scene.setNavyShipHoverListener((info) =>
         (airportHoverRef.current ?? shipHoverRef.current)?.(info),
       );
@@ -567,11 +567,11 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
       ) {
         return;
       }
-      if (
-        beginTravel(travelRequest.cityId, {
-          carriesContainer: travelRequest.carriesContainer ?? false,
-        })
-      ) {
+      const voyage =
+        (travelRequest.ship ?? "container") === "container"
+          ? { carriesContainer: travelRequest.carriesContainer ?? false }
+          : undefined;
+      if (beginTravel(travelRequest.cityId, voyage)) {
         handledTravelRequestRef.current = travelRequest.id;
       }
     }, [travelRequest]);

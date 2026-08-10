@@ -106,7 +106,6 @@ import {
   RUBBLE_KEY,
   ADDED_MARKER_KEY,
   SELECT_KEY,
-  SHIP_KEY,
   TERRAIN_ATLAS_KEY,
   TERRAIN_VARIANT_COUNTS,
   TILE_ANCHOR_Y,
@@ -245,6 +244,12 @@ const CARRIED_CONTAINER_DROP = 42;
 const CRANE_SLEW_MS = 620;
 const CRANE_HOIST_MS = 520;
 const CONTAINER_SHIP_SAIL_MS = 1_650;
+/** Same beat as the container ship's run, so the two fleets read as one port. */
+const NAVY_SHIP_SAIL_MS = 1_650;
+/** Pixels the harbour's hover label sits above the sign -- clear of the crane's jib and the warehouse roof. */
+const HARBOUR_HOVER_LABEL_LIFT = 190;
+/** Pixels the naval base's hover label sits above the HQ building -- clear of its mast. */
+const NAVY_HOVER_LABEL_LIFT = 190;
 /**
  * The stretch of the run over which the helm is over, as a fraction of the
  * voyage. Outside it she is on a steady heading, so both legs read straight.
@@ -382,6 +387,9 @@ export class WorldScene extends Phaser.Scene {
   /** Frame-cycling timers: the radar sweep and the helicopter's rotor. */
   private navyTimers: Phaser.Time.TimerEvent[] = [];
   private navyLayoutSignature?: string;
+  private navyLayout?: NavyHarbourLayout;
+  /** The HQ building -- a real, correctly-placed sprite -- doubles as the naval base's hover-label anchor. */
+  private navyHoverAnchorSprite?: Phaser.GameObjects.Sprite;
   private navyBattleship?: Phaser.GameObjects.Sprite;
   private navySignClickListener?: () => void;
   private navyShipClickListener?: () => void;
@@ -418,6 +426,8 @@ export class WorldScene extends Phaser.Scene {
   private harbourGlows: Phaser.GameObjects.Arc[] = [];
   private harbourLayoutSignature?: string;
   private harbourLayout?: HarbourLayout;
+  /** The name board -- a real, correctly-placed sprite -- doubles as the harbour's hover-label anchor. */
+  private harbourHoverAnchorSprite?: Phaser.GameObjects.Sprite;
 
   /**
    * The container ship and the crane that works it. Unlike the PR fleet, there
@@ -1551,6 +1561,7 @@ export class WorldScene extends Phaser.Scene {
     }
     this.clearNavyHarbour();
     this.navyLayoutSignature = signature;
+    this.navyLayout = layout;
 
     const quayPoint = projection.project(layout.quay.x, layout.quay.y);
     this.navySprites.push(
@@ -1604,6 +1615,7 @@ export class WorldScene extends Phaser.Scene {
       18,
     );
     command.setData("hoverTitle", "NAVAL OPERATIONS HQ");
+    this.navyHoverAnchorSprite = command;
     this.addNavyGlow(command, NAVY_COMMAND_ANCHOR_Y, NAVY_COMMAND_BEACON_Z, SKY_DEPTH - 4, {
       color: 0xff5e65,
       radius: 3,
@@ -1775,13 +1787,17 @@ export class WorldScene extends Phaser.Scene {
 
       this.navyBattleship.on("pointerover", () => {
         if (this.travelTransitionActive) return;
-        const camera = this.cameras.main;
+        const anchor = this.navyHoverAnchor() ?? {
+          x: this.navyBattleship!.x,
+          y: this.navyBattleship!.y,
+        };
+        const screen = this.worldToScreen(anchor.x, anchor.y);
         this.navyShipHoverListener?.({
           cityId: this.currentCityId ?? "",
           title: "Navy Battleship",
-          action: isMain ? "Open PR deployment board" : "Return to main city",
-          screenX: (this.navyBattleship!.x - camera.scrollX) * camera.zoom,
-          screenY: (this.navyBattleship!.y - camera.scrollY) * camera.zoom,
+          action: isMain ? "Open the PR review board" : "Return to main city",
+          screenX: screen.x,
+          screenY: screen.y,
         });
       });
       this.navyBattleship.on("pointerout", () => {
@@ -1794,18 +1810,8 @@ export class WorldScene extends Phaser.Scene {
         this.navyShipClickListener?.();
       });
 
-      const restY = this.navyBattleship.y;
-      this.navyBattleship.setData("restY", restY);
-      if (!prefersReducedMotion()) {
-        this.tweens.add({
-          targets: this.navyBattleship,
-          y: restY - 4,
-          duration: 1_600,
-          yoyo: true,
-          repeat: -1,
-          ease: "Sine.easeInOut",
-        });
-      }
+      this.navyBattleship.setData("restY", this.navyBattleship.y);
+      this.idleBobNavyShip();
     }
 
   }
@@ -1845,17 +1851,31 @@ export class WorldScene extends Phaser.Scene {
     );
   }
 
+  /**
+   * A single screen point standing in for the whole naval base, clear of the
+   * command mast and radar dish. Every land-side prop's hover uses this
+   * instead of its own position, so the tooltip always reads above the base
+   * as a landmark rather than jumping to wherever in the apron -- a fence
+   * panel, a floodlight, a crate -- the cursor happens to be.
+   */
+  private navyHoverAnchor(): ScreenPoint | undefined {
+    const command = this.navyHoverAnchorSprite;
+    if (!command) return undefined;
+    return { x: command.x, y: command.y - NAVY_HOVER_LABEL_LIFT };
+  }
+
   private bindNavyInteractions(sprite: Phaser.GameObjects.Sprite): void {
     sprite.setInteractive({ pixelPerfect: true, useHandCursor: true });
     sprite.on("pointerover", () => {
       if (this.travelTransitionActive) return;
-      const camera = this.cameras.main;
+      const anchor = this.navyHoverAnchor() ?? { x: sprite.x, y: sprite.y };
+      const screen = this.worldToScreen(anchor.x, anchor.y);
       this.navyShipHoverListener?.({
         cityId: "naval-base",
         title: String(sprite.getData("hoverTitle") ?? "NAVAL BASE"),
-        action: "Open the PR deployment board",
-        screenX: (sprite.x - camera.scrollX) * camera.zoom,
-        screenY: (sprite.y - camera.scrollY) * camera.zoom,
+        action: "Open the PR review board",
+        screenX: screen.x,
+        screenY: screen.y,
       });
     });
     sprite.on("pointerout", () => this.navyShipHoverListener?.(undefined));
@@ -1929,6 +1949,8 @@ export class WorldScene extends Phaser.Scene {
     this.navyTimers = [];
     this.navyBattleship = undefined;
     this.navyLayoutSignature = undefined;
+    this.navyLayout = undefined;
+    this.navyHoverAnchorSprite = undefined;
   }
 
   /** Places the issue market on the marked grass plot behind the airport. */
@@ -2220,6 +2242,7 @@ export class WorldScene extends Phaser.Scene {
     // what opens the issue market now that the shop building is inert.
     const sign = onQuay(harbour.sign, HARBOUR_SIGN_KEY, HARBOUR_SIGN_ANCHOR_Y, 18);
     sign.setData("hoverTitle", "CLAUDE CITY PORT");
+    this.harbourHoverAnchorSprite = sign;
     for (const lamp of harbour.lamps) {
       onQuay(lamp, HARBOUR_LAMP_KEY, TILE_ANCHOR_Y, 14);
     }
@@ -2229,18 +2252,17 @@ export class WorldScene extends Phaser.Scene {
       harbour.lighthouse.x,
       harbour.lighthouse.y,
     );
-    this.harbourSprites.push(
-      this.add
-        .sprite(
-          lighthousePoint.x,
-          lighthousePoint.y + HARBOUR_LIGHTHOUSE_ANCHOR_Y,
-          HARBOUR_LIGHTHOUSE_KEY,
-        )
-        .setOrigin(0.5, 1)
-        .setDepth(
-          projection.depth(harbour.lighthouse.x, harbour.lighthouse.y) + 20,
-        ),
-    );
+    const lighthouseSprite = this.add
+      .sprite(
+        lighthousePoint.x,
+        lighthousePoint.y + HARBOUR_LIGHTHOUSE_ANCHOR_Y,
+        HARBOUR_LIGHTHOUSE_KEY,
+      )
+      .setOrigin(0.5, 1)
+      .setDepth(
+        projection.depth(harbour.lighthouse.x, harbour.lighthouse.y) + 20,
+      );
+    this.harbourSprites.push(lighthouseSprite);
 
     const markerPoint = projection.project(harbour.pierHead.x, harbour.pierHead.y);
     this.harbourSprites.push(
@@ -2253,11 +2275,13 @@ export class WorldScene extends Phaser.Scene {
     this.layoutContainerShip(harbour);
     this.layoutQuayCargo(harbour);
 
-    // The whole harbour is the issue market's front door, not just the name
-    // board: every piece of it opens the modal. The ship is the exception --
-    // she carries the voyage, so she keeps her own click.
+    // The whole harbour is one click target, not just the name board: every
+    // piece of it shares the ship's handler. Two exceptions: the ship keeps
+    // her own click (she carries the voyage), and the lighthouse is scenery
+    // out on its own rock -- clicking the coast's landmark shouldn't open
+    // anything.
     for (const sprite of this.harbourSprites) {
-      if (sprite === this.harbourShip) continue;
+      if (sprite === this.harbourShip || sprite === lighthouseSprite) continue;
       this.bindHarbourInteractions(sprite);
     }
 
@@ -2311,14 +2335,15 @@ export class WorldScene extends Phaser.Scene {
 
     ship.on("pointerover", () => {
       if (this.travelTransitionActive) return;
-      const camera = this.cameras.main;
       const homeward = this.currentCityId !== "main";
+      const anchor = this.harbourHoverAnchor() ?? { x: ship.x, y: ship.y };
+      const screen = this.worldToScreen(anchor.x, anchor.y);
       this.harbourShipHoverListener?.({
         cityId: "container-ship",
         title: "MV CLAUDE FEEDER",
-        action: homeward ? "Sail home to main city" : "Load an issue for delivery",
-        screenX: (ship.x - camera.scrollX) * camera.zoom,
-        screenY: (ship.y - camera.scrollY) * camera.zoom,
+        action: homeward ? "Sail home to main city" : "Sail out to your own PRs and worktrees",
+        screenX: screen.x,
+        screenY: screen.y,
       });
     });
     ship.on("pointerout", () => this.harbourShipHoverListener?.(undefined));
@@ -2333,23 +2358,56 @@ export class WorldScene extends Phaser.Scene {
   }
 
   /**
-   * Opens the issue market from any part of the harbour. Hit-testing is
-   * pixel-perfect because these textures are mostly transparent -- the quay
-   * alone is a diamond inside a canvas several hundred pixels across, and a
-   * rectangular hit area would sit above half the city on depth and swallow
-   * clicks meant for the buildings behind it.
+   * Converts a world point to the screen pixel it renders at -- not the
+   * naive `(x - scrollX) * zoom`, which only happens to be correct at zoom
+   * 1. Phaser zooms the camera around its viewport centre (`midPoint`, which
+   * already factors in scroll, zoom and viewport size), not its origin, so
+   * that shortcut drifts further up-left the more the camera is zoomed or
+   * panned away from world (0, 0). Every HTML overlay that follows a world
+   * position -- hover labels included -- needs this instead.
+   */
+  private worldToScreen(x: number, y: number): ScreenPoint {
+    const camera = this.cameras.main;
+    const mid = camera.midPoint;
+    return {
+      x: camera.x + camera.width / 2 + (x - mid.x) * camera.zoomX,
+      y: camera.y + camera.height / 2 + (y - mid.y) * camera.zoomY,
+    };
+  }
+
+  /**
+   * A single screen point standing in for the whole harbour, well clear of
+   * the crane and warehouse roofs. Every quayside prop's hover uses this
+   * instead of its own position, so the tooltip always reads above the port
+   * as a landmark rather than jumping to wherever in the footprint -- a
+   * bollard, a fence panel, a container stack -- the cursor happens to be.
+   */
+  private harbourHoverAnchor(): ScreenPoint | undefined {
+    const sign = this.harbourHoverAnchorSprite;
+    if (!sign) return undefined;
+    return { x: sign.x, y: sign.y - HARBOUR_HOVER_LABEL_LIFT };
+  }
+
+  /**
+   * Opens the roster of the mayor's own PRs and worktrees from any part of
+   * the harbour. Hit-testing is pixel-perfect because these textures are
+   * mostly transparent -- the quay alone is a diamond inside a canvas
+   * several hundred pixels across, and a rectangular hit area would sit
+   * above half the city on depth and swallow clicks meant for the buildings
+   * behind it.
    */
   private bindHarbourInteractions(sprite: Phaser.GameObjects.Sprite): void {
     sprite.setInteractive({ pixelPerfect: true, useHandCursor: true });
     sprite.on("pointerover", () => {
       if (this.travelTransitionActive) return;
-      const camera = this.cameras.main;
+      const anchor = this.harbourHoverAnchor() ?? { x: sprite.x, y: sprite.y };
+      const screen = this.worldToScreen(anchor.x, anchor.y);
       this.harbourShipHoverListener?.({
         cityId: "harbour",
         title: String(sprite.getData("hoverTitle") ?? "CLAUDE CITY PORT"),
-        action: "Open the issue market",
-        screenX: (sprite.x - camera.scrollX) * camera.zoom,
-        screenY: (sprite.y - camera.scrollY) * camera.zoom,
+        action: "Sail out to your own PRs and worktrees",
+        screenX: screen.x,
+        screenY: screen.y,
       });
     });
     sprite.on("pointerout", () => this.harbourShipHoverListener?.(undefined));
@@ -2981,6 +3039,7 @@ export class WorldScene extends Phaser.Scene {
     this.harbourQuayCargo = undefined;
     this.harbourLayout = undefined;
     this.harbourLayoutSignature = undefined;
+    this.harbourHoverAnchorSprite = undefined;
     this.harbourShipHoverListener?.(undefined);
   }
 
@@ -3042,13 +3101,13 @@ export class WorldScene extends Phaser.Scene {
   private bindAirportInteractions(sprite: Phaser.GameObjects.Sprite): void {
     sprite.on("pointerover", () => {
       if (this.travelTransitionActive) return;
-      const camera = this.cameras.main;
+      const screen = this.worldToScreen(sprite.x, sprite.y);
       this.airportHoverListener?.({
         cityId: "airport",
         title: "CLAUDE CITY AIRPORT · CCX",
         action: "Open departures · choose repository city",
-        screenX: (sprite.x - camera.scrollX) * camera.zoom,
-        screenY: (sprite.y - camera.scrollY) * camera.zoom,
+        screenX: screen.x,
+        screenY: screen.y,
       });
     });
     sprite.on("pointerout", () => this.airportHoverListener?.(undefined));
@@ -3385,43 +3444,213 @@ export class WorldScene extends Phaser.Scene {
     return new Promise((resolve) => this.time.delayedCall(duration, resolve));
   }
 
-  private playNavyBattleshipDeparture(): Promise<void> {
-    if (!this.navyBattleship) return Promise.resolve();
+  /** The gentle swell the battleship rides at anchor; killed during a voyage. */
+  private idleBobNavyShip(): void {
+    const ship = this.navyBattleship;
+    if (!ship) return;
+    const restY = ship.getData("restY") as number;
+    ship.setY(restY);
+    if (prefersReducedMotion()) return;
+    this.tweens.add({
+      targets: ship,
+      y: restY - 4,
+      duration: 1_600,
+      yoyo: true,
+      repeat: -1,
+      ease: "Sine.easeInOut",
+    });
+  }
+
+  /**
+   * Mirrors containerShipCourse for the battleship's own berth: straight up
+   * the fairway, a turn at the corner, out to open water. Same apron axes as
+   * the cargo wharf (see navyHarbour.ts), so the same tile vectors apply.
+   */
+  private navyShipCourse():
+    | { berth: ScreenPoint; corner: ScreenPoint; open: ScreenPoint }
+    | undefined {
+    const layout = this.navyLayout;
+    if (!layout) return undefined;
+    const projected = projection.project(layout.battleship.x, layout.battleship.y);
+    const berth = { x: projected.x, y: projected.y + BATTLESHIP_ANCHOR_Y };
+    const ahead = { x: TILE_WIDTH / 2, y: -TILE_HEIGHT / 2 };
+    const seaward = { x: TILE_WIDTH / 2, y: TILE_HEIGHT / 2 };
+    const corner = {
+      x: berth.x + ahead.x * SHIP_FAIRWAY_TILES,
+      y: berth.y + ahead.y * SHIP_FAIRWAY_TILES,
+    };
+    return {
+      berth,
+      corner,
+      open: {
+        x: corner.x + seaward.x * SHIP_OFFING_TILES,
+        y: corner.y + seaward.y * SHIP_OFFING_TILES,
+      },
+    };
+  }
+
+  /** Shows the baked heading frame closest to `yaw`, in radians from her ready-to-leave pose. */
+  private setNavyShipYaw(yaw: number): void {
+    const ship = this.navyBattleship;
+    if (!ship) return;
+    const count = BATTLESHIP_KEYS.length;
+    const turns = yaw / (Math.PI * 2);
+    const frame = ((Math.round(turns * count) % count) + count) % count;
+    const key = BATTLESHIP_KEYS[frame]!;
+    if (ship.texture.key !== key) {
+      ship.setTexture(key);
+    }
+  }
+
+  /** Runs the battleship along a course, same quadratic-through-the-corner treatment as the container ship. */
+  private sailNavyShip(
+    from: ScreenPoint,
+    through: ScreenPoint,
+    to: ScreenPoint,
+    ease: string,
+    yaw: { from: number; to: number },
+  ): Promise<void> {
+    const ship = this.navyBattleship;
+    if (!ship) return Promise.resolve();
+    this.tweens.killTweensOf(ship);
+    ship.setAlpha(1);
+    ship.setPosition(from.x, from.y);
+    this.setNavyShipYaw(yaw.from);
+    if (prefersReducedMotion()) {
+      ship.setPosition(to.x, to.y);
+      this.setNavyShipYaw(yaw.to);
+      return Promise.resolve();
+    }
+    const cursor = { t: 0 };
     return new Promise((resolve) => {
-      this.tweens.killTweensOf(this.navyBattleship!);
       this.tweens.add({
-        targets: this.navyBattleship!,
-        x: this.navyBattleship!.x + (this.currentCityId === "main" ? 300 : -300),
-        y: this.navyBattleship!.y - 60,
-        alpha: 0,
-        duration: 700,
-        ease: "Cubic.easeIn",
+        targets: cursor,
+        t: 1,
+        duration: NAVY_SHIP_SAIL_MS,
+        ease,
+        onUpdate: () => {
+          const t = cursor.t;
+          const inverse = 1 - t;
+          const weight = { a: inverse * inverse, b: 2 * inverse * t, c: t * t };
+          ship.setPosition(
+            weight.a * from.x + weight.b * through.x + weight.c * to.x,
+            weight.a * from.y + weight.b * through.y + weight.c * to.y,
+          );
+          const helm = Phaser.Math.Clamp(
+            (t - SHIP_TURN_START) / (SHIP_TURN_END - SHIP_TURN_START),
+            0,
+            1,
+          );
+          const eased = helm * helm * (3 - 2 * helm);
+          this.setNavyShipYaw(yaw.from + (yaw.to - yaw.from) * eased);
+        },
         onComplete: () => resolve(),
       });
     });
   }
 
-  private playNavyBattleshipArrival(): Promise<void> {
-    if (!this.navyBattleship) return Promise.resolve();
+  /** Berth → ahead up the fairway → starboard turn → out of the map. */
+  private playNavyBattleshipDeparture(): Promise<void> {
+    const course = this.navyShipCourse();
+    if (!course) return Promise.resolve();
+    return this.sailNavyShip(
+      course.berth,
+      course.corner,
+      course.open,
+      "Quad.easeIn",
+      { from: YAW_OUTBOUND, to: YAW_SEAWARD },
+    );
+  }
+
+  /**
+   * Parks the battleship off frame before the clouds part, so the voyage
+   * visibly continues into the new city instead of ending at a hard swap.
+   */
+  private prepareNavyArrival(): void {
+    const ship = this.navyBattleship;
+    const course = this.navyShipCourse();
+    if (!ship || !course) return;
+    this.tweens.killTweensOf(ship);
+    ship.setAlpha(1);
+    ship.setPosition(course.open.x, course.open.y);
+    this.setNavyShipYaw(YAW_INBOUND);
+  }
+
+  /** The departure run in reverse: straight in off the sea, then alongside bow-first. */
+  private async playNavyBattleshipArrival(): Promise<void> {
+    const ship = this.navyBattleship;
+    const course = this.navyShipCourse();
+    if (!ship || !course) return;
+    await this.sailNavyShip(
+      course.open,
+      course.corner,
+      course.berth,
+      "Quad.easeOut",
+      { from: YAW_INBOUND, to: YAW_ALONGSIDE_IN },
+    );
+    ship.setData("restY", course.berth.y);
+  }
+
+  /**
+   * She arrives lying the wrong way round to leave again, so she works
+   * herself end-for-end in the basin -- the same seaward loop the container
+   * ship uses at her berth -- and settles back onto her ready-to-leave heading.
+   */
+  private playNavyBattleshipTurnaround(): Promise<void> {
+    const course = this.navyShipCourse();
+    const ship = this.navyBattleship;
+    if (!course || !ship) return Promise.resolve();
+    const berth = course.berth;
+    const downCoast = { x: -TILE_WIDTH / 2, y: TILE_HEIGHT / 2 };
+    const seaward = { x: TILE_WIDTH / 2, y: TILE_HEIGHT / 2 };
+    const offset = (ahead: number, out: number): ScreenPoint => ({
+      x: berth.x + downCoast.x * ahead + seaward.x * out,
+      y: berth.y + downCoast.y * ahead + seaward.y * out,
+    });
+    const control = { first: offset(3.4, 3.0), second: offset(3.0, 0.5) };
+
+    this.tweens.killTweensOf(ship);
+    if (prefersReducedMotion()) {
+      this.setNavyShipYaw(YAW_OUTBOUND);
+      ship.setData("restY", berth.y);
+      this.idleBobNavyShip();
+      return Promise.resolve();
+    }
+    const cursor = { t: 0 };
     return new Promise((resolve) => {
-      const restX = this.navyBattleship!.getData("arrivalX") as number;
-      const restY = this.navyBattleship!.getData("arrivalY") as number;
       this.tweens.add({
-        targets: this.navyBattleship!,
-        x: restX,
-        y: restY,
-        alpha: 1,
-        duration: 800,
-        ease: "Cubic.easeOut",
+        targets: cursor,
+        t: 1,
+        duration: SHIP_TURNAROUND_MS,
+        ease: "Sine.easeInOut",
+        onUpdate: () => {
+          const t = cursor.t;
+          const inverse = 1 - t;
+          const weight = {
+            a: inverse * inverse * inverse,
+            b: 3 * inverse * inverse * t,
+            c: 3 * inverse * t * t,
+            d: t * t * t,
+          };
+          ship.setPosition(
+            weight.a * berth.x +
+              weight.b * control.first.x +
+              weight.c * control.second.x +
+              weight.d * berth.x,
+            weight.a * berth.y +
+              weight.b * control.first.y +
+              weight.c * control.second.y +
+              weight.d * berth.y,
+          );
+          this.setNavyShipYaw(
+            YAW_ALONGSIDE_IN + (YAW_OUTBOUND - YAW_ALONGSIDE_IN) * t,
+          );
+        },
         onComplete: () => {
-          this.tweens.add({
-            targets: this.navyBattleship!,
-            y: restY - 4,
-            duration: 1_600,
-            yoyo: true,
-            repeat: -1,
-            ease: "Sine.easeInOut",
-          });
+          ship.setPosition(berth.x, berth.y);
+          this.setNavyShipYaw(YAW_OUTBOUND);
+          ship.setData("restY", berth.y);
+          this.idleBobNavyShip();
           resolve();
         },
       });
@@ -3521,29 +3750,19 @@ export class WorldScene extends Phaser.Scene {
   }
 
   /**
-   * Positions the destination harbor ship outside the frame before the cloud
-   * cover parts. revealAfterTravel then sails it into port, making the trip
+   * Positions the destination battleship out at the offing before the cloud
+   * cover parts. revealAfterTravel then sails her into port, making the trip
    * visibly continue into the new city instead of ending at a hard swap.
    */
-  prepareArrivalForTravel(
-    departureCityId: string | undefined,
-    destinationCityId: string,
-  ): void {
-    if (!this.navyBattleship) return;
-    this.tweens.killTweensOf(this.navyBattleship);
-    this.navyBattleship.setData("arrivalX", this.navyBattleship.x);
-    this.navyBattleship.setData("arrivalY", this.navyBattleship.y);
-    this.navyBattleship.setPosition(
-      this.navyBattleship.x + (destinationCityId === "main" ? -300 : 300),
-      this.navyBattleship.y + 60,
-    );
-    this.navyBattleship.setAlpha(0);
+  prepareArrivalForTravel(): void {
+    this.prepareNavyArrival();
   }
 
-  /** Parts clouds after an in-workspace ship voyage. */
+  /** Parts clouds, sails her in alongside, then turns her round ready to leave again. */
   async revealAfterTravel(): Promise<void> {
     await this.partCloudCover();
     await this.playNavyBattleshipArrival();
+    await this.playNavyBattleshipTurnaround();
   }
 
   /**
