@@ -5187,9 +5187,12 @@ function bakeNavyBarracks(baker: Baker): void {
   const body = 36;
   const eave = body + 3;
   const ridge = body + 19;
+  /** The roof oversails the walls, so the canvas is sized from it, not them. */
+  const overhang = half + 0.08;
 
-  const width = Math.ceil(half * 4 * HALF_W) + 22;
-  const height = NAVY_BARRACKS_ANCHOR_Y + Math.ceil(half * 2 * HALF_H) + ridge + 12;
+  const width = Math.ceil(overhang * 4 * HALF_W) + 20;
+  const height =
+    NAVY_BARRACKS_ANCHOR_Y + Math.ceil(overhang * 2 * HALF_H) + ridge + 12;
   const originX = width / 2;
   const originY = height - NAVY_BARRACKS_ANCHOR_Y;
 
@@ -5197,16 +5200,34 @@ function bakeNavyBarracks(baker: Baker): void {
   harbourBox(baker, originX, originY, [-half, half, -half, half, 0, 5], NAVY_BASE.concreteDark);
   harbourBox(baker, originX, originY, [-half, half, -half, half, 5, body], NAVY_BASE.concreteLight);
 
-  // Pitched roof: the lit +v slope, the shaded gable end, and the ridge.
-  const overhang = half + 0.08;
+  // Pitched roof, ridge running along u.
+  //
+  // Looking down at this angle you see BOTH slopes of the ridge, not just the
+  // near one -- the far eave projects *above* the ridge line, because dropping
+  // 0.8 of a tile in v lifts a point further up the screen than the roof's
+  // pitch brings it down. Plating only the +v slope left the far half of the
+  // roof as a hole.
+  const slope = (side: 1 | -1): Point3[] => [
+    [-overhang, 0, ridge],
+    [overhang, 0, ridge],
+    [overhang, side * overhang, eave],
+    [-overhang, side * overhang, eave],
+  ];
+
+  // Gable wall first: both slopes overhang it, so they cap it cleanly.
   fillFace(
     baker,
-    shade(NAVY_BASE.redDark, 18),
+    NAVY_BASE.concrete,
     1,
-    [[-overhang, 0, ridge], [overhang, 0, ridge], [overhang, overhang, eave], [-overhang, overhang, eave]],
+    [[half, -half, body - 2], [half, 0, ridge], [half, half, body - 2]],
     originX,
     originY,
   );
+  // Far slope, then near. The far one faces -v, away from the sun, so it is
+  // the darker of the two.
+  fillFace(baker, shade(NAVY_BASE.redDark, -10), 1, slope(-1), originX, originY);
+  fillFace(baker, shade(NAVY_BASE.redDark, 18), 1, slope(1), originX, originY);
+  // Barge boards: the roof's own thickness, seen at the near gable end.
   fillFace(
     baker,
     NAVY_BASE.redDark,
@@ -5220,14 +5241,6 @@ function bakeNavyBarracks(baker: Baker): void {
     shade(NAVY_BASE.redDark, -18),
     1,
     [[overhang, -overhang, eave], [overhang, 0, ridge], [overhang, 0, ridge - 3], [overhang, -overhang, eave - 3]],
-    originX,
-    originY,
-  );
-  fillFace(
-    baker,
-    NAVY_BASE.concrete,
-    1,
-    [[half, -half, body], [half, 0, ridge - 4], [half, half, body]],
     originX,
     originY,
   );
@@ -5647,12 +5660,13 @@ function bakeNavyTank(baker: Baker): void {
   baker.graphics.fillStyle(NAVY_BASE.steelDark, 1);
   baker.graphics.fillEllipse(turret.x, turret.y, 19, 8);
   baker.graphics.fillStyle(NAVY_BASE.black, 1);
-  baker.graphics.fillEllipse(turret.x - 3, turret.y - 1, 8, 4);
-  // The hull fronts toward +v: keep the cannon on the same tread axis, but
-  // send its muzzle down-screen rather than up-screen toward -v.
-  navyScreenLine(baker, originX, originY, [0, -0.02, 30], [0.05, 0.72, 33], 5, NAVY_BASE.black, 1);
-  navyScreenLine(baker, originX, originY, [0, -0.02, 30], [0.05, 0.72, 33], 2, NAVY_BASE.steelDark, 1);
-  navyScreenLine(baker, originX, originY, [0.03, 0.22, 30], [0.08, 0.44, 31], 2, NAVY_BASE.black, 1);
+  baker.graphics.fillEllipse(turret.x + 3, turret.y + 1, 8, 4);
+  // The hull still fronts toward +v, but the turret is traversed a quarter turn
+  // to the left of it: on screen that swings the muzzle from down-left round to
+  // down-right, which in grid terms is (u, v) -> (v, -u), i.e. out along +u.
+  navyScreenLine(baker, originX, originY, [-0.02, 0, 30], [0.72, -0.05, 33], 5, NAVY_BASE.black, 1);
+  navyScreenLine(baker, originX, originY, [-0.02, 0, 30], [0.72, -0.05, 33], 2, NAVY_BASE.steelDark, 1);
+  navyScreenLine(baker, originX, originY, [0.22, -0.03, 30], [0.44, -0.08, 31], 2, NAVY_BASE.black, 1);
   harbourPost(baker, originX, originY, 0.12, 0.02, 29, 36, 2, NAVY_BASE.steelDark);
   const hatch = baker.at([-0.12, 0.03, 31], originX, originY);
   baker.graphics.lineStyle(1, NAVY_BASE.warning, 0.95);
@@ -6262,8 +6276,8 @@ function bakeNavyQuay(baker: Baker): void {
     navyDeckLine(baker, originX, originY, [0.36, v], [0.36, v + 0.3], 2, NAVY_BASE.warning, 0.55);
   }
 
-  // Hardstanding under the inland building row, and the vehicle bays that the
-  // panzers park in.
+  // Hardstanding under the inland building row. The vehicles park straight on
+  // it -- painted bay markings read as noise under the tracks at fit zoom.
   fillFace(
     baker,
     shade(NAVY_BASE.deck, 8),
@@ -6272,11 +6286,6 @@ function bakeNavyQuay(baker: Baker): void {
     originX,
     originY,
   );
-  for (const v of [0.9, 2.4]) {
-    for (const edgeV of [v - 0.5, v + 0.5]) {
-      navyDeckLine(baker, originX, originY, [0.02, edgeV], [0.68, edgeV], 2, NAVY_BASE.white, 0.55);
-    }
-  }
 
   // Keep-clear box on the berth, the one part of the apron nothing stands on.
   for (const [from, to] of [
