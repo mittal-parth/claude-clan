@@ -1,4 +1,4 @@
-.env
+.env*
 .DS_Store
 .pnpm-store/
 .sudocity/
@@ -8,3 +8,7 @@ playwright-report/
 test-results/
 .gstack/
 supabase/.temp/
+
+# Dev-only harnesses for eyeballing baked props. Handy locally, not shipped.
+apps/web/navy-preview.html
+apps/web/src/dev/
