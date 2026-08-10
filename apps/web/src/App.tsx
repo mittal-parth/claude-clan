@@ -67,6 +67,7 @@ import CrewSelectDialog, {
   type CrewSelection,
 } from "./components/CrewSelectDialog";
 import IssueShopDialog from "@/components/IssueShopDialog";
+import PrShopDialog from "@/components/PrShopDialog";
 import ShareCityCard from "./components/ShareCityCard";
 import ShareCityModal from "./components/ShareCityModal";
 import ShutterFlash from "./components/ShutterFlash";
@@ -799,7 +800,10 @@ export default function App({
   const [shipTravelTargetId, setShipTravelTargetId] = useState<string>();
   const [shipTransitioning, setShipTransitioning] = useState(false);
   const [issueShopOpen, setIssueShopOpen] = useState(false);
+  const [prShopOpen, setPrShopOpen] = useState(false);
   const [issueTravelRequest, setIssueTravelRequest] =
+    useState<CanvasTravelRequest>();
+  const [navyTravelRequest, setNavyTravelRequest] =
     useState<CanvasTravelRequest>();
   const [issueBeingFixed, setIssueBeingFixed] = useState<Issue>();
   const [airportArrivalDelayed, setAirportArrivalDelayed] = useState(false);
@@ -943,7 +947,9 @@ export default function App({
     setShipHover(undefined);
     setShipTravelTargetId(undefined);
     setIssueShopOpen(false);
+    setPrShopOpen(false);
     setIssueTravelRequest(undefined);
+    setNavyTravelRequest(undefined);
     setIssueBeingFixed(undefined);
     setDraggingBuilding(undefined);
     setDragPreview(undefined);
@@ -1216,6 +1222,8 @@ export default function App({
   function completeShipTravel(cityId: string): void {
     setActiveCityId(cityId);
     setShipTravelTargetId(undefined);
+    setIssueTravelRequest(undefined);
+    setNavyTravelRequest(undefined);
     if (issueBeingFixed && cityId === `issue-${issueBeingFixed.number}`) {
       // Deliberately do not send this prompt. It is a ready-to-review draft
       // in Mayor's order, exactly as if the mayor had typed it themselves.
@@ -1252,6 +1260,43 @@ export default function App({
     setIssueTravelRequest({
       id: `home-${activeCityId}-${Date.now()}`,
       cityId: "main",
+      carriesContainer: false,
+    });
+  }
+
+  function handleNavyHarbourClick(): void {
+    if (shipTransitioning) return;
+    setSelected(undefined);
+    setDiff(undefined);
+    setPrShopOpen(true);
+  }
+
+  function handleNavyShipClick(): void {
+    if (shipTransitioning) return;
+    setSelected(undefined);
+    setDiff(undefined);
+    if (activeCityId === "main") {
+      setPrShopOpen(true);
+      return;
+    }
+    setNavyTravelRequest({
+      id: `navy-home-${activeCityId}-${Date.now()}`,
+      cityId: "main",
+      carriesContainer: false,
+    });
+  }
+
+  function takePrToDeploy(pr: CitySummary): void {
+    if (pr.id === activeCityId) {
+      setPrShopOpen(false);
+      return;
+    }
+    setPrShopOpen(false);
+    setSelected(undefined);
+    setDiff(undefined);
+    setNavyTravelRequest({
+      id: `navy-pr-${pr.id}-${Date.now()}`,
+      cityId: pr.id,
       carriesContainer: false,
     });
   }
@@ -1369,7 +1414,7 @@ export default function App({
         buildingPaths={buildingPaths}
         crewSprite={crewAvatarSrc}
         issues={issues}
-        travelRequest={issueTravelRequest}
+        travelRequest={navyTravelRequest ?? issueTravelRequest}
         airportTravel={airportTravel}
         airportArrival={airportArrival}
         onTravelRequest={requestShipTravel}
@@ -1387,6 +1432,8 @@ export default function App({
           setIssueShopOpen(true);
         }}
         onHarbourShipClick={handleHarbourShipClick}
+        onNavyHarbourClick={handleNavyHarbourClick}
+        onNavyShipClick={handleNavyShipClick}
         onShipHover={setShipHover}
         onSelectBuilding={selectBuilding}
         onBuildingDragStart={handleBuildingDragStart}
@@ -1400,6 +1447,14 @@ export default function App({
         issues={issues}
         activeCityId={activeCityId}
         onTakeIssue={takeIssueToFix}
+      />
+
+      <PrShopDialog
+        open={prShopOpen}
+        onOpenChange={setPrShopOpen}
+        prs={cities.filter((city) => city.kind === "pull-request")}
+        activeCityId={activeCityId}
+        onTakePr={takePrToDeploy}
       />
 
       {shipHover ? (

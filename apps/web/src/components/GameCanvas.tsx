@@ -90,6 +90,8 @@ interface GameCanvasProps {
   onIssueShopClick?: () => void;
   /** Clicking the harbour's container ship: take an issue, or sail home. */
   onHarbourShipClick?: () => void;
+  onNavyHarbourClick?: () => void;
+  onNavyShipClick?: () => void;
   onAirportClick?: () => void;
   onAirportHover?: (info?: ShipHoverInfo) => void;
   onSelectBuilding?: (building?: Building) => void;
@@ -131,6 +133,8 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
       onAirportArrivalComplete,
       onIssueShopClick,
       onHarbourShipClick,
+      onNavyHarbourClick,
+      onNavyShipClick,
       onAirportClick,
       onAirportHover,
       onSelectBuilding,
@@ -155,6 +159,8 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
     const airportArrivalCompleteRef = useRef(onAirportArrivalComplete);
     const issueShopClickRef = useRef(onIssueShopClick);
     const harbourShipClickRef = useRef(onHarbourShipClick);
+    const navyHarbourClickRef = useRef(onNavyHarbourClick);
+    const navyShipClickRef = useRef(onNavyShipClick);
     const cityIdRef = useRef(cityId);
     const worldKeyRef = useRef(worldKey);
     const initialWorldReadyRef = useRef(false);
@@ -195,6 +201,8 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
     airportArrivalCompleteRef.current = onAirportArrivalComplete;
     issueShopClickRef.current = onIssueShopClick;
     harbourShipClickRef.current = onHarbourShipClick;
+    navyHarbourClickRef.current = onNavyHarbourClick;
+    navyShipClickRef.current = onNavyShipClick;
     cityIdRef.current = cityId;
     worldKeyRef.current = worldKey;
     initialWorldReadyCallbackRef.current = onInitialWorldReady;
@@ -388,19 +396,21 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
       const host = hostRef.current;
       const scene = new WorldScene();
       scene.setSelectionListener((building) => selectRef.current?.(building));
-      scene.setShipHoverListener((info) => shipHoverRef.current?.(info));
-      scene.setShipClickListener(beginTravel);
+
       scene.setAirportHoverListener((info) =>
         (airportHoverRef.current ?? shipHoverRef.current)?.(info),
       );
       scene.setAirportClickListener(() => airportClickRef.current?.());
-      // The issue market is reached through the harbour: the PORT sign, or the
-      // container ship herself. In an issue city clicking her sails home.
       scene.setHarbourSignClickListener(() => issueShopClickRef.current?.());
       scene.setHarbourShipHoverListener((info) =>
         (airportHoverRef.current ?? shipHoverRef.current)?.(info),
       );
       scene.setHarbourShipClickListener(() => harbourShipClickRef.current?.());
+      scene.setNavySignClickListener(() => navyHarbourClickRef.current?.());
+      scene.setNavyShipHoverListener((info) =>
+        (airportHoverRef.current ?? shipHoverRef.current)?.(info),
+      );
+      scene.setNavyShipClickListener(() => navyShipClickRef.current?.());
       scene.setBuildingDragListener((building) => {
         draggingBuildingRef.current = building;
         const source = scene.getBuildingPreviewSource(building);
