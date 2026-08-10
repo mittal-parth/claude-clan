@@ -233,6 +233,7 @@ export class Workspace {
   private readonly registry = new CityRegistry();
   private readonly githubClient: GitHubClient;
   private readonly githubToken: string | undefined;
+  private viewerLoginValue: string | undefined;
   private readonly remainingBudget: () => number;
   private readonly onEvent: WorkspaceOptions["onEvent"];
   private readonly onCitiesChanged: WorkspaceOptions["onCitiesChanged"];
@@ -270,7 +271,20 @@ export class Workspace {
       spentUsd: 0,
     });
     await workspace.refreshRoster();
+    workspace.viewerLoginValue = await workspace.githubClient
+      .viewerLogin(workspace.githubToken)
+      .catch(() => undefined);
     return workspace;
+  }
+
+  /**
+   * The GitHub login behind this workspace's credential -- the signed-in
+   * user's for a personal workspace, or the shared demo's local
+   * GITHUB_TOKEN's for the demo. Lets the client tell its own PRs apart
+   * from ones to review even when nobody signed in through the app.
+   */
+  viewerLogin(): string | undefined {
+    return this.viewerLoginValue;
   }
 
   touch(): void {

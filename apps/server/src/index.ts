@@ -175,6 +175,7 @@ function sendOverlay(socket: WebSocket, workspace: Workspace, cityId: CityId): v
 function sendWorkspaceState(socket: WebSocket, workspace: Workspace, cityId: CityId): void {
   send(socket, { kind: "cities", cities: workspace.summaries() });
   send(socket, { kind: "issues", issues: workspace.listIssues() });
+  send(socket, { kind: "viewer", login: workspace.viewerLogin() });
   sendWorld(socket, workspace, cityId);
   sendOverlay(socket, workspace, cityId);
 }

@@ -41,6 +41,13 @@ export interface GitHubClient {
     event: ReviewEvent,
     overrideToken?: string,
   ): Promise<void>;
+  /**
+   * The GitHub login behind whichever credential is fetching PRs. Lets a
+   * visitor who never signed in through the app (the shared demo workspace,
+   * running on a local GITHUB_TOKEN) still be told apart from every other
+   * PR's author. Undefined when there's no credential to ask.
+   */
+  viewerLogin(overrideToken?: string): Promise<string | undefined>;
 }
 
 interface RawPullRequest {
@@ -281,6 +288,21 @@ export class GitHubApiClient implements GitHubClient {
       throw new Error(`GitHub API ${response.status} posting review`);
     }
   }
+
+  async viewerLogin(overrideToken?: string): Promise<string | undefined> {
+    const token = overrideToken ?? this.token;
+    if (!token) {
+      return undefined;
+    }
+    const response = await fetch("https://api.github.com/user", {
+      headers: this.headers(overrideToken),
+    });
+    if (!response.ok) {
+      return undefined;
+    }
+    const body = (await response.json()) as { login?: string };
+    return body.login;
+  }
 }
 
 export class GhCliClient implements GitHubClient {
@@ -331,6 +353,15 @@ export class GhCliClient implements GitHubClient {
       ["pr", "review", String(number), reviewEventFlag(event), "--body", body],
       { cwd: repoPath },
     );
+  }
+
+  async viewerLogin(): Promise<string | undefined> {
+    try {
+      const { stdout } = await execFileAsync("gh", ["api", "user", "--jq", ".login"]);
+      return stdout.trim() || undefined;
+    } catch {
+      return undefined;
+    }
   }
 }
 

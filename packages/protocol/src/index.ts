@@ -280,6 +280,17 @@ export const ServerMessageSchema = z.discriminatedUnion("kind", [
     cities: z.array(CitySummarySchema),
   }),
   z.object({
+    kind: z.literal("viewer"),
+    /**
+     * The GitHub login behind whichever credential the workspace lists PRs
+     * with. Set even when the visitor never signed in through the app --
+     * the shared demo workspace runs on a local GITHUB_TOKEN with its own
+     * identity -- so the client can still tell its own PRs apart from ones
+     * to review. Absent when there's no credential to ask.
+     */
+    login: z.string().min(1).optional(),
+  }),
+  z.object({
     kind: z.literal("issues"),
     issues: z.array(IssueSchema),
   }),

@@ -179,8 +179,6 @@ export const DIFF_SCAFFOLD_HEIGHT = 140;
 /** Wider than a tile: the cage stands clear of the walls it wraps. */
 export const DIFF_SCAFFOLD_WIDTH = TILE_WIDTH + 8;
 
-/** The harbor marker for a PR city, moored offshore of the main island. */
-export const SHIP_KEY = "fx:ship";
 /** A clickable marketplace building where the mayor can pick an issue to fix. */
 export const ISSUE_SHOP_KEY = "fx:issue-shop";
 /** Half-footprint of the issue shop, in tiles -- it spans a 2x2 block so it reads as a landmark beside the harbour rather than another house. */
@@ -330,6 +328,18 @@ export const HARBOUR_SHIP_BAY_OFFSETS = HARBOUR_SHIP_KEYS.map((_unused, index) =
 function shipHeadingAngle(index: number): number {
   return (index / SHIP_HEADING_FRAMES) * Math.PI * 2;
 }
+
+/**
+ * A small wooden sailboat, baked across the same 24 headings as the harbour
+ * fleet. Purely decorative: it plays no part in PR or issue travel, and just
+ * tacks a slow loop through open water around the island for atmosphere.
+ */
+export const WOODEN_SHIP_KEYS = Array.from(
+  { length: SHIP_HEADING_FRAMES },
+  (_unused, index) => `fx:wooden-ship:${index}`,
+);
+export const WOODEN_SHIP_KEY = WOODEN_SHIP_KEYS[0]!;
+export const WOODEN_SHIP_ANCHOR_Y = 42;
 /**
  * Container stacks. Same three-box arrangement every time, repainted per
  * variant, so a yard of them reads as one operation rather than a jumble.
@@ -510,7 +520,7 @@ export function bakeTerrainTextures(scene: Phaser.Scene): void {
   bakeSmoke(baker);
   bakeSparkle(baker);
   CAR_KEYS.forEach((key, index) => bakeCar(baker, key, index));
-  bakeShip(baker);
+  WOODEN_SHIP_KEYS.forEach((key, index) => bakeWoodenShip(baker, key, index));
   bakeIssueShop(baker);
   bakeAirportApron(baker);
   bakeAirportTaxiway(baker, AIRPORT_TAXIWAY_VERTICAL_KEY, false);
@@ -981,69 +991,141 @@ function bakeCar(baker: Baker, key: string, index: number): void {
   baker.finish(key, TILE_WIDTH, CAR_TEXTURE_HEIGHT);
 }
 
-const SHIP_HEIGHT = 88;
-/** Tile-anchored the same way as every prop: origin (0.5, 1) at the tile's bottom corner. */
-const SHIP_ORIGIN_Y = SHIP_HEIGHT - TILE_ANCHOR_Y;
+const WOODEN_SHIP_CANVAS = 140;
 
-function bakeShip(baker: Baker): void {
-  const base = baker.at([0, 0, 0], HALF_W, SHIP_ORIGIN_Y);
+/**
+ * A small single-mast sailboat, authored bow toward -v like every other
+ * heading-baked hull, and turned the same way: rotating (u, v) about her
+ * centre swings the bow round while z -- so mast and sail height -- is left
+ * alone. See bakeHarbourContainerShip for why this is baked per heading
+ * rather than done with setRotation.
+ */
+function bakeWoodenShip(source: Baker, key: string, frame: number): void {
+  const width = WOODEN_SHIP_CANVAS;
+  const height = WOODEN_SHIP_CANVAS;
+  const originX = width / 2;
+  const originY = height - WOODEN_SHIP_ANCHOR_Y;
+  const deck = 8;
 
-  baker.graphics.fillStyle(0xffffff, 0.3);
-  baker.graphics.fillEllipse(base.x, base.y + 3, 44, 10);
+  const angle = shipHeadingAngle(frame);
+  const cos = Math.cos(angle);
+  const sin = Math.sin(angle);
+  const baker: Baker =
+    frame === 0
+      ? source
+      : {
+          ...source,
+          at: (point, ox, oy) =>
+            source.at(
+              [
+                point[0] * cos - point[1] * sin,
+                point[0] * sin + point[1] * cos,
+                point[2],
+              ],
+              ox,
+              oy,
+            ),
+        };
 
-  baker.graphics.fillStyle(0x8a5a34, 1);
-  baker.graphics.fillTriangle(
-    base.x - 22,
-    base.y - 6,
-    base.x + 22,
-    base.y - 6,
-    base.x + 15,
-    base.y + 5,
+  const hullColor = 0x8a5a34;
+  const bootColor = shade(hullColor, -30);
+  const sailColor = 0xf3ead8;
+
+  /** A face's outward normal, turned with the hull -- lighting stays fixed to the world. */
+  const facing = (nu: number, nv: number, color: number): number => {
+    const length = Math.hypot(nu, nv) || 1;
+    const u = (nu * cos - nv * sin) / length;
+    const v = (nu * sin + nv * cos) / length;
+    return shade(color, Math.round(10 * v - 30 * u));
+  };
+
+  // Starboard sheer, bow to stern; mirrored below for a closed hull with a
+  // small flat transom rather than a pointed stern.
+  const sheer: ReadonlyArray<readonly [number, number]> = [
+    [0, -0.55],
+    [0.12, -0.35],
+    [0.15, -0.05],
+    [0.15, 0.22],
+    [0.1, 0.4],
+  ];
+  const outline: ReadonlyArray<readonly [number, number]> = [
+    ...sheer,
+    ...[...sheer].reverse().map(([u, v]) => [-u, v] as const).slice(0, -1),
+  ];
+
+  const waterline = baker.at([0, 0, 0], originX, originY);
+  baker.graphics.fillStyle(0xffffff, 0.22);
+  baker.graphics.fillEllipse(waterline.x + 4, waterline.y + 3, 46, 12);
+
+  // Hull plating: drop every edge of the outline to the waterline, then a
+  // darker boot-topping band along the same run.
+  for (let index = 0; index < outline.length; index += 1) {
+    const [u0, v0] = outline[index]!;
+    const [u1, v1] = outline[(index + 1) % outline.length]!;
+    const normalU = v1 - v0;
+    const normalV = -(u1 - u0);
+    fillFace(
+      baker,
+      facing(normalU, normalV, hullColor),
+      1,
+      [[u0, v0, deck], [u1, v1, deck], [u1, v1, 0], [u0, v0, 0]],
+      originX,
+      originY,
+    );
+    fillFace(
+      baker,
+      facing(normalU, normalV, bootColor),
+      1,
+      [[u0, v0, 3], [u1, v1, 3], [u1, v1, 0], [u0, v0, 0]],
+      originX,
+      originY,
+    );
+  }
+
+  // Weather deck.
+  fillFace(
+    baker,
+    shade(hullColor, 16),
+    1,
+    outline.map(([u, v]) => [u, v, deck] as Point3),
+    originX,
+    originY,
   );
-  baker.graphics.fillTriangle(
-    base.x - 22,
-    base.y - 6,
-    base.x - 15,
-    base.y + 5,
-    base.x + 15,
-    base.y + 5,
-  );
-  baker.graphics.fillStyle(shade(0x8a5a34, -18), 1);
-  baker.graphics.fillRect(base.x - 22, base.y - 10, 44, 5);
 
-  baker.graphics.fillStyle(0x4a3220, 1);
-  baker.graphics.fillRect(base.x - 1, base.y - 48, 2, 40);
+  // Mast: always a straight vertical screen line at any heading, since z
+  // never shifts a projected point's x.
+  harbourPost(baker, originX, originY, 0, -0.05, deck, deck + 46, 2, 0x4a3220);
 
-  baker.graphics.fillStyle(0xf3ead8, 1);
-  baker.graphics.fillTriangle(
-    base.x,
-    base.y - 46,
-    base.x,
-    base.y - 9,
-    base.x + 20,
-    base.y - 11,
+  // Sail, one belly to either side of the mast so the silhouette reads at
+  // every heading without needing to know which side faces the viewer.
+  fillFace(
+    baker,
+    sailColor,
+    1,
+    [[0, -0.05, deck + 44], [0, -0.05, deck + 9], [0.22, -0.14, deck + 27]],
+    originX,
+    originY,
   );
-  baker.graphics.fillStyle(shade(0xf3ead8, -12), 1);
-  baker.graphics.fillTriangle(
-    base.x,
-    base.y - 46,
-    base.x,
-    base.y - 9,
-    base.x - 15,
-    base.y - 13,
+  fillFace(
+    baker,
+    shade(sailColor, -14),
+    1,
+    [[0, -0.05, deck + 44], [0, -0.05, deck + 9], [-0.22, -0.14, deck + 27]],
+    originX,
+    originY,
   );
 
-  baker.graphics.fillStyle(0xd94f4f, 1);
-  baker.graphics.fillTriangle(
-    base.x,
-    base.y - 48,
-    base.x,
-    base.y - 42,
-    base.x + 9,
-    base.y - 45,
+  // Pennant at the masthead.
+  fillFace(
+    baker,
+    0xd94f4f,
+    1,
+    [[0, -0.05, deck + 46], [0, -0.05, deck + 40], [0.09, -0.09, deck + 43]],
+    originX,
+    originY,
   );
 
-  baker.finish(SHIP_KEY, TILE_WIDTH, SHIP_HEIGHT);
+  baker.finish(key, width, height);
 }
 
 /**

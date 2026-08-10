@@ -18,8 +18,13 @@ import {
   TILE_ANCHOR_Y,
   TILE_HEIGHT,
   TILE_WIDTH,
+  WOODEN_SHIP_ANCHOR_Y,
+  WOODEN_SHIP_KEYS,
 } from "./textures";
 import {
+  COAST_RING,
+  COUNTRYSIDE_RING,
+  OUTER_RING,
   ROAD_EAST,
   ROAD_NORTH,
   ROAD_SOUTH,
@@ -30,6 +35,17 @@ const MAX_CARS = 20;
 const MAX_CLOUDS = 7;
 const MAX_SPARKLES = 40;
 const MAX_SMOKE_EMITTERS = 24;
+/** Purely decorative -- these never carry a PR or an issue anywhere. */
+const MAX_WOODEN_SHIPS = 7;
+/**
+ * Milliseconds for the slowest ship to complete one lap; the fastest is
+ * still comfortably becalmed. Ambient, not a race -- they should read as
+ * barely moving on a long glance.
+ */
+const WOODEN_SHIP_LAP_MS = 900_000;
+const WOODEN_SHIP_LAP_JITTER_MS = 300_000;
+/** How far inset from each corner the turn starts, as a fraction of that leg. */
+const WOODEN_SHIP_CORNER_INSET = 0.18;
 
 /** Milliseconds a car takes to cross one tile. */
 const CAR_TILE_MS = 900;
@@ -46,6 +62,16 @@ interface Car {
   from?: TerrainCell;
 }
 
+/** One leg of a wooden ship's lap, in grid space. */
+type ShipLeg =
+  | { kind: "line"; from: readonly [number, number]; to: readonly [number, number] }
+  | {
+      kind: "quad";
+      from: readonly [number, number];
+      control: readonly [number, number];
+      to: readonly [number, number];
+    };
+
 export function prefersReducedMotion(): boolean {
   return (
     typeof window !== "undefined" &&
@@ -60,6 +86,8 @@ export class AmbientLife {
   private traffic?: Phaser.GameObjects.Container;
   private clouds: Phaser.GameObjects.Sprite[] = [];
   private sparkles: Phaser.GameObjects.Sprite[] = [];
+  private woodenShips: Phaser.GameObjects.Sprite[] = [];
+  private woodenShipTweens: Phaser.Tweens.Tween[] = [];
   /**
    * Keyed by the building sprite a plume belongs to, so a demolished
    * building's smoke can be released individually via releaseSmoke rather
@@ -94,6 +122,7 @@ export class AmbientLife {
     this.spawnCars(terrain);
     this.spawnClouds(terrain);
     this.spawnSparkles(terrain);
+    this.spawnWoodenShips(terrain);
   }
 
   /** Hooks a capped smoke plume onto a utility building's chimney. */
@@ -162,11 +191,19 @@ export class AmbientLife {
     for (const emitter of this.smokeBySprite.values()) {
       emitter.destroy();
     }
+    for (const tween of this.woodenShipTweens) {
+      tween.remove();
+    }
+    for (const ship of this.woodenShips) {
+      ship.destroy();
+    }
     this.cars = [];
     this.carTimers = [];
     this.clouds = [];
     this.sparkles = [];
     this.smokeBySprite.clear();
+    this.woodenShips = [];
+    this.woodenShipTweens = [];
   }
 
   // -------------------------------------------------------------------------
@@ -343,6 +380,148 @@ export class AmbientLife {
       });
     }
   }
+
+  /**
+   * Wooden ships tack a slow rounded-rectangle lap through open water, well
+   * past the coast, each at a different distance out so they never collide.
+   * They carry nothing and are not interactive.
+   */
+  private spawnWoodenShips(terrain: TerrainGrid): void {
+    const cityMaxX = terrain.bounds.maxX - OUTER_RING;
+    const cityMaxY = terrain.bounds.maxY - OUTER_RING;
+    const baseMargin = COUNTRYSIDE_RING + COAST_RING;
+
+    for (let index = 0; index < MAX_WOODEN_SHIPS; index += 1) {
+      // Spread across the ocean ring, closest ship a few tiles off the sand,
+      // furthest still short of the hard camera edge.
+      const margin = baseMargin + 3 + index * 1.4;
+      const corners: Array<readonly [number, number]> = [
+        [-margin, -margin],
+        [cityMaxX + margin, -margin],
+        [cityMaxX + margin, cityMaxY + margin],
+        [-margin, cityMaxY + margin],
+      ];
+      const legs = buildShipLoop(corners);
+
+      const seed = hashCoords(index, index * 5, 0x5417);
+      const duration = WOODEN_SHIP_LAP_MS + (seed % WOODEN_SHIP_LAP_JITTER_MS);
+      const startT = index / MAX_WOODEN_SHIPS;
+
+      const start = sampleShipLoop(legs, startT);
+      const point = this.projection.project(start.p[0], start.p[1]);
+      const sprite = this.scene.add
+        .sprite(point.x, point.y + WOODEN_SHIP_ANCHOR_Y, WOODEN_SHIP_KEYS[0]!)
+        .setOrigin(0.5, 1)
+        .setDepth(this.projection.depth(start.p[0], start.p[1]));
+      this.woodenShips.push(sprite);
+
+      const state = { t: startT };
+      const tween = this.scene.tweens.add({
+        targets: state,
+        t: startT + 1,
+        duration,
+        repeat: -1,
+        ease: "Linear",
+        onUpdate: () => this.poseWoodenShip(sprite, legs, state.t % 1),
+      });
+      this.woodenShipTweens.push(tween);
+    }
+  }
+
+  private poseWoodenShip(
+    sprite: Phaser.GameObjects.Sprite,
+    legs: readonly ShipLeg[],
+    t: number,
+  ): void {
+    const { p, heading } = sampleShipLoop(legs, t);
+    const point = this.projection.project(p[0], p[1]);
+    sprite
+      .setPosition(point.x, point.y + WOODEN_SHIP_ANCHOR_Y)
+      .setDepth(this.projection.depth(p[0], p[1]));
+
+    // Bow is authored toward -v at frame 0 (see bakeWoodenShip): a bow
+    // pointing along unit heading (du, dv) needs sin(theta) = du,
+    // cos(theta) = -dv.
+    const count = WOODEN_SHIP_KEYS.length;
+    const turns = Math.atan2(heading[0], -heading[1]) / (Math.PI * 2);
+    const frame = ((Math.round(turns * count) % count) + count) % count;
+    const key = WOODEN_SHIP_KEYS[frame]!;
+    if (sprite.texture.key !== key) {
+      sprite.setTexture(key);
+    }
+  }
+}
+
+/**
+ * Rounds the four corners of a rectangle into a closed course: a straight
+ * leg into each corner, then a quadratic bend around it (the corner point
+ * itself is the control point) into the next straight leg. See the
+ * isometric-animation skill on why a turn belongs in the path, not a snap.
+ */
+function buildShipLoop(
+  corners: readonly (readonly [number, number])[],
+): ShipLeg[] {
+  const lerp = (
+    a: readonly [number, number],
+    b: readonly [number, number],
+    t: number,
+  ): readonly [number, number] => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
+
+  const entries = corners.map((corner, index) =>
+    lerp(corners[(index + 3) % corners.length]!, corner, 1 - WOODEN_SHIP_CORNER_INSET),
+  );
+  const exits = corners.map((corner, index) =>
+    lerp(corner, corners[(index + 1) % corners.length]!, WOODEN_SHIP_CORNER_INSET),
+  );
+
+  const legs: ShipLeg[] = [];
+  for (let index = 0; index < corners.length; index += 1) {
+    const from = exits[(index + corners.length - 1) % corners.length]!;
+    legs.push({ kind: "line", from, to: entries[index]! });
+    legs.push({
+      kind: "quad",
+      from: entries[index]!,
+      control: corners[index]!,
+      to: exits[index]!,
+    });
+  }
+  return legs;
+}
+
+/** Position and unit travel direction at fraction `t` (wraps) around the loop. */
+function sampleShipLoop(
+  legs: readonly ShipLeg[],
+  t: number,
+): { p: readonly [number, number]; heading: readonly [number, number] } {
+  const wrapped = ((t % 1) + 1) % 1;
+  const scaled = wrapped * legs.length;
+  const index = Math.min(legs.length - 1, Math.floor(scaled));
+  const local = scaled - index;
+  const leg = legs[index]!;
+
+  if (leg.kind === "line") {
+    const dx = leg.to[0] - leg.from[0];
+    const dy = leg.to[1] - leg.from[1];
+    const length = Math.hypot(dx, dy) || 1;
+    return {
+      p: [leg.from[0] + dx * local, leg.from[1] + dy * local],
+      heading: [dx / length, dy / length],
+    };
+  }
+
+  const { from, control, to } = leg;
+  const u = local;
+  const a = (1 - u) ** 2;
+  const b = 2 * (1 - u) * u;
+  const c = u ** 2;
+  const p: readonly [number, number] = [
+    a * from[0] + b * control[0] + c * to[0],
+    a * from[1] + b * control[1] + c * to[1],
+  ];
+  const dx = 2 * (1 - u) * (control[0] - from[0]) + 2 * u * (to[0] - control[0]);
+  const dy = 2 * (1 - u) * (control[1] - from[1]) + 2 * u * (to[1] - control[1]);
+  const length = Math.hypot(dx, dy) || 1;
+  return { p, heading: [dx / length, dy / length] };
 }
 
 /** Decodes a road cell's connectivity mask into grid-space direction steps. */
