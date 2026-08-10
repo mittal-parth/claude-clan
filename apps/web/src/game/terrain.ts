@@ -8,7 +8,14 @@
  * even lane inside a district is guaranteed free.
  */
 
-import type { DistrictRect, WorldSnapshot } from "@sudo-city/protocol";
+import {
+  capitolDistrict,
+  capitolFits,
+  type CapitolDistrict,
+  type DistrictRect,
+  type WorldSnapshot,
+} from "@sudo-city/protocol";
+import { capitolCell } from "./capitol";
 import { chance, hashCoords, mod, pickIndex, unitFloat } from "./hash";
 
 export const COUNTRYSIDE_RING = 6;
@@ -25,7 +32,21 @@ export const OUTER_RING = COUNTRYSIDE_RING + COAST_RING + OCEAN_RING;
  */
 export const BLOCK_STRIDE = 6;
 
-export type TerrainKind = "water" | "sand" | "grass" | "ground" | "road" | "park";
+/**
+ * "plaza" is paving: the apron around the capitol and the walk that carries it
+ * out to the boulevard. It is a terrain kind rather than something baked into
+ * the capitol's own texture so that the paving comes from the same atlas as
+ * every other tile — it batches with them, and it can never drift out of
+ * alignment with the road it runs into.
+ */
+export type TerrainKind =
+  | "water"
+  | "sand"
+  | "grass"
+  | "ground"
+  | "road"
+  | "park"
+  | "plaza";
 
 export type PropKind = "tree" | "pine" | "bush" | "rock" | "fountain";
 
@@ -38,6 +59,13 @@ export interface TerrainCell {
   /** 4-bit N/E/S/W neighbour mask; only meaningful when kind is "road". */
   roadMask: number;
   prop?: PropKind;
+  /**
+   * Planting that belongs to a designed layout rather than to scatter, and so
+   * is exempt from the decoration budget. Thinning the capitol's avenue of
+   * trees to a quota would delete half of it at random and destroy the
+   * symmetry that makes the mall read as a mall.
+   */
+  keepProp?: boolean;
 }
 
 export interface TerrainBounds {
@@ -153,9 +181,15 @@ export function buildTerrain(snapshot: WorldSnapshot): TerrainGrid {
   const cells: TerrainCell[] = [];
   const byKey = new Map<string, TerrainCell>();
 
+  // The mall outranks every other classifier: its reserve is already excluded
+  // from plot allocation, so nothing it overwrites was ever going to be built.
+  const mall = capitolFits(snapshot.size)
+    ? capitolDistrict(snapshot.size)
+    : undefined;
+
   for (let y = bounds.minY; y <= bounds.maxY; y += 1) {
     for (let x = bounds.minX; x <= bounds.maxX; x += 1) {
-      const cell = classify(x, y, width, height, occupied, districtAt);
+      const cell = classify(x, y, width, height, occupied, districtAt, mall);
       cells.push(cell);
       byKey.set(cellKey(x, y), cell);
     }
@@ -182,8 +216,14 @@ function classify(
   height: number,
   occupied: ReadonlySet<string>,
   districtAt: ReadonlyMap<string, DistrictRect>,
+  mall: CapitolDistrict | undefined,
 ): TerrainCell {
   const raw = distanceOutsideCity(x, y, width, height);
+
+  const mallCell = mall && capitolCell(mall, x, y);
+  if (mallCell) {
+    return mallCell;
+  }
 
   if (raw === 0) {
     return classifyCity(x, y, occupied, districtAt);
