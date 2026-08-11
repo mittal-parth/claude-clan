@@ -16,12 +16,16 @@ import {
   type WorldSnapshot,
 } from "@sudo-city/protocol";
 import { capitolCell } from "./capitol";
+import { createPortRoads, type PortRoadPlan } from "./portRoads";
+import { COAST_RING, COUNTRYSIDE_RING, OUTER_RING } from "./rings";
 import { chance, hashCoords, mod, pickIndex, unitFloat } from "../math/hash";
 
-export const COUNTRYSIDE_RING = 6;
-export const COAST_RING = 2;
-export const OCEAN_RING = 12;
-export const OUTER_RING = COUNTRYSIDE_RING + COAST_RING + OCEAN_RING;
+export {
+  COUNTRYSIDE_RING,
+  COAST_RING,
+  OCEAN_RING,
+  OUTER_RING,
+} from "./rings";
 
 /**
  * Streets every 6 lanes. Free lanes inside a district sit at even offsets and
@@ -132,6 +136,37 @@ function distanceOutsideCity(
 }
 
 /**
+ * Distance from the city with the shoreline's wander applied — the number the
+ * ring classifier actually thresholds against.
+ *
+ * The dock road has to ask the same question ("is this cell dry?") before it
+ * lays a tile, and it has to get the same answer: computing the jitter twice
+ * from two call sites is how a road ends up laid across a cell that classify()
+ * then insists is open water.
+ */
+function shoreDistance(
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+): number {
+  const raw = distanceOutsideCity(x, y, width, height);
+  if (raw === 0) {
+    return 0;
+  }
+  // Jitter the shoreline so the island is not a rounded rectangle. Only ever
+  // applied outside the city, so it can never erode buildable ground -- and
+  // damped to nothing along the port frontage, where it would otherwise leave
+  // sand standing through a quay and under a moored hull.
+  return (
+    raw +
+    (unitFloat(hashCoords(x, y, 0x5ea)) - 0.5) *
+      SHORE_JITTER *
+      shoreJitterScale(x, y, width, height)
+  );
+}
+
+/**
  * Indexes districts by integer cell. Districts tile the field exactly, so
  * assigning by cell centre gives each cell exactly one owner.
  */
@@ -187,9 +222,22 @@ export function buildTerrain(snapshot: WorldSnapshot): TerrainGrid {
     ? capitolDistrict(snapshot.size)
     : undefined;
 
+  // The dock road is planned before any cell is classified because it is a
+  // route, not a per-cell rule: it has to be walked end to end to know where
+  // it runs out of dry land.
+  const ports = createPortRoads({
+    width,
+    height,
+    isLand: (x, y) => shoreDistance(x, y, width, height) <= COUNTRYSIDE_RING + COAST_RING,
+    isCityRoad: (x, y) => {
+      const district = districtAt.get(cellKey(x, y));
+      return district !== undefined && isRoadLane(district, x, y);
+    },
+  });
+
   for (let y = bounds.minY; y <= bounds.maxY; y += 1) {
     for (let x = bounds.minX; x <= bounds.maxX; x += 1) {
-      const cell = classify(x, y, width, height, occupied, districtAt, mall);
+      const cell = classify(x, y, width, height, occupied, districtAt, mall, ports);
       cells.push(cell);
       byKey.set(cellKey(x, y), cell);
     }
@@ -217,27 +265,25 @@ function classify(
   occupied: ReadonlySet<string>,
   districtAt: ReadonlyMap<string, DistrictRect>,
   mall: CapitolDistrict | undefined,
+  ports: PortRoadPlan,
 ): TerrainCell {
-  const raw = distanceOutsideCity(x, y, width, height);
-
   const mallCell = mall && capitolCell(mall, x, y);
   if (mallCell) {
     return mallCell;
   }
 
-  if (raw === 0) {
+  if (distanceOutsideCity(x, y, width, height) === 0) {
     return classifyCity(x, y, occupied, districtAt);
   }
 
-  // Jitter the shoreline so the island is not a rounded rectangle. Only ever
-  // applied outside the city, so it can never erode buildable ground -- and
-  // damped to nothing along the port frontage, where it would otherwise leave
-  // sand standing through a quay and under a moored hull.
-  const distance =
-    raw +
-    (unitFloat(hashCoords(x, y, 0x5ea)) - 0.5) *
-      SHORE_JITTER *
-      shoreJitterScale(x, y, width, height);
+  // The dock road is only ever consulted outside the field, below the city
+  // branch above: it runs from the city edge out to the two aprons and must
+  // never be in a position to pave over a plot.
+  if (ports.has(x, y)) {
+    return { x, y, kind: "road", variant: 0, roadMask: 0 };
+  }
+
+  const distance = shoreDistance(x, y, width, height);
 
   if (distance <= COUNTRYSIDE_RING) {
     return grassCell(x, y, 0x7ee);

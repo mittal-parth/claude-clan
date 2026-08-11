@@ -1,4 +1,6 @@
 import {
+  CAPITOL_MIN_FIELD_HEIGHT,
+  CAPITOL_MIN_FIELD_WIDTH,
   capitolDistrict,
   capitolFits,
   type Building,
@@ -42,7 +44,17 @@ interface WeightedDistrict {
   weight: number;
 }
 
-const MIN_SIZE = 12;
+/**
+ * The floor is the capitol's, not a round number: the field is square, so it
+ * has to clear the wider of the mall's two minimums or capitolFits() is false
+ * and the city has no capitol at all.
+ *
+ * That was the bug. A field sized purely from the file count bottomed out at
+ * 12 tiles — narrower than the reserve itself — so every repository below
+ * about fifty files rendered with no monument in the middle of it, which is
+ * exactly the case where the city most needs a landmark to look inhabited.
+ */
+const MIN_SIZE = Math.max(CAPITOL_MIN_FIELD_WIDTH, CAPITOL_MIN_FIELD_HEIGHT);
 
 /**
  * Plots sit on odd lanes with a stride of 2, so a file needs about four cells.
@@ -54,9 +66,12 @@ const MIN_SIZE = 12;
  * empty grid, and a large one from overflowing it.
  */
 export function fieldSizeFor(fileCount: number): number {
-  const side = Math.ceil(Math.sqrt(Math.max(fileCount, 1)) * 3.2);
+  const side = Math.max(
+    MIN_SIZE,
+    Math.ceil(Math.sqrt(Math.max(fileCount, 1)) * 3.2),
+  );
   // Even sizes keep district origins aligned with the odd-lane plot grid.
-  return Math.max(MIN_SIZE, side + (side % 2));
+  return side + (side % 2);
 }
 
 export function layoutWorld(

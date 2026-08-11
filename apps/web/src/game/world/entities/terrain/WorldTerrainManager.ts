@@ -11,6 +11,7 @@ import {
 } from "../../core/worldConstants";
 import { nearShore, tileKeyFor, type ScreenPoint } from "../../core/worldMath";
 import { worldToScreen } from "../../utils/hitZoneUtils";
+import { isCanvasPointer } from "../../utils/pointerUtils";
 import type { TerrainGrid } from "../../../layouts/terrain";
 import { TERRAIN_ATLAS_KEY } from "../../../textures/terrain";
 import { TILE_ANCHOR_Y } from "../../../textures/core";
@@ -135,7 +136,8 @@ export class WorldTerrainManager {
     });
 
     capitol.on("pointerout", () => this.scheduleHideCapitolHover());
-    capitol.on("pointerdown", () => {
+    capitol.on("pointerdown", (pointer: Phaser.Input.Pointer) => {
+      if (!isCanvasPointer(pointer)) return;
       if (this.isTravelTransitionActive()) return;
       playUiClickSound();
       this.cancelCapitolHoverHide();

@@ -12,6 +12,7 @@ import {
   HIGHLIGHT_KEY,
 } from "../core/worldConstants";
 import { wheelSteps } from "../core/worldMath";
+import { isCanvasPointer } from "../utils/pointerUtils";
 import type { AirportLayout } from "../../layouts/airport";
 import type { TerrainCell, TerrainGrid } from "../../layouts/terrain";
 import { TILE_HEIGHT, TILE_WIDTH, TILE_ANCHOR_Y } from "../../textures/core";
@@ -278,6 +279,10 @@ export class WorldCameraController {
   bindCamera(): void {
     this.scene.input.on("pointerdown", (pointer: Phaser.Input.Pointer) => {
       if (this.isTravelTransitionActive()) return;
+      // A press on the HUD, a dialog or the login card is not a press on the
+      // city -- see isCanvasPointer. Starting a camera drag from one made the
+      // world lurch under a dialog the moment the mouse moved.
+      if (!isCanvasPointer(pointer)) return;
       this.dragOrigin = { x: pointer.x, y: pointer.y };
       this.pressOrigin = { x: pointer.x, y: pointer.y };
       this.pressedBuilding = this.buildingAtPointer(pointer);

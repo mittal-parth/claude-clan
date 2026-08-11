@@ -394,17 +394,34 @@ export function capitolDistrict(size: WorldSize): CapitolDistrict {
 }
 
 /**
+ * The smallest field that can host the mall and still have somewhere to build.
+ *
+ * The reserve itself, plus nine tiles of slack in each axis — a block and a
+ * half of city on every side, which is the least that keeps the monument
+ * reading as standing *in* a town rather than as the town.
+ *
+ * fieldSizeFor() floors the city at these, so every repository gets a capitol
+ * however few files it has. Before it did, a field was sized purely from the
+ * file count and small repos came out at the 12-tile minimum — under the
+ * reserve's own width, so capitolFits() was false and the capitol was simply
+ * absent from every repository below about fifty files.
+ */
+export const CAPITOL_MIN_FIELD_WIDTH = CAPITOL_HALF_U * 2 + 9;
+export const CAPITOL_MIN_FIELD_HEIGHT =
+  CAPITOL_HALF_V + CAPITOL_FRONT_EXTENT_V + 9;
+
+/**
  * Whether a field is big enough to give the reserve away.
  *
- * A twelve-tile city is smaller than the mall, and reserving it would leave a
- * repository with nowhere to put its own buildings. Both consumers ask this
- * first, so a field that cannot host the capitol simply has no capitol rather
- * than a monument standing on top of the whole town.
+ * Both consumers ask this first, so a field that cannot host the capitol
+ * simply has no capitol rather than a monument standing on top of the whole
+ * town. It still returns false for worlds laid out before the floor above
+ * existed and served from cache, and for a PR city inheriting main's size.
  */
 export function capitolFits(size: WorldSize): boolean {
   return (
-    size.width >= CAPITOL_HALF_U * 2 + 9 &&
-    size.height >= CAPITOL_HALF_V + CAPITOL_FRONT_EXTENT_V + 9
+    size.width >= CAPITOL_MIN_FIELD_WIDTH &&
+    size.height >= CAPITOL_MIN_FIELD_HEIGHT
   );
 }
 

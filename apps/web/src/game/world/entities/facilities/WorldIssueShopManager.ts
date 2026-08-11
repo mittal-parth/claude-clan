@@ -27,6 +27,8 @@ export class WorldIssueShopManager {
   }
 
   layoutIssueShop(): void {
+    // GitHub Issue Shop Commented out, Townhall is used for issues now
+    /*
     const currentCityId = this.getCurrentCityId();
     const snapshot = this.getSnapshot();
     if (currentCityId !== "main" || !snapshot) {
@@ -48,6 +50,7 @@ export class WorldIssueShopManager {
       .setDepth(projection.depth(gx + 1, gy + 1) + 1)
       .setVisible(true);
     this.issueShop.setData("issueCount", this.issues.length);
+    */
   }
 
   clear(): void {

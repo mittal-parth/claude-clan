@@ -16,7 +16,9 @@
  * decides whether the ideal quarter-lanes leave any water between them.
  */
 
-import { COAST_RING, COUNTRYSIDE_RING } from "./terrain";
+// From rings.ts rather than terrain.ts: terrain.ts imports the dock road, which
+// imports this module, so taking the constants from terrain would close a cycle.
+import { COAST_RING, COUNTRYSIDE_RING } from "./rings";
 
 /** Depth of an apron (inland to seaward) and half its length along the coast. */
 export const COAST_QUAY_HALF_U = 1.8;

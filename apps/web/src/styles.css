@@ -711,6 +711,11 @@
   font-size: 9px;
   letter-spacing: 0.12em;
   text-transform: uppercase;
+  /* The UA gives buttons an arrow, and it wins over the pointer an enclosing
+     <a href> would otherwise supply -- which is why "LOGIN WITH GITHUB", a
+     HudButton inside a link, read as unclickable. `:disabled` overrides this
+     below. */
+  cursor: pointer;
   color: var(--hud-button-ink);
   background: var(--hud-button-fill);
   border: 1px solid var(--hud-button-edge);

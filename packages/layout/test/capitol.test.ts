@@ -76,8 +76,18 @@ describe("the capitol reserve in plot allocation", () => {
     expect(inCapitolDistrict(mall, moved!.plot.x, moved!.plot.y)).toBe(false);
   });
 
-  it("reserves nothing in a field too small to spare the block", () => {
+  it("gives even a three-file repository a field the mall fits in", () => {
     const { snapshot } = layoutWorld(crowdedWorld(3));
+
+    expect(capitolFits(snapshot.size)).toBe(true);
+    expect(snapshot.buildings).toHaveLength(3);
+  });
+
+  it("reserves nothing in a field too small to spare the block", () => {
+    // fieldSizeFor now floors the field above the reserve, so the only way to
+    // get a field this small is to be handed one: a PR city inheriting main's
+    // size, or a world laid out before that floor existed.
+    const { snapshot } = layoutWorld(crowdedWorld(3), { width: 12, height: 12 });
 
     expect(capitolFits(snapshot.size)).toBe(false);
     expect(snapshot.buildings).toHaveLength(3);
