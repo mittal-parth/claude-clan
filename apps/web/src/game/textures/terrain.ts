@@ -1,5 +1,5 @@
-import { TERRAIN_COLORS } from "../palette";
-import { TerrainKind } from "../terrain";
+import { TERRAIN_COLORS } from "../math/palette";
+import { TerrainKind } from "../layouts/terrain";
 import Phaser, { Scene } from "phaser";
 import { Baker, TILE_WIDTH, TILE_HEIGHT, HALF_W, HALF_H, fillFace, diamond, strokeFace, shade, Point3 } from "./core";
 

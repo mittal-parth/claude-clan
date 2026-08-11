@@ -1,5 +1,5 @@
 import { Baker, TILE_ANCHOR_Y, fillFace, diamond, HALF_W, shade, TILE_WIDTH, Point3 } from "./core";
-import { TERRAIN_COLORS } from "../palette";
+import { TERRAIN_COLORS } from "../math/palette";
 import { SHIP_HEADING_FRAMES, shipHeadingAngle } from "./harbour/ship";
 import { harbourPost } from "./harbour/base";
 

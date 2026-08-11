@@ -3,7 +3,7 @@ import { cn } from "@/lib/utils";
 import type { useGameState } from "@/hooks/use-game-state";
 import { HudWindow } from "./HudWindow";
 import { HudButton } from "./HudButton";
-import { paletteFor, colorToCss } from "@/game/palette";
+import { paletteFor, colorToCss } from "@/game/math/palette";
 import { colorWithAlpha } from "@/lib/app-utils";
 import { getCrewMember, effortLabel, crewSpriteUrl } from "@/crew/catalog";
 

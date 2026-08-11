@@ -1,5 +1,5 @@
 import { TILE_WIDTH, TILE_HEIGHT, Baker, shade, Point3, fillFace } from "../core";
-import { TERRAIN_COLORS } from "../../palette";
+import { TERRAIN_COLORS } from "../../math/palette";
 import { HARBOUR, harbourPost } from "../harbour/base";
 
 /**

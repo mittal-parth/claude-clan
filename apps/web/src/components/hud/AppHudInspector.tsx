@@ -2,7 +2,7 @@ import { X } from "lucide-react";
 
 import type { useGameState } from "@/hooks/use-game-state";
 import { HudWindow } from "./HudWindow";
-import { paletteFor, colorToCss } from "@/game/palette";
+import { paletteFor, colorToCss } from "@/game/math/palette";
 import { fileBasename, fileDirname } from "@/lib/app-utils";
 import { Markdown } from "@/components/markdown";
 

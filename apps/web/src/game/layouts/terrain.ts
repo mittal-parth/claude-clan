@@ -16,7 +16,7 @@ import {
   type WorldSnapshot,
 } from "@sudo-city/protocol";
 import { capitolCell } from "./capitol";
-import { chance, hashCoords, mod, pickIndex, unitFloat } from "./hash";
+import { chance, hashCoords, mod, pickIndex, unitFloat } from "../math/hash";
 
 export const COUNTRYSIDE_RING = 6;
 export const COAST_RING = 2;

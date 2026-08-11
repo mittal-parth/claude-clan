@@ -1,6 +1,6 @@
-import { HARBOUR_QUAY_HALF_U, HARBOUR_QUAY_HALF_V } from "../../harbour";
+import { HARBOUR_QUAY_HALF_U, HARBOUR_QUAY_HALF_V } from "../../layouts/harbour";
 import { TILE_HEIGHT, Baker, fillFace, shade, HALF_W, HALF_H, Point3, strokeFace, diamond, TILE_ANCHOR_Y } from "../core";
-import { TERRAIN_COLORS } from "../../palette";
+import { TERRAIN_COLORS } from "../../math/palette";
 import Phaser from "phaser";
 
 // ---------------------------------------------------------------------------

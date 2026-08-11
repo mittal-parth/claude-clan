@@ -11,7 +11,7 @@ import {
 import { createHarbourLayout } from "./harbour";
 import { createNavyHarbourLayout } from "./navyHarbour";
 import { buildTerrain } from "./terrain";
-import { portFrontageSnapshot } from "./test-support/worldSnapshot";
+import { portFrontageSnapshot } from "../test-support/worldSnapshot";
 
 describe("coastLanes", () => {
   it("puts the lighthouse mid-coast with a port centred in each half", () => {

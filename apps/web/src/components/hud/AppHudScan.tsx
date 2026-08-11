@@ -2,7 +2,7 @@ import { cn } from "@/lib/utils";
 
 import type { useGameState } from "@/hooks/use-game-state";
 import { HudWindow } from "./HudWindow";
-import { paletteFor, colorToCss } from "@/game/palette";
+import { paletteFor, colorToCss } from "@/game/math/palette";
 import { summarizeLanguages, colorWithAlpha } from "@/lib/app-utils";
 
 export interface AppHudScanProps {

@@ -1,5 +1,5 @@
 import { Baker, fillFace, strokeFace, diamond } from "../core";
-import { TERRAIN_COLORS } from "../../palette";
+import { TERRAIN_COLORS } from "../../math/palette";
 import { drawAirportLabel } from "../airport/runway";
 
 /** Airport palette shared by every surface and structure. */
