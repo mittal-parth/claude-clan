@@ -7,16 +7,11 @@
  */
 
 import Phaser from "phaser";
-import {
-  CABLE_KEY,
-  CRANE_CABLE_OFFSET,
-  CRANE_KEY,
-  HOOK_KEY,
-  SCAFFOLD_HEIGHT,
-  SCAFFOLD_KEY,
-  SMOKE_KEY,
-  TILE_ANCHOR_Y,
-} from "./textures";
+import { CABLE_KEY, CRANE_KEY, HOOK_KEY } from "./textures/crane";
+import { CRANE_CABLE_OFFSET } from "./crane";
+import { SCAFFOLD_HEIGHT, SCAFFOLD_KEY } from "./textures/scaffold";
+import { SMOKE_KEY } from "./textures/effects";
+import { TILE_ANCHOR_Y } from "./textures/core";
 
 /** Most sites shown at once; an agent editing 200 files should not spawn 200. */
 const MAX_SITES = 12;
