@@ -36,7 +36,10 @@ describe("createAirportLayout", () => {
     // and the frontage stands through whatever file owns that plot.
     for (const [width, height] of [[8, 8], [20, 14], [64, 40]] as const) {
       const layout = createAirportLayout(width, height);
-      expect(layout.terminal.x + AIRPORT_TERMINAL_HALF_U).toBeLessThan(0);
+      expect(
+        layout.terminal.x + AIRPORT_TERMINAL_HALF_U < 0 ||
+          layout.terminal.y + AIRPORT_TERMINAL_HALF_V > height - 1,
+      ).toBe(true);
       expect(layout.terminal.y + AIRPORT_TERMINAL_HALF_V).toBeLessThan(
         layout.runwayStart.y,
       );

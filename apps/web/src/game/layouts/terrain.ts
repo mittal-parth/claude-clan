@@ -22,7 +22,9 @@ import {
   type DistrictRect,
   type WorldSnapshot,
 } from "@sudo-city/protocol";
+import { isOnAirportGround } from "./airport";
 import { capitolCell } from "./capitol";
+import { isOnCoastInstallation } from "./coast";
 import { createPortRoads, type PortRoadPlan } from "./portRoads";
 import { COAST_RING, COUNTRYSIDE_RING, OUTER_RING } from "./rings";
 import { chance, hashCoords, hashText, mod, pickIndex, unitFloat } from "../math/hash";
@@ -409,7 +411,13 @@ function classify(
   const distance = shoreDistance(x, y, width, height);
 
   if (distance <= COUNTRYSIDE_RING) {
-    return grassCell(x, y, 0x7ee);
+    // The harbour, the naval base and the airport are all sprites, not
+    // terrain (see CLAUDE.md on the capitol), so nothing else stops the
+    // countryside's tree scatter from planting one on the runway or inside
+    // the naval base's own fence line.
+    const noProp =
+      isOnCoastInstallation(x, y, width, height) || isOnAirportGround(x, y, width, height);
+    return grassCell(x, y, 0x7ee, noProp);
   }
   if (distance <= COUNTRYSIDE_RING + COAST_RING) {
     return {
@@ -534,7 +542,14 @@ function parkProp(seed: number): PropKind | undefined {
   return undefined;
 }
 
-function grassCell(x: number, y: number, salt: number): TerrainCell {
+/**
+ * `noProp` keeps a tile's ground kind and colour untouched but never seeds a
+ * tree, pine, bush or rock on it -- used for the countryside tiles a coastal
+ * installation or the airport occupies, which are sprites drawn over the
+ * terrain rather than terrain cells themselves (see CLAUDE.md on the
+ * capitol), so nothing else would stop a prop growing right through one.
+ */
+function grassCell(x: number, y: number, salt: number, noProp = false): TerrainCell {
   const seed = hashCoords(x, y, salt);
   return {
     x,
@@ -542,7 +557,7 @@ function grassCell(x: number, y: number, salt: number): TerrainCell {
     kind: "grass",
     variant: pickIndex(hashCoords(x, y, salt ^ 0x11), 3),
     roadMask: 0,
-    prop: countrysideProp(seed),
+    prop: noProp ? undefined : countrysideProp(seed),
   };
 }
 

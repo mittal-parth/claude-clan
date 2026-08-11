@@ -67,8 +67,8 @@ export function createAirportLayout(width: number, height: number): AirportLayou
     MIN_AIRPORT_RUNWAY_LENGTH,
     MAX_AIRPORT_RUNWAY_LENGTH,
   );
-  const runwayStartX = -5;
-  const runwayY = safeHeight + 2.4;
+  const runwayStartX = -4.0;
+  const runwayY = safeHeight + 3.2;
   // Keep the apron junction available for arrivals while lengthening the
   // strip on both sides. Departures curve left directly to the threshold.
   const runwayEntryX = runwayStartX + 5.2;
@@ -80,25 +80,24 @@ export function createAirportLayout(width: number, height: number): AirportLayou
     runwayWidth: 1.44,
     departureThreshold: { x: runwayStartX + 0.42, y: runwayY },
     // The terminal is 5.2 tiles long and drawn from its centre, so its near
-    // end reaches x + AIRPORT_TERMINAL_HALF_U. Keeping that just short of 0
-    // is what stops the frontage from standing through a file's building on
-    // the city's west column.
-    terminal: { x: -2.82, y: safeHeight - 0.62 },
+    // end reaches x + AIRPORT_TERMINAL_HALF_U. Keeping it south of height - 1
+    // or west of x = 0 is what stops the frontage from standing through a building.
+    terminal: { x: -1.8, y: safeHeight - 0.12 },
     // Off the terminal's near end, on the extended tarmac. Screen-right means
     // +x, and y stays past the field's last row so the tower is outside the
     // buildable area even though its x is positive.
-    tower: { x: 2.3, y: safeHeight + 0.25 },
+    tower: { x: 4.2, y: safeHeight + 0.75 },
     // Runs from the tower back past the terminal's far end. The far edge is
     // pinned by the terminal, so the slab is lengthened at the +x end only.
-    apron: { x: -1.2, y: safeHeight + 0.46 },
-    gate: { x: -1.03, y: safeHeight + 0.78 },
+    apron: { x: 0.0, y: safeHeight + 0.96 },
+    gate: { x: 0.5, y: safeHeight + 1.28 },
     taxiHold: { x: runwayEntryX, y: runwayY - 0.86 },
     runwayEntry: { x: runwayEntryX, y: runwayY },
     taxiway: [
       { x: runwayEntryX, y: runwayY - 1.42, kind: "vertical" },
       { x: runwayEntryX, y: runwayY - 0.47, kind: "junction" },
     ],
-    accessRoadStart: { x: -2, y: Math.max(0, safeHeight - 2) },
+    accessRoadStart: { x: -0.5, y: Math.max(0, safeHeight - 2) },
   };
 }
 
@@ -150,6 +149,63 @@ export function runwayExitPoint(
     x: layout.runwayEnd.x + Math.max(0, tilesBeyondRunway),
     y: layout.runwayEnd.y,
   };
+}
+
+/**
+ * The airport's own reserved ground -- runway, apron and terminal are all
+ * sprites, not terrain (see CLAUDE.md on the capitol), so nothing otherwise
+ * stops the countryside's tree scatter from planting one on the runway
+ * threshold or beside the tower. Derived from the real layout rather than a
+ * hand-copied box, so a change to the airport's own geometry can't silently
+ * leave a new corner of it unreserved.
+ *
+ * Kept as separate rectangles, one per feature, rather than a single box
+ * around all of them: the terminal sits west of the field (negative x) while
+ * the apron, tower and runway sit south of it (y past the last row), so a
+ * single bounding box spans the corner between the two -- ground that belongs
+ * to neither -- and would needlessly clear a strip of the city's own edge.
+ */
+const RESERVE_MARGIN = 1;
+
+export interface Rect {
+  minX: number;
+  maxX: number;
+  minY: number;
+  maxY: number;
+}
+
+function padded(centreX: number, centreY: number, halfU: number, halfV: number): Rect {
+  return {
+    minX: centreX - halfU - RESERVE_MARGIN,
+    maxX: centreX + halfU + RESERVE_MARGIN,
+    minY: centreY - halfV - RESERVE_MARGIN,
+    maxY: centreY + halfV + RESERVE_MARGIN,
+  };
+}
+
+export function airportReservedRects(width: number, height: number): Rect[] {
+  const layout = createAirportLayout(width, height);
+  const runwayHalfU = (layout.runwayEnd.x - layout.runwayStart.x) / 2;
+  const runwayCentreX = (layout.runwayStart.x + layout.runwayEnd.x) / 2;
+
+  return [
+    padded(
+      layout.terminal.x,
+      layout.terminal.y,
+      AIRPORT_TERMINAL_HALF_U,
+      AIRPORT_TERMINAL_HALF_V,
+    ),
+    padded(layout.apron.x, layout.apron.y, AIRPORT_APRON_HALF_U, AIRPORT_APRON_HALF_V),
+    padded(runwayCentreX, layout.runwayStart.y, runwayHalfU, layout.runwayWidth / 2),
+    // The tower stands alone, off the apron's own footprint.
+    padded(layout.tower.x, layout.tower.y, 0.6, 0.6),
+  ];
+}
+
+export function isOnAirportGround(x: number, y: number, width: number, height: number): boolean {
+  return airportReservedRects(width, height).some(
+    (rect) => x >= rect.minX && x <= rect.maxX && y >= rect.minY && y <= rect.maxY,
+  );
 }
 
 export function airportLayoutKey(layout: AirportLayout): string {

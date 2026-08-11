@@ -1,7 +1,8 @@
 import { BLOCK } from "@sudo-city/protocol";
 import type { WorldSnapshot } from "@sudo-city/protocol";
 import { describe, expect, it } from "vitest";
-import { coastLanes } from "./coast";
+import { isOnAirportGround } from "./airport";
+import { coastLanes, isOnCoastInstallation } from "./coast";
 import { createPortRoads } from "./portRoads";
 import {
   COAST_RING,
@@ -254,6 +255,59 @@ describe("the dock road", () => {
     }
     for (const building of world.buildings) {
       expect(grid.cellAt(building.plot.x, building.plot.y)?.kind).toBe("ground");
+    }
+  });
+});
+
+describe("landmark clearings", () => {
+  it("never seeds a tree, pine, bush or rock inside a coastal installation's own ground", () => {
+    const grid = buildTerrain(snapshot());
+    let checked = 0;
+
+    for (const cell of grid.cells) {
+      if (!isOnCoastInstallation(cell.x, cell.y, SIZE, SIZE)) {
+        continue;
+      }
+      checked += 1;
+      expect(cell.prop).toBeUndefined();
+    }
+    // The fixture's coastline has to actually pass through the harbour's and
+    // the naval base's own reserved ground, or this test would trivially pass
+    // by never finding a cell to check.
+    expect(checked).toBeGreaterThan(0);
+  });
+
+  it("never seeds a tree, pine, bush or rock inside the airport's own ground", () => {
+    const grid = buildTerrain(snapshot());
+    let checked = 0;
+
+    for (const cell of grid.cells) {
+      // Restricted to genuinely outside-city cells: the airport's reserved
+      // rectangles are only ever consulted for the countryside ring (see
+      // classify() in terrain.ts), and a corner of one can geometrically
+      // touch the field's own edge column without that column ever being
+      // reached through this path -- it is governed by classifyCity instead.
+      const outsideCity = cell.x < 0 || cell.x >= SIZE || cell.y < 0 || cell.y >= SIZE;
+      if (!outsideCity || !isOnAirportGround(cell.x, cell.y, SIZE, SIZE)) {
+        continue;
+      }
+      checked += 1;
+      expect(cell.prop).toBeUndefined();
+    }
+    expect(checked).toBeGreaterThan(0);
+  });
+
+  it("leaves the ground kind and colour of a reserved tile untouched -- only its prop is suppressed", () => {
+    const grid = buildTerrain(snapshot());
+
+    for (const cell of grid.cells) {
+      if (!isOnCoastInstallation(cell.x, cell.y, SIZE, SIZE)) {
+        continue;
+      }
+      // Still ordinary countryside grass (or sand/water, further out) --
+      // the clearing is invisible, not a bare patch standing out from its
+      // surroundings.
+      expect(["grass", "sand", "water", "road"]).toContain(cell.kind);
     }
   });
 });
