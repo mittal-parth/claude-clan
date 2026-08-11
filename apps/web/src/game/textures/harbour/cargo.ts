@@ -1,6 +1,6 @@
 import { Baker, fillFace, shade } from "../core";
 import { harbourBox, HARBOUR } from "../harbour/base";
-import { TERRAIN_COLORS } from "../../palette";
+import { TERRAIN_COLORS } from "../../math/palette";
 import { band } from "../terrain";
 
 /** A single container, as carried by the crane and shipped in the vessel's bay. */

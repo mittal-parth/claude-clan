@@ -6,7 +6,7 @@ import {
   type Issue,
   type PermissionMode,
 } from "@sudo-city/protocol";
-import { colorToCss } from "@/game/palette";
+import { colorToCss } from "@/game/math/palette";
 import type { CanvasPointerPosition } from "@/components/GameCanvas";
 import { effortLabel, findCrewByModel } from "@/crew/catalog";
 

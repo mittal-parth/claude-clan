@@ -1,5 +1,5 @@
 import { Baker, TILE_ANCHOR_Y } from "../core";
-import { TERRAIN_COLORS } from "../../palette";
+import { TERRAIN_COLORS } from "../../math/palette";
 import { AIRPORT } from "../airport/terminal";
 
 export const AIRPORT_WINDSOCK_KEY = "fx:airport-windsock";

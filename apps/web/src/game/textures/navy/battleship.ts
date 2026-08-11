@@ -1,6 +1,6 @@
 import { SHIP_HEADING_FRAMES, shipHeadingAngle } from "../harbour/ship";
 import { Baker, shade, Point3, fillFace } from "../core";
-import { TERRAIN_COLORS } from "../../palette";
+import { TERRAIN_COLORS } from "../../math/palette";
 import { HARBOUR } from "../harbour/base";
 
 export const BATTLESHIP_KEYS = Array.from(

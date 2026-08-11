@@ -1,6 +1,6 @@
-import { PropKind } from "../terrain";
+import { PropKind } from "../layouts/terrain";
 import { TILE_ANCHOR_Y, Baker, fillFace, diamond, HALF_W, TILE_WIDTH, shade } from "./core";
-import { TERRAIN_COLORS, PROP_COLORS } from "../palette";
+import { TERRAIN_COLORS, PROP_COLORS } from "../math/palette";
 
 export function propTextureKey(prop: PropKind): string {
   return `prop:${prop}`;

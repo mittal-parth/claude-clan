@@ -1,6 +1,6 @@
 import { Baker, Point3, fillFace, strokeFace, diamond } from "../core";
 import { AIRPORT } from "../airport/terminal";
-import { TERRAIN_COLORS } from "../../palette";
+import { TERRAIN_COLORS } from "../../math/palette";
 
 export const AIRPORT_APRON_KEY = "fx:airport-apron";
 

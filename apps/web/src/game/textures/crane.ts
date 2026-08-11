@@ -1,6 +1,6 @@
 import { Baker, fillFace, diamond } from "./core";
-import { CRANE_JIB_Y, CRANE_FOOT_X, CRANE_FOOT_Y, CRANE_JIB_REACH, CRANE_TAIL_REACH, CRANE_TROLLEY_REACH, CRANE_WIDTH, CRANE_HEIGHT } from "../crane";
-import { TERRAIN_COLORS } from "../palette";
+import { CRANE_JIB_Y, CRANE_FOOT_X, CRANE_FOOT_Y, CRANE_JIB_REACH, CRANE_TAIL_REACH, CRANE_TROLLEY_REACH, CRANE_HEIGHT, CRANE_WIDTH } from "../layouts/crane";
+import { paletteFor, TERRAIN_COLORS } from "../math/palette";
 
 
 export const CRANE_KEY = "fx:crane";

@@ -1,4 +1,4 @@
-import { Archetype, TERRAIN_COLORS, BuildingPalette, paletteFor, bodyHeightFor } from "../palette";
+import { Archetype, TERRAIN_COLORS, BuildingPalette, paletteFor, bodyHeightFor } from "../math/palette";
 import { TILE_HEIGHT, Baker, TILE_WIDTH, shade, fillFace, diamond, strokeFace, HALF_W, Point3, HALF_H, TILE_ANCHOR_Y, createBaker } from "./core";
 import { FOOTPRINT } from "./terrain";
 import Phaser, { Scene } from "phaser";

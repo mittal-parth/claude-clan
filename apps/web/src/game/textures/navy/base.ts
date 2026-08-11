@@ -1,6 +1,6 @@
 import { Baker, fillFace, Point3, shade, TILE_HEIGHT, diamond, HALF_W, HALF_H, strokeFace, TILE_ANCHOR_Y } from "../core";
-import { TERRAIN_COLORS } from "../../palette";
-import { NAVY_QUAY_HALF_U, NAVY_QUAY_HALF_V } from "../../navyHarbour";
+import { TERRAIN_COLORS } from "../../math/palette";
+import { NAVY_QUAY_HALF_U, NAVY_QUAY_HALF_V } from "../../layouts/navyHarbour";
 import { harbourPost, harbourBox, drawHarbourLabel } from "../harbour/base";
 import { band } from "../terrain";
 import Phaser from "phaser";

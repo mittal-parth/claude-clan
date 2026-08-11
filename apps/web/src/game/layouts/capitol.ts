@@ -23,7 +23,7 @@ import {
   inCapitolDistrict,
   type CapitolDistrict,
 } from "@sudo-city/protocol";
-import { hashCoords, pickIndex } from "./hash";
+import { chance, hashCoords, mod, pickIndex, unitFloat } from "../math/hash";
 import type { PropKind, TerrainCell } from "./terrain";
 
 /**

@@ -1,5 +1,5 @@
 import { Baker, fillFace, Point3, HALF_W, HALF_H } from "../core";
-import { TERRAIN_COLORS } from "../../palette";
+import { TERRAIN_COLORS } from "../../math/palette";
 import { HARBOUR, harbourPost, harbourBox } from "../harbour/base";
 
 /**

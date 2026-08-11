@@ -85,7 +85,7 @@ describe("the baked capitol", () => {
   });
 
   it("fits every drawn point inside its own canvas", async () => {
-    const { bakeCapitol } = await import("./textures/capitol/base");
+    const { bakeCapitol } = await import("../textures/capitol/base");
     bakeCapitol(recordingScene());
 
     expect(baked).toBeDefined();
@@ -101,7 +101,7 @@ describe("the baked capitol", () => {
   });
 
   it("reserves exactly the room below its tile point that it uses", async () => {
-    const { bakeCapitol, CAPITOL_ANCHOR_Y } = await import("./textures/capitol/base");
+    const { bakeCapitol, CAPITOL_ANCHOR_Y } = await import("../textures/capitol/base");
     bakeCapitol(recordingScene());
 
     // The sprite is placed with origin (0.5, 1) at point.y + CAPITOL_ANCHOR_Y,
@@ -114,7 +114,7 @@ describe("the baked capitol", () => {
   });
 
   it("draws about a horizontally centred origin", async () => {
-    const { bakeCapitol } = await import("./textures/capitol/base");
+    const { bakeCapitol } = await import("../textures/capitol/base");
     bakeCapitol(recordingScene());
 
     // setOrigin(0.5, 1) centres the texture on the tile point, so a drawing
@@ -128,7 +128,7 @@ describe("the baked capitol", () => {
   });
 
   it("stands the dome above every other mass", async () => {
-    const { bakeCapitol } = await import("./textures/capitol/base");
+    const { bakeCapitol } = await import("../textures/capitol/base");
     bakeCapitol(recordingScene());
 
     // The highest point on the map should be on the building's centre line —
