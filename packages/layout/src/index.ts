@@ -17,11 +17,11 @@ import {
   type WorldSize,
   type WorldSnapshot,
 } from "@sudo-city/protocol";
-import { allocateBlocks, type BlockRect } from "./blocks";
+import { affinityKey, allocateBlocks, type Affinity, type BlockRect } from "./blocks";
 import { buildDirectoryTree, collapseTree, collectDistricts, type DistrictEntry } from "./tree";
 
 export type { DistrictRect } from "@sudo-city/protocol";
-export { allocateBlocks, type BlockItem, type BlockRect } from "./blocks";
+export { affinityKey, allocateBlocks, type Affinity, type BlockItem, type BlockRect } from "./blocks";
 export {
   buildDirectoryTree,
   collapseTree,
@@ -258,6 +258,39 @@ function reserveCapitol(size: WorldSize, occupied: Set<string>): void {
   }
 }
 
+/**
+ * How strongly two districts are coupled, from the repository's own import
+ * graph: for every import edge whose two files land in different surviving
+ * districts, that pair's weight goes up by one. Passed to allocateBlocks so
+ * the treemap can prefer, among otherwise similar splits, the one that keeps
+ * coupled folders on the same side -- the city then shows the dependency
+ * structure, and ambient traffic between two such districts has somewhere
+ * honest to go.
+ */
+function buildDistrictAffinity(
+  world: WorldMap,
+  entries: readonly DistrictEntry[],
+): Affinity {
+  const districtByFile = new Map<string, string>();
+  for (const entry of entries) {
+    for (const file of entry.files) {
+      districtByFile.set(file.path, entry.path);
+    }
+  }
+
+  const affinity = new Map<string, number>();
+  for (const edge of world.imports) {
+    const from = districtByFile.get(edge.source);
+    const to = districtByFile.get(edge.target);
+    if (!from || !to || from === to) {
+      continue;
+    }
+    const key = affinityKey(from, to);
+    affinity.set(key, (affinity.get(key) ?? 0) + 1);
+  }
+  return affinity;
+}
+
 export function layoutWorld(world: WorldMap, options: LayoutOptions = {}): LayoutResult {
   const tree = collapseTree(buildDirectoryTree(world.files));
   const entries = collectDistricts(tree);
@@ -286,6 +319,7 @@ export function layoutWorld(world: WorldMap, options: LayoutOptions = {}): Layou
             return { key: entry.path, weight: blocksNeeded, minBlocks: blocksNeeded };
           }),
           { bx: 0, by: 0, bw: sideBlocks, bh: sideBlocks },
+          buildDistrictAffinity(world, entries),
         ),
         entries,
       );

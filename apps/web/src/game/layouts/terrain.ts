@@ -52,7 +52,7 @@ export type TerrainKind =
   | "park"
   | "plaza";
 
-export type PropKind = "tree" | "pine" | "bush" | "rock" | "fountain";
+export type PropKind = "tree" | "pine" | "bush" | "rock" | "fountain" | "lamp";
 
 /**
  * A lane's class is decided by what it separates, not by anything persisted:
@@ -99,6 +99,32 @@ export interface TerrainGrid {
   cells: TerrainCell[];
   roads: TerrainCell[];
   cellAt(x: number, y: number): TerrainCell | undefined;
+}
+
+/**
+ * Which of a building's two visible walls (see drawBox: only +u and +v are
+ * ever plated) carries its street-facing detail -- a doorway, a shopfront
+ * awning. A plot's frontage can be on any of up to two sides depending on
+ * where it sits in its block's ring, but only +u and +v are ever drawn, so a
+ * plot fronting -u or -v has no visible face to put the feature on and falls
+ * back to "v" -- the same default the building already had before either
+ * wall meant anything in particular.
+ */
+export type BuildingFacing = "u" | "v";
+
+/**
+ * The wall a building at (x, y) should face its street-side detail toward.
+ * +v is checked first: it is the wall the sun already lights, so it is the
+ * more visible of the two even when a plot happens to front both sides.
+ */
+export function buildingFacingAt(x: number, y: number, terrain: TerrainGrid): BuildingFacing {
+  if (terrain.cellAt(x, y + 1)?.kind === "road") {
+    return "v";
+  }
+  if (terrain.cellAt(x + 1, y)?.kind === "road") {
+    return "u";
+  }
+  return "v";
 }
 
 export const ROAD_NORTH = 1;
@@ -276,6 +302,28 @@ export function roadClassAt(
   ].reduce(widerRoadClass);
 }
 
+/**
+ * Whether a non-lane cell has a boulevard immediately on one of its four
+ * sides. Only ever true for a verge cell -- a plot or courtyard cell is
+ * never adjacent to a lane at all, since the ring position between them
+ * (offset 1 or 5) is exactly what a verge cell is.
+ */
+function borderingBoulevard(
+  x: number,
+  y: number,
+  districtAt: ReadonlyMap<string, DistrictRect>,
+): boolean {
+  const neighbours: Array<[number, number]> = [
+    [x + 1, y],
+    [x - 1, y],
+    [x, y + 1],
+    [x, y - 1],
+  ];
+  return neighbours.some(
+    ([nx, ny]) => isRoadLane(nx, ny) && roadClassAt(nx, ny, districtAt) === "boulevard",
+  );
+}
+
 export function buildTerrain(snapshot: WorldSnapshot): TerrainGrid {
   const { width, height } = snapshot.size;
   const bounds: TerrainBounds = {
@@ -404,7 +452,23 @@ function classifyCity(
     return { x, y, kind: "ground", variant: 0, roadMask: 0 };
   }
   if (isRoadLane(x, y)) {
-    return { x, y, kind: "road", variant: 0, roadMask: 0, roadClass: roadClassAt(x, y, districtAt) };
+    const roadClass = roadClassAt(x, y, districtAt);
+    // A lamp at every boulevard junction. keepProp exempts it from the
+    // decoration budget, the same guard the capitol's own avenue uses --
+    // without it a large city would thin a designed row of lamps down to a
+    // random scatter of them.
+    const junction = mod(x, BLOCK) === 0 && mod(y, BLOCK) === 0;
+    const lamp = junction && roadClass === "boulevard";
+    return {
+      x,
+      y,
+      kind: "road",
+      variant: 0,
+      roadMask: 0,
+      roadClass,
+      prop: lamp ? "lamp" : undefined,
+      keepProp: lamp,
+    };
   }
   if (!district) {
     return grassCell(x, y, 0x9c1);
@@ -414,17 +478,37 @@ function classifyCity(
     return { x, y, kind: "ground", variant: 0, roadMask: 0 };
   }
 
-  const courtyard = isCourtyardCell(x, y);
-  const seed = hashCoords(x, y, courtyard ? 0x3f3 : 0x3f0);
-  if (!chance(seed, courtyard ? 0.7 : 0.4)) {
-    return { x, y, kind: "ground", variant: 0, roadMask: 0 };
+  // The verge and the courtyard: the cells of a block that are neither a
+  // plot ring position nor a lane. A verge cell beside a boulevard gets a
+  // kerbside tree, deliberately and every time -- the avenue that marks a
+  // main road, not a random chance of one -- exempted from the decoration
+  // budget for the same reason the lamps are.
+  if (borderingBoulevard(x, y, districtAt)) {
+    return {
+      x,
+      y,
+      kind: "park",
+      variant: pickIndex(hashCoords(x, y, 0x3f5), 2),
+      roadMask: 0,
+      prop: "tree",
+      keepProp: true,
+    };
   }
+
+  // The courtyard core gets a higher chance of planting than the verge --
+  // it reads as the block's own shared green, so it should look more
+  // deliberately kept than the odd corner of a lot.
+  const courtyard = isCourtyardCell(x, y);
   // Salting the variant pick with the district's own path, rather than only
   // the tile coordinate, is what gives one neighbourhood's parks a different
   // lean between the two park textures than its neighbour's -- still random
   // tile to tile, but biased the same way across one district, which is the
   // only way ground tone can read as belonging to a place rather than to a
   // single square of it.
+  const seed = hashCoords(x, y, courtyard ? 0x3f3 : 0x3f0);
+  if (!chance(seed, courtyard ? 0.7 : 0.4)) {
+    return { x, y, kind: "ground", variant: 0, roadMask: 0 };
+  }
   const districtSalt = hashText(district.path, 0x3f4);
   return {
     x,

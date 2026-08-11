@@ -12,6 +12,7 @@ import {
   ROAD_SOUTH,
   ROAD_WEST,
   buildTerrain,
+  buildingFacingAt,
   isPlotCell,
   isRoadLane,
   roadMaskAt,
@@ -164,13 +165,23 @@ describe("street grid", () => {
     }
   });
 
-  it("leaves an empty plot cell or block interior as greenery or a lot", () => {
+  it("leaves an empty verge cell as greenery or a lot", () => {
     const grid = buildTerrain(snapshot());
 
-    // (3, 2) is a block-interior cell that is not a lane, not a plot ring
-    // position, and not built on by the fixture.
-    expect(["park", "ground"]).toContain(grid.cellAt(3, 2)?.kind);
-    expect(grid.cellAt(3, 2)?.kind).not.toBe("road");
+    // (1, 2) is a verge cell: not a lane, not a plot ring position, and not
+    // part of the courtyard core, so it only ever gets the plain treatment.
+    expect(["park", "ground"]).toContain(grid.cellAt(1, 2)?.kind);
+    expect(grid.cellAt(1, 2)?.kind).not.toBe("road");
+  });
+
+  it("leaves the block's courtyard core as greenery or a lot, like any other interior cell", () => {
+    const grid = buildTerrain(snapshot());
+    for (let dx = 2; dx <= 4; dx += 1) {
+      for (let dy = 2; dy <= 4; dy += 1) {
+        const kind = grid.cellAt(dx, dy)?.kind;
+        expect(["park", "ground"]).toContain(kind);
+      }
+    }
   });
 
   it("produces a connected grid, not isolated fragments", () => {
@@ -244,6 +255,54 @@ describe("the dock road", () => {
     for (const building of world.buildings) {
       expect(grid.cellAt(building.plot.x, building.plot.y)?.kind).toBe("ground");
     }
+  });
+});
+
+describe("building facing", () => {
+  // One district covering the whole field, so every lattice lane is a road
+  // regardless of district boundaries -- isolates buildingFacingAt's own
+  // logic from roadClassAt's.
+  const FACING_SIZE = BLOCK * 3 + 1;
+  function facingSnapshot(): WorldSnapshot {
+    return {
+      id: "world:facing",
+      repoPath: "/fixture",
+      revision: "facing",
+      generatedAt: "2026-08-11T00:00:00.000Z",
+      size: { width: FACING_SIZE, height: FACING_SIZE },
+      districts: [
+        { path: "src", x: 0, y: 0, width: FACING_SIZE - 1, height: FACING_SIZE - 1, weight: 1 },
+      ],
+      buildings: [],
+    };
+  }
+
+  it("faces the +v wall toward a street on the south side of the plot", () => {
+    const grid = buildTerrain(facingSnapshot());
+    // (9, 11): the south-mid ring position of block (1,1) -- its only
+    // frontage is the lane at y = 12, directly on its +v side.
+    expect(buildingFacingAt(9, 11, grid)).toBe("v");
+  });
+
+  it("faces the +u wall toward a street on the east side of the plot", () => {
+    const grid = buildTerrain(facingSnapshot());
+    // (11, 9): the east-mid ring position of block (1,1) -- its only
+    // frontage is the lane at x = 12, directly on its +u side.
+    expect(buildingFacingAt(11, 9, grid)).toBe("u");
+  });
+
+  it("prefers +v when a corner plot fronts both visible walls", () => {
+    const grid = buildTerrain(facingSnapshot());
+    // (11, 11): the south-east corner of block (1,1) -- both x = 12 and
+    // y = 12 are lanes, so either wall is a legitimate street frontage.
+    expect(buildingFacingAt(11, 11, grid)).toBe("v");
+  });
+
+  it("falls back to +v when neither visible wall fronts a street", () => {
+    const grid = buildTerrain(facingSnapshot());
+    // (7, 1): the north-mid ring position of block (1,0) -- its only
+    // frontage is at y = 0, the -v side, which drawBox never plates.
+    expect(buildingFacingAt(7, 1, grid)).toBe("v");
   });
 });
 

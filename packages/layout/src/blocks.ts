@@ -37,18 +37,71 @@ interface ResolvedItem extends BlockItem {
   minBlocks: number;
 }
 
+/**
+ * How strongly two districts are coupled, keyed by their two paths joined in
+ * sorted order so lookup doesn't care which one is `a` and which is `b`. Built
+ * from the repository's own import graph (see index.ts) -- folders that
+ * import each other a lot get a high weight here.
+ */
+export type Affinity = ReadonlyMap<string, number>;
+
+export function affinityKey(a: string, b: string): string {
+  return a < b ? `${a} ${b}` : `${b} ${a}`;
+}
+
 /** Splits a block rectangle among weighted items, in whole blocks. */
-export function allocateBlocks(items: readonly BlockItem[], rect: BlockRect): Map<string, BlockRect> {
+export function allocateBlocks(
+  items: readonly BlockItem[],
+  rect: BlockRect,
+  affinity?: Affinity,
+): Map<string, BlockRect> {
   const resolved: ResolvedItem[] = items.map((item) => ({
     ...item,
     minBlocks: Math.max(1, item.minBlocks ?? 1),
   }));
   const result = new Map<string, BlockRect>();
-  allocate(resolved, rect, result);
+  allocate(resolved, rect, result, affinity);
   return result;
 }
 
-function allocate(items: readonly ResolvedItem[], rect: BlockRect, result: Map<string, BlockRect>): void {
+/**
+ * How much of `affinity`'s total weight would be *cut* by splitting at this
+ * index into groupA/groupB -- i.e. how much coupling is severed rather than
+ * kept on one side. Only ever consults pairs actually present in `affinity`,
+ * which for a real repository is far fewer than every possible pair, so this
+ * stays cheap even though it is called once per candidate split.
+ */
+function severedAffinity(
+  groupA: readonly ResolvedItem[],
+  groupB: readonly ResolvedItem[],
+  affinity: Affinity,
+): number {
+  if (affinity.size === 0) {
+    return 0;
+  }
+  const inA = new Set(groupA.map((item) => item.key));
+  const inB = new Set(groupB.map((item) => item.key));
+  let severed = 0;
+  for (const [pairKey, weight] of affinity) {
+    const separator = pairKey.indexOf(" ");
+    if (separator === -1) {
+      continue;
+    }
+    const a = pairKey.slice(0, separator);
+    const b = pairKey.slice(separator + 1);
+    if ((inA.has(a) && inB.has(b)) || (inB.has(a) && inA.has(b))) {
+      severed += weight;
+    }
+  }
+  return severed;
+}
+
+function allocate(
+  items: readonly ResolvedItem[],
+  rect: BlockRect,
+  result: Map<string, BlockRect>,
+  affinity?: Affinity,
+): void {
   if (items.length === 0) {
     return;
   }
@@ -72,6 +125,35 @@ function allocate(items: readonly ResolvedItem[], rect: BlockRect, result: Map<s
     if (diff < bestDiff) {
       bestDiff = diff;
       bestIndex = index;
+    }
+  }
+
+  // Prefer a nearby split that keeps more import-coupled districts on the
+  // same side, as long as it doesn't cost much area balance. Restricted to a
+  // small window around the weight-optimal cut, and to splits along the same
+  // weight-sorted order, so this can only ever choose *among* otherwise-valid
+  // splits -- it never introduces one the minBlocks floor below would reject.
+  if (affinity && affinity.size > 0) {
+    const windowRadius = 5;
+    const from = Math.max(1, bestIndex - windowRadius);
+    const to = Math.min(sorted.length - 1, bestIndex + windowRadius);
+    let bestSeverance = Number.POSITIVE_INFINITY;
+    for (let index = from; index <= to; index += 1) {
+      const candidateRunning = sorted
+        .slice(0, index)
+        .reduce((sum, item) => sum + item.weight, 0);
+      const diff = Math.abs(candidateRunning / total - 0.5);
+      // Never trade more than 8 points of weight balance for coupling -- a
+      // district's size still has to come from its own files first, and this
+      // is meant to break near-ties in the district's favour, not override it.
+      if (diff > bestDiff + 0.08) {
+        continue;
+      }
+      const severance = severedAffinity(sorted.slice(0, index), sorted.slice(index), affinity);
+      if (severance < bestSeverance) {
+        bestSeverance = severance;
+        bestIndex = index;
+      }
     }
   }
 
@@ -126,6 +208,6 @@ function allocate(items: readonly ResolvedItem[], rect: BlockRect, result: Map<s
     ? { bx: rect.bx + cut, by: rect.by, bw: rect.bw - cut, bh: rect.bh }
     : { bx: rect.bx, by: rect.by + cut, bw: rect.bw, bh: rect.bh - cut };
 
-  allocate(groupA, rectA, result);
-  allocate(groupB, rectB, result);
+  allocate(groupA, rectA, result, affinity);
+  allocate(groupB, rectB, result, affinity);
 }

@@ -84,6 +84,8 @@ export const PROP_COLORS = {
   rock: 0x9c9c93,
   fountain: 0xd9d5c8,
   fountainWater: 0x54b7ea,
+  lampPost: 0x2b3038,
+  lampGlow: 0xffd166,
 } as const;
 
 const FALLBACK: PaletteSeed = {

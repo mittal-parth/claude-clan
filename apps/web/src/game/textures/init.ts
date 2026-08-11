@@ -3,7 +3,7 @@ import { TERRAIN_ATLAS_KEY, bakeTerrainAtlas } from "./terrain";
 import { NAVY_COMMAND_KEY, bakeNavyPier, bakeNavyCommand, bakeNavyHangar, bakeNavyBarracks, bakeNavyRadar, NAVY_RADAR_DISH_KEYS, bakeNavyRadarDish, bakeNavyFence, bakeNavyFloodlight, bakeNavyFlag, bakeNavyCrate, bakeNavyBollard, bakeNavyQuay, bakeNavySign } from "./navy/base";
 import { createBaker } from "./core";
 import { bakeHighlight, HIGHLIGHT_KEY, SELECT_KEY, ADDED_MARKER_KEY, bakeRubble, bakeCloud, bakeSmoke, bakeSparkle } from "./effects";
-import { bakeTree, bakePine, bakeBush, bakeRock, bakeFountain } from "./props";
+import { bakeTree, bakePine, bakeBush, bakeRock, bakeFountain, bakeLamp } from "./props";
 import { CAR_KEYS, bakeCar, WOODEN_SHIP_KEYS, bakeWoodenShip } from "./vehicles";
 import { bakeIssueShop } from "./buildings";
 import { bakeAirportApron, bakeAirportTaxiway, AIRPORT_TAXIWAY_VERTICAL_KEY, AIRPORT_TAXIWAY_JUNCTION_KEY, bakeAirportRunwayTile, bakeAirportRunwayThreshold } from "./airport/runway";
@@ -52,6 +52,7 @@ export function bakeTerrainTextures(scene: Phaser.Scene): void {
   bakeBush(baker);
   bakeRock(baker);
   bakeFountain(baker);
+  bakeLamp(baker);
 
   bakeCloud(baker);
   bakeSmoke(baker);

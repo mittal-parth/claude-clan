@@ -1,6 +1,6 @@
 import { BLOCK, capitolDistrict, type DistrictRect, type WorldSnapshot } from "@sudo-city/protocol";
 import { describe, expect, it } from "vitest";
-import { buildTerrain, roadClassAt } from "./terrain";
+import { buildTerrain, roadClassAt, type TerrainGrid } from "./terrain";
 
 function districtIndex(districts: readonly DistrictRect[]): Map<string, DistrictRect> {
   const index = new Map<string, DistrictRect>();
@@ -152,6 +152,75 @@ describe("road class", () => {
           expect(prCell?.roadClass).toBe(mainCell?.roadClass);
         }
       }
+    }
+  });
+});
+
+describe("street furniture", () => {
+  function build(): TerrainGrid {
+    const districts = twoTopLevelFoldersTwoDistrictsEach();
+    const snapshot: WorldSnapshot = {
+      id: "world:test",
+      repoPath: "/fixture",
+      revision: "test",
+      generatedAt: "2026-08-11T00:00:00.000Z",
+      size: { width: SIZE, height: SIZE },
+      districts,
+      buildings: [],
+    };
+    return buildTerrain(snapshot);
+  }
+
+  it("plants a lamp, exempt from the decoration budget, at every boulevard junction", () => {
+    const grid = build();
+    // The capitol's own ring is a separate design system (its formal avenue
+    // of trees), classified by capitolCell rather than classifyCity, so it
+    // never reaches the lamp logic under test here -- exclude its reserve.
+    const mall = capitolDistrict({ width: SIZE, height: SIZE });
+
+    let sawBoulevardJunctionLamp = false;
+    let sawNonBoulevardJunctionWithoutLamp = false;
+    for (const cell of grid.roads) {
+      const junction = cell.x % BLOCK === 0 && cell.y % BLOCK === 0;
+      const inMall =
+        cell.x >= mall.minX && cell.x <= mall.maxX && cell.y >= mall.minY && cell.y <= mall.maxY;
+      if (!junction || inMall || cell.x < 0 || cell.y < 0 || cell.x >= SIZE || cell.y >= SIZE) {
+        continue;
+      }
+      if (cell.roadClass === "boulevard") {
+        expect(cell.prop).toBe("lamp");
+        expect(cell.keepProp).toBe(true);
+        sawBoulevardJunctionLamp = true;
+      } else {
+        expect(cell.prop).toBeUndefined();
+        sawNonBoulevardJunctionWithoutLamp = true;
+      }
+    }
+    expect(sawBoulevardJunctionLamp).toBe(true);
+    expect(sawNonBoulevardJunctionWithoutLamp).toBe(true);
+  });
+
+  it("plants a kerbside tree, exempt from the decoration budget, on a verge beside a boulevard", () => {
+    const grid = build();
+
+    // (25, 26): a verge cell one tile east of the boulevard at x = 24, which
+    // separates "apps/server" from "packages/layout" -- different top-level
+    // folders, so every row along it is boulevard.
+    const verge = grid.cellAt(25, 26);
+    expect(verge?.kind).toBe("park");
+    expect(verge?.prop).toBe("tree");
+    expect(verge?.keepProp).toBe(true);
+  });
+
+  it("never gives a lane-adjacent verge cell a forced tree", () => {
+    const grid = build();
+
+    // (7, 2): a verge cell beside x = 6, an interior lane inside "apps/web"
+    // (same district on both sides) -- not a boulevard, so no forced tree.
+    const verge = grid.cellAt(7, 2);
+    expect(verge?.kind).not.toBe("road");
+    if (verge?.prop === "tree") {
+      expect(verge.keepProp).toBeFalsy();
     }
   });
 });
