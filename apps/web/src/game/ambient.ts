@@ -11,17 +11,6 @@ import { hashCoords, pickIndex } from "./hash";
 import type { IsoProjection } from "./iso";
 import type { TerrainCell, TerrainGrid } from "./terrain";
 import {
-  CAR_KEYS,
-  CLOUD_KEY,
-  SMOKE_KEY,
-  SPARKLE_KEY,
-  TILE_ANCHOR_Y,
-  TILE_HEIGHT,
-  TILE_WIDTH,
-  WOODEN_SHIP_ANCHOR_Y,
-  WOODEN_SHIP_KEYS,
-} from "./textures";
-import {
   COAST_RING,
   COUNTRYSIDE_RING,
   OUTER_RING,
@@ -30,6 +19,9 @@ import {
   ROAD_SOUTH,
   ROAD_WEST,
 } from "./terrain";
+import { CAR_KEYS, WOODEN_SHIP_ANCHOR_Y, WOODEN_SHIP_KEYS } from "./textures/vehicles";
+import { CLOUD_KEY, SMOKE_KEY, SPARKLE_KEY } from "./textures/effects";
+import { TILE_ANCHOR_Y, TILE_HEIGHT, TILE_WIDTH } from "./textures/core";
 
 const MAX_CARS = 20;
 const MAX_CLOUDS = 7;
