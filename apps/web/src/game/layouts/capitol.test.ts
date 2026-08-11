@@ -1,7 +1,10 @@
 import {
+  BLOCK,
   CAPITOL_FRONT_EXTENT_V,
   CAPITOL_HALF_U,
   CAPITOL_HALF_V,
+  CAPITOL_MIN_FIELD_HEIGHT,
+  CAPITOL_MIN_FIELD_WIDTH,
   capitolDistrict,
   capitolFits,
   inCapitolDistrict,
@@ -69,6 +72,50 @@ describe("the capitol reserve", () => {
         const claimed = capitolCell(mall, x, y) !== undefined;
         expect(claimed).toBe(inCapitolDistrict(mall, x, y));
       }
+    }
+  });
+
+  it("never leaves its ring exactly one tile from a real street lane", () => {
+    // The shape a twin road takes: a road cell one tile parallel to another
+    // road cell, for a whole run. Before the reserve's centre was nudged, the
+    // ring's fixed offset from the field's raw midpoint could land at any
+    // residue mod BLOCK depending on field size -- so for some repositories
+    // the boulevard ran exactly one tile beside a real district street for
+    // its entire length. Checked across every field size the capitol can
+    // stand in, not just one: this was never guaranteed to fail on SIZE (40)
+    // alone, which is exactly how it went unnoticed before.
+    for (
+      let size = CAPITOL_MIN_FIELD_WIDTH;
+      size <= CAPITOL_MIN_FIELD_WIDTH + BLOCK * 4;
+      size += 1
+    ) {
+      const width = size;
+      const height = Math.max(CAPITOL_MIN_FIELD_HEIGHT, size);
+      const mall = capitolDistrict({ width, height });
+
+      const edgeResidue = (edge: number): number => ((edge % BLOCK) + BLOCK) % BLOCK;
+      for (const edge of [mall.minX, mall.maxX]) {
+        expect(edgeResidue(edge)).not.toBe(1);
+        expect(edgeResidue(edge)).not.toBe(BLOCK - 1);
+      }
+      for (const edge of [mall.minY, mall.maxY]) {
+        expect(edgeResidue(edge)).not.toBe(1);
+        expect(edgeResidue(edge)).not.toBe(BLOCK - 1);
+      }
+    }
+  });
+
+  it("never nudges the centre more than a couple of tiles off true middle", () => {
+    for (
+      let size = CAPITOL_MIN_FIELD_WIDTH;
+      size <= CAPITOL_MIN_FIELD_WIDTH + BLOCK * 4;
+      size += 1
+    ) {
+      const mall = capitolDistrict({ width: size, height: size });
+      const idealCentre = Math.floor((size - 1) / 2);
+
+      expect(Math.abs(mall.centerX - idealCentre)).toBeLessThanOrEqual(BLOCK / 2);
+      expect(Math.abs(mall.centerY - idealCentre)).toBeLessThanOrEqual(BLOCK / 2);
     }
   });
 });

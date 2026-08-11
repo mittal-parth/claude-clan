@@ -35,6 +35,7 @@
     "vite": "^8.2.1"
   },
   "devDependencies": {
+    "@sudo-city/layout": "workspace:*",
     "@types/node": "^24.13.3",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",

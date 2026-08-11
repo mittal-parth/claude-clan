@@ -101,6 +101,43 @@ export function bakeRock(baker: Baker): void {
 }
 
 
+/**
+ * A boulevard lamp, standing on a road cell at a junction. A slender dark
+ * post so it reads as ironwork rather than a mast, and the accent colour
+ * kept to the small lamp head at the top -- a whole gold post would read as
+ * an orange lump, per the same lesson the harbour's own lamp learned.
+ *
+ * Sized to fit PROP_HEIGHT's existing headroom (PROP_ORIGIN_Y = 32px above
+ * the tile point): post to -20, head centre at -23, outer halo radius 6, so
+ * the highest point drawn is at 32 - 23 - 6 = 3px -- inside the canvas with
+ * margin, not clipped against its top edge.
+ */
+export function bakeLamp(baker: Baker): void {
+  propShadow(baker, 0.1);
+  const base = baker.at([0, 0, 0], HALF_W, PROP_ORIGIN_Y);
+  const postTop = base.y - 20;
+  const headY = base.y - 23;
+
+  baker.graphics.fillStyle(PROP_COLORS.lampPost, 1);
+  baker.graphics.fillRect(base.x - 1, postTop, 3, 20);
+
+  // Two short crossarms just under the head -- what separates a lamp from a flagpole.
+  baker.graphics.fillRect(base.x - 5, postTop, 4, 2);
+  baker.graphics.fillRect(base.x + 1, postTop, 4, 2);
+
+  baker.graphics.fillStyle(shade(PROP_COLORS.lampGlow, -20), 1);
+  baker.graphics.fillCircle(base.x, headY, 4);
+  baker.graphics.fillStyle(PROP_COLORS.lampGlow, 0.9);
+  baker.graphics.fillCircle(base.x, headY, 2.5);
+  // A soft halo, the same trick the harbour's beacon uses to read as lit
+  // rather than as a coloured disc.
+  baker.graphics.fillStyle(PROP_COLORS.lampGlow, 0.18);
+  baker.graphics.fillCircle(base.x, headY, 6);
+
+  baker.finish(propTextureKey("lamp"), TILE_WIDTH, PROP_HEIGHT);
+}
+
+
 export function bakeFountain(baker: Baker): void {
   propShadow(baker, 0.24);
   fillFace(

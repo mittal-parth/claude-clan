@@ -1,5 +1,5 @@
 import { TERRAIN_COLORS } from "../math/palette";
-import { TerrainKind } from "../layouts/terrain";
+import { RoadClass, TerrainKind } from "../layouts/terrain";
 import Phaser, { Scene } from "phaser";
 import { Baker, TILE_WIDTH, TILE_HEIGHT, HALF_W, HALF_H, fillFace, diamond, strokeFace, shade, Point3 } from "./core";
 
@@ -21,9 +21,12 @@ export function terrainTextureKey(kind: TerrainKind, variant: number): string {
 }
 
 
-export function roadTextureKey(mask: number): string {
-  return `tile:road:${mask}`;
+export function roadTextureKey(mask: number, roadClass: RoadClass): string {
+  return `tile:road:${roadClass}:${mask}`;
 }
+
+/** Every road class the atlas bakes, widest first -- also the bake order. */
+export const ROAD_CLASSES: readonly RoadClass[] = ["boulevard", "street", "lane"];
 
 
 export const TERRAIN_VARIANT_COUNTS: Record<TerrainKind, number> = {
@@ -54,6 +57,19 @@ export const FOOTPRINT = 0.42;
 export const ROAD_HALF = 0.3;
 
 export const KERB_HALF = 0.4;
+
+/**
+ * Carriageway and kerb half-widths per road class. A back lane is deliberately
+ * narrower than the block's own frontage row so it reads as service access
+ * rather than a street; a boulevard is wider than a block's ordinary road
+ * budget allows in most places, which is exactly what marks it as the main
+ * road when it crosses one.
+ */
+export const ROAD_WIDTHS: Record<RoadClass, { road: number; kerb: number }> = {
+  boulevard: { road: 0.42, kerb: 0.5 },
+  street: { road: ROAD_HALF, kerb: KERB_HALF },
+  lane: { road: 0.2, kerb: 0.26 },
+};
 
 export const ATLAS_COLUMNS = 8;
 
@@ -106,8 +122,10 @@ export function bakeTerrainAtlas(scene: Phaser.Scene, baker: Baker): void {
       drawWaterTile(baker, x, y, variant),
     );
   }
-  for (let mask = 0; mask < 16; mask += 1) {
-    place(roadTextureKey(mask), (x, y) => drawRoadTile(baker, x, y, mask));
+  for (const roadClass of ROAD_CLASSES) {
+    for (let mask = 0; mask < 16; mask += 1) {
+      place(roadTextureKey(mask, roadClass), (x, y) => drawRoadTile(baker, x, y, mask, roadClass));
+    }
   }
 
   const rows = Math.ceil(index / ATLAS_COLUMNS);
@@ -209,59 +227,93 @@ export function drawWaterTile(
 /**
  * Roads are drawn as a centre block plus one arm per connected neighbour, all
  * in grid space, so junctions line up exactly whatever the mask.
+ *
+ * The carriageway and kerb widths come from the cell's own road class, so
+ * where a narrow back lane's arm meets a boulevard's wide centre block the
+ * narrow arm simply joins the wide one -- no junction special-casing is
+ * needed, the geometry does it.
  */
 export function drawRoadTile(
   baker: Baker,
   originX: number,
   originY: number,
   mask: number,
+  roadClass: RoadClass = "street",
 ): void {
+  const { road: roadHalf, kerb: kerbHalf } = ROAD_WIDTHS[roadClass];
   const arms: Array<[number, Point3[]]> = [
     // North is -v, which projects up-and-right on screen.
-    [1, band(-0.5, -ROAD_HALF, "v")],
-    [2, band(ROAD_HALF, 0.5, "u")],
-    [4, band(ROAD_HALF, 0.5, "v")],
-    [8, band(-0.5, -ROAD_HALF, "u")],
+    [1, band(-0.5, -roadHalf, "v", roadHalf)],
+    [2, band(roadHalf, 0.5, "u", roadHalf)],
+    [4, band(roadHalf, 0.5, "v", roadHalf)],
+    [8, band(-0.5, -roadHalf, "u", roadHalf)],
   ];
   const kerbArms: Array<[number, Point3[]]> = [
-    [1, band(-0.5, -KERB_HALF, "v", KERB_HALF)],
-    [2, band(KERB_HALF, 0.5, "u", KERB_HALF)],
-    [4, band(KERB_HALF, 0.5, "v", KERB_HALF)],
-    [8, band(-0.5, -KERB_HALF, "u", KERB_HALF)],
+    [1, band(-0.5, -kerbHalf, "v", kerbHalf)],
+    [2, band(kerbHalf, 0.5, "u", kerbHalf)],
+    [4, band(kerbHalf, 0.5, "v", kerbHalf)],
+    [8, band(-0.5, -kerbHalf, "u", kerbHalf)],
   ];
 
   // Grass base, so an arm that stops mid-tile blends into the lot beside it.
   fillFace(baker, TERRAIN_COLORS.ground, 1, diamond(0.5), originX, originY);
 
-  fillFace(baker, TERRAIN_COLORS.pavement, 1, diamond(KERB_HALF), originX, originY);
+  // A boulevard's kerb runs a shade paler than an ordinary street's, so the
+  // main road reads as a different, grander pavement rather than just a wider
+  // version of the same one.
+  const kerbColor =
+    roadClass === "boulevard" ? shade(TERRAIN_COLORS.pavement, 6) : TERRAIN_COLORS.pavement;
+  fillFace(baker, kerbColor, 1, diamond(kerbHalf), originX, originY);
   for (const [bit, points] of kerbArms) {
     if (mask & bit) {
-      fillFace(baker, TERRAIN_COLORS.pavement, 1, points, originX, originY);
+      fillFace(baker, kerbColor, 1, points, originX, originY);
     }
   }
 
-  fillFace(baker, TERRAIN_COLORS.road, 1, diamond(ROAD_HALF), originX, originY);
+  fillFace(baker, TERRAIN_COLORS.road, 1, diamond(roadHalf), originX, originY);
   for (const [bit, points] of arms) {
     if (mask & bit) {
       fillFace(baker, TERRAIN_COLORS.road, 1, points, originX, originY);
     }
   }
 
-  // Lane markings only on a straight run; a junction would be a mess of paint.
+  // Lane markings only on a straight run; a junction would be a mess of
+  // paint. A back lane carries no markings at all -- it reads as service
+  // access, not a through street.
+  if (roadClass === "lane") {
+    return;
+  }
   const straightUV = mask === (2 | 8);
   const straightVU = mask === (1 | 4);
-  if (straightUV || straightVU) {
-    for (const offset of [-0.28, 0.04]) {
-      const from: Point3 = straightUV ? [offset, 0, 0] : [0, offset, 0];
-      const to: Point3 = straightUV ? [offset + 0.24, 0, 0] : [0, offset + 0.24, 0];
-      baker.graphics.lineStyle(2, TERRAIN_COLORS.roadLine, 0.85);
-      baker.graphics.lineBetween(
-        baker.at(from, originX, originY).x,
-        baker.at(from, originX, originY).y,
-        baker.at(to, originX, originY).x,
-        baker.at(to, originX, originY).y,
-      );
-    }
+  if (!straightUV && !straightVU) {
+    return;
+  }
+  // A boulevard gets a solid centre line flanked by a dash on each side --
+  // "both directions" of a divided carriageway -- where an ordinary street
+  // keeps its single dashed lane line.
+  const dashes =
+    roadClass === "boulevard"
+      ? [
+          { offset: -0.3, solid: false },
+          { offset: 0, solid: true },
+          { offset: 0.3, solid: false },
+        ]
+      : [
+          { offset: -0.28, solid: false },
+          { offset: 0.04, solid: false },
+        ];
+  for (const { offset, solid } of dashes) {
+    const start = solid ? -0.5 : offset;
+    const end = solid ? 0.5 : offset + 0.24;
+    const from: Point3 = straightUV ? [start, offset, 0] : [offset, start, 0];
+    const to: Point3 = straightUV ? [end, offset, 0] : [offset, end, 0];
+    baker.graphics.lineStyle(2, TERRAIN_COLORS.roadLine, 0.85);
+    baker.graphics.lineBetween(
+      baker.at(from, originX, originY).x,
+      baker.at(from, originX, originY).y,
+      baker.at(to, originX, originY).x,
+      baker.at(to, originX, originY).y,
+    );
   }
 }
 

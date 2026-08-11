@@ -1,11 +1,12 @@
+import { BLOCK } from "@sudo-city/protocol";
 import { describe, expect, it } from "vitest";
 import { COAST_QUAY_HALF_U, coastLanes, coastQuayX } from "./coast";
 import { createPortRoads, type PortRoadOptions, type PortRoadPlan } from "./portRoads";
-import { BLOCK_STRIDE, COAST_RING, COUNTRYSIDE_RING } from "./terrain";
+import { COAST_RING, COUNTRYSIDE_RING } from "./terrain";
 
 /**
- * A field with one district covering it, so street rows fall on every
- * BLOCK_STRIDE-th lane from the origin — exactly what classifyCity produces.
+ * A field with the global lattice's own street rows — exactly what
+ * classifyCity produces, since isRoadLane no longer takes a district.
  */
 function plan(width: number, height: number, overrides: Partial<PortRoadOptions> = {}): PortRoadPlan {
   return createPortRoads({
@@ -17,7 +18,7 @@ function plan(width: number, height: number, overrides: Partial<PortRoadOptions>
         y < 0 ? -y : Math.max(0, y - (height - 1)),
       ) <= COUNTRYSIDE_RING + COAST_RING,
     isCityRoad: (x, y) =>
-      x >= 0 && x < width && y >= 0 && y < height && y % BLOCK_STRIDE === 0,
+      x >= 0 && x < width && y >= 0 && y < height && y % BLOCK === 0,
     ...overrides,
   });
 }
@@ -86,7 +87,7 @@ describe("the dock road", () => {
       // The last inland tile abuts the field; the edge cell itself is the
       // city's own street, which is what makes the junction.
       expect(road.has(width, road.linkRow)).toBe(true);
-      expect(road.linkRow % BLOCK_STRIDE).toBe(0);
+      expect(road.linkRow % BLOCK).toBe(0);
     }
   });
 
@@ -97,7 +98,7 @@ describe("the dock road", () => {
     const lanes = coastLanes(60);
 
     expect(Math.abs(road.linkRow - lanes.lighthouse)).toBeLessThanOrEqual(
-      BLOCK_STRIDE / 2,
+      BLOCK / 2,
     );
   });
 

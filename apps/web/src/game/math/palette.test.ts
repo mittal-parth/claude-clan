@@ -148,6 +148,28 @@ describe("archetype selection", () => {
     }
   });
 
+  it("renders a test folder's files as infrastructure whatever their language", () => {
+    for (const districtPath of ["test", "tests", "spec", "packages/world/test", "src/__tests__"]) {
+      expect(archetypeFor("TypeScript", 12, districtPath)).toBe("utility");
+      expect(archetypeFor("Python", 500, districtPath)).toBe("utility");
+    }
+  });
+
+  it("renders an infra folder's files as infrastructure whatever their language", () => {
+    for (const districtPath of [".github", "infra", "config", "scripts", "apps/server/scripts"]) {
+      expect(archetypeFor("Go", 12, districtPath)).toBe("utility");
+    }
+  });
+
+  it("leaves an ordinary folder's archetype driven by tier, not by name", () => {
+    expect(archetypeFor("TypeScript", 12, "src")).toBe("house");
+    expect(archetypeFor("TypeScript", 1200, "apps/web/src/game")).toBe("tower");
+  });
+
+  it("is unaffected when no district is given, so existing call sites are unchanged", () => {
+    expect(archetypeFor("TypeScript", 12)).toBe(archetypeFor("TypeScript", 12, "src"));
+  });
+
   it("grows monotonically with tier for every archetype", () => {
     for (const archetype of [
       "house",

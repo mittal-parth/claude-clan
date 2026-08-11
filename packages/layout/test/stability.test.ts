@@ -1,4 +1,4 @@
-import { capitolFits, type SourceFile, type WorldMap } from "@sudo-city/protocol";
+import { BLOCK, capitolFits, type SourceFile, type WorldMap } from "@sudo-city/protocol";
 import { describe, expect, it } from "vitest";
 import { fieldSizeFor, layoutWorld } from "../src/index.js";
 
@@ -58,15 +58,24 @@ describe("stable plot allocation", () => {
 });
 
 describe("snapshot geometry", () => {
+  // Each of "src" and "test" carries enough files to survive collapsing into
+  // its parent (MIN_DISTRICT_FILES is 4), and README.md at the repository
+  // root gives "" its own district too -- a node with files of its own is
+  // always published, however few, regardless of the collapsing threshold.
   const map = world("commit-a", [
     file("src/index.ts", "src", 10),
     file("src/math.ts", "src", 6),
-    file("test/math.test.ts", "test", 8),
+    file("src/util.ts", "src", 5),
+    file("src/types.ts", "src", 3),
+    file("test/index.test.ts", "test", 8),
+    file("test/math.test.ts", "test", 4),
+    file("test/util.test.ts", "test", 4),
+    file("test/types.test.ts", "test", 2),
     file("README.md", "", 4),
   ]);
 
   it("publishes the world size the plots were allocated against", () => {
-    const side = fieldSizeFor(map.files.length);
+    const side = fieldSizeFor(map.files.length, 3);
 
     expect(layoutWorld(map).snapshot.size).toEqual({
       width: side,
@@ -77,25 +86,27 @@ describe("snapshot geometry", () => {
     ).toEqual({ width: 32, height: 24 });
   });
 
-  it("publishes one district per directory, covering the field exactly", () => {
-    const side = fieldSizeFor(map.files.length);
-    const { districts } = layoutWorld(map).snapshot;
+  it("publishes one district per surviving folder, covering the field exactly", () => {
+    const { districts, size } = layoutWorld(map).snapshot;
 
     expect(districts.map((district) => district.path).sort()).toEqual([
       "",
       "src",
       "test",
     ]);
-    expect(
-      districts.reduce(
-        (total, district) => total + district.width * district.height,
-        0,
-      ),
-    ).toBeCloseTo(side * side, 6);
+    // Every district is block-aligned and the set tiles the block grid with
+    // no gaps and no overlaps.
     for (const district of districts) {
-      expect(district.x + district.width).toBeLessThanOrEqual(side + 1e-9);
-      expect(district.y + district.height).toBeLessThanOrEqual(side + 1e-9);
+      expect(district.x % BLOCK).toBe(0);
+      expect(district.y % BLOCK).toBe(0);
+      expect(district.width % BLOCK).toBe(0);
+      expect(district.height % BLOCK).toBe(0);
     }
+    const totalArea = districts.reduce(
+      (total, district) => total + district.width * district.height,
+      0,
+    );
+    expect(totalArea).toBe((size.width - 1) * (size.height - 1));
   });
 
   it("keeps every building inside its own district rectangle", () => {
@@ -112,14 +123,10 @@ describe("snapshot geometry", () => {
       if (!district) {
         throw new Error(`no district for ${building.path}`);
       }
-      expect(building.plot.x).toBeGreaterThanOrEqual(Math.floor(district.x));
-      expect(building.plot.x).toBeLessThanOrEqual(
-        Math.ceil(district.x + district.width),
-      );
-      expect(building.plot.y).toBeGreaterThanOrEqual(Math.floor(district.y));
-      expect(building.plot.y).toBeLessThanOrEqual(
-        Math.ceil(district.y + district.height),
-      );
+      expect(building.plot.x).toBeGreaterThanOrEqual(district.x);
+      expect(building.plot.x).toBeLessThan(district.x + district.width);
+      expect(building.plot.y).toBeGreaterThanOrEqual(district.y);
+      expect(building.plot.y).toBeLessThan(district.y + district.height);
     }
   });
 
@@ -173,9 +180,10 @@ describe("snapshot geometry", () => {
     expect(fieldSizeFor(1)).toBeLessThan(fieldSizeFor(2_000));
     expect(fieldSizeFor(85)).toBeLessThan(32);
     expect(fieldSizeFor(2_000)).toBeGreaterThan(fieldSizeFor(200));
-    // Even sizes keep district origins aligned with the odd-lane plot grid.
+    // The field always tiles the lattice exactly: its side is one more than a
+    // whole number of blocks, whatever the repository's size.
     for (const count of [1, 9, 85, 400, 2_000]) {
-      expect(fieldSizeFor(count) % 2).toBe(0);
+      expect((fieldSizeFor(count) - 1) % BLOCK).toBe(0);
     }
   });
 
@@ -192,32 +200,42 @@ describe("snapshot geometry", () => {
 
 describe("PR-city geometry pinning", () => {
   const main = world("main-sha", [
-    file("src/index.ts", "src", 10),
-    file("src/math.ts", "src", 6),
-    file("test/math.test.ts", "test", 8),
+    file("src/a.ts", "src", 10),
+    file("src/b.ts", "src", 6),
+    file("src/c.ts", "src", 8),
+    file("src/d.ts", "src", 4),
+    file("test/a.test.ts", "test", 10),
+    file("test/b.test.ts", "test", 6),
+    file("test/c.test.ts", "test", 8),
+    file("test/d.test.ts", "test", 4),
   ]);
 
   it("reshuffles districts when weights change and geometry isn't pinned", () => {
-    // The flaw this option exists to prevent: squarify reweights every
-    // rectangle from LOC, so one file growing a lot can reorder districts
-    // entirely, even though only one file changed.
+    // The flaw this option exists to prevent: the block allocator reweights
+    // every rectangle from each folder's file count, so a folder gaining
+    // several files can reorder district geometry entirely.
     const before = layoutWorld(main);
     const grown = world("pr-sha", [
-      ...main.files.filter((source) => source.path !== "src/index.ts"),
-      file("src/index.ts", "src", 2_000),
+      ...main.files,
+      file("src/e.ts", "src", 5),
+      file("src/f.ts", "src", 5),
+      file("src/g.ts", "src", 5),
+      file("src/h.ts", "src", 5),
+      file("src/i.ts", "src", 5),
+      file("src/j.ts", "src", 5),
     ]);
     const after = layoutWorld(grown);
 
     expect(after.snapshot.districts).not.toEqual(before.snapshot.districts);
   });
 
-  it("keeps districts and field size identical to main when pinned, even though a file's LOC changed", () => {
+  it("keeps districts and field size identical to main when pinned, even though the file count changed", () => {
     const baseline = layoutWorld(main, {
       generatedAt: "2026-08-08T00:00:00.000Z",
     });
     const grown = world("pr-sha", [
-      ...main.files.filter((source) => source.path !== "src/index.ts"),
-      file("src/index.ts", "src", 2_000),
+      ...main.files,
+      file("src/e.ts", "src", 2_000),
     ]);
 
     const pr = layoutWorld(grown, {
@@ -230,11 +248,10 @@ describe("PR-city geometry pinning", () => {
 
     expect(pr.snapshot.districts).toEqual(baseline.snapshot.districts);
     expect(pr.snapshot.size).toEqual(baseline.snapshot.size);
-    // The unchanged file keeps its exact coordinates from main.
-    expect(pr.plots["src/math.ts"]).toEqual(baseline.plots["src/math.ts"]);
-    expect(pr.plots["test/math.test.ts"]).toEqual(
-      baseline.plots["test/math.test.ts"],
-    );
+    // Every unchanged file keeps its exact coordinates from main.
+    for (const source of main.files) {
+      expect(pr.plots[source.path]).toEqual(baseline.plots[source.path]);
+    }
   });
 
   it("still places a file whose directory doesn't exist in the pinned districts", () => {

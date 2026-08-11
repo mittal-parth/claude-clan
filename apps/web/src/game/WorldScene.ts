@@ -348,7 +348,12 @@ export class WorldScene extends Phaser.Scene {
       }
     }
 
-    this.buildingManager.syncBuildings(snapshot, this.hasFitCamera, this.ambient);
+    this.buildingManager.syncBuildings(
+      snapshot,
+      this.hasFitCamera,
+      this.terrainManager.terrain,
+      this.ambient,
+    );
     const selected = this.cameraController.getSelectedPath();
     if (selected && !this.buildingManager.getViews().has(selected)) {
       this.cameraController.select(undefined);

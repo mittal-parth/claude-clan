@@ -108,7 +108,7 @@ export function nearShore(terrain: TerrainGrid, cell: TerrainCell): boolean {
 
 export function tileKeyFor(cell: TerrainCell): string {
   if (cell.kind === "road") {
-    return roadTextureKey(cell.roadMask);
+    return roadTextureKey(cell.roadMask, cell.roadClass ?? "street");
   }
   const variants = TERRAIN_VARIANT_COUNTS[cell.kind];
   return terrainTextureKey(cell.kind, Math.min(cell.variant, variants - 1));
@@ -147,9 +147,10 @@ export function sameStructure(before: Building, after: Building): boolean {
     before.plot.x === after.plot.x &&
     before.plot.y === after.plot.y &&
     before.language === after.language &&
+    before.district === after.district &&
     tierFor(before.loc) === tierFor(after.loc) &&
-    archetypeFor(before.language, before.loc) ===
-      archetypeFor(after.language, after.loc)
+    archetypeFor(before.language, before.loc, before.district) ===
+      archetypeFor(after.language, after.loc, after.district)
   );
 }
 

@@ -91,3 +91,31 @@ export function coastLighthouse(
     y: coastLanes(height).lighthouse,
   };
 }
+
+/**
+ * How far beyond the bare apron slab an installation's own fixtures reach:
+ * the harbour's warehouse and sign, the naval base's perimeter fence and its
+ * command precinct, none of which are drawn as terrain (see CLAUDE.md on the
+ * capitol) and so are otherwise invisible to the countryside's own tree
+ * scatter -- a pine can and did grow inside the naval base's own fence line.
+ * Generous rather than exact: this only ever suppresses a prop, never a tile
+ * kind, so erring wide costs nothing but a slightly larger clearing.
+ */
+const INSTALLATION_MARGIN_U = 1.6;
+const INSTALLATION_MARGIN_V = 1.6;
+
+/** True for any tile inside either coastal installation's own reserved ground. */
+export function isOnCoastInstallation(
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+): boolean {
+  const quayX = coastQuayX(width);
+  const lanes = coastLanes(height);
+  const halfU = COAST_QUAY_HALF_U + INSTALLATION_MARGIN_U;
+  const halfV = COAST_QUAY_HALF_V + INSTALLATION_MARGIN_V;
+  const withinApron = (laneY: number): boolean =>
+    x >= quayX - halfU && x <= quayX + halfU && y >= laneY - halfV && y <= laneY + halfV;
+  return withinApron(lanes.navy) || withinApron(lanes.harbour);
+}

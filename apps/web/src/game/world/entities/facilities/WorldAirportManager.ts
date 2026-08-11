@@ -191,7 +191,7 @@ export class WorldAirportManager {
           point.x,
           point.y + TILE_ANCHOR_Y,
           TERRAIN_ATLAS_KEY,
-          roadTextureKey(mask),
+          roadTextureKey(mask, "street"),
         )
         .setOrigin(0.5, 1)
         .setDepth(projection.depth(cell.x, cell.y) + 4)

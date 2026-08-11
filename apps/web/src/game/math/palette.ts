@@ -84,6 +84,8 @@ export const PROP_COLORS = {
   rock: 0x9c9c93,
   fountain: 0xd9d5c8,
   fountainWater: 0x54b7ea,
+  lampPost: 0x2b3038,
+  lampGlow: 0xffd166,
 } as const;
 
 const FALLBACK: PaletteSeed = {
@@ -648,8 +650,39 @@ export function tierFor(loc: number): number {
   return 3;
 }
 
-export function archetypeFor(language: string, loc: number): Archetype {
+/**
+ * A district's folder name is a stronger signal of what belongs on it than
+ * any one file's language: a `test/` folder is infrastructure regardless of
+ * whether its files are TypeScript or Python, and a `.github/` folder is
+ * infrastructure even though YAML is the only language that already forces
+ * "utility". Matched against the *last* path segment, so `packages/world/test`
+ * reads as a test folder the same as a bare `test/` at the root.
+ */
+const TEST_FOLDER_NAMES = new Set(["test", "tests", "spec", "specs", "__tests__"]);
+const INFRA_FOLDER_NAMES = new Set([".github", "infra", "config", "scripts", ".claude"]);
+
+/**
+ * Whether a district's own folder name marks it as infrastructure rather than
+ * housing, independent of the language mix inside it. Docs folders are left
+ * alone here -- Markdown already forces "utility" through UTILITY_LANGUAGES,
+ * so a docs-named folder gets the same result without a second rule.
+ */
+function isInfrastructureDistrict(districtPath: string): boolean {
+  const lastSegment = districtPath.split("/").pop() ?? districtPath;
+  return TEST_FOLDER_NAMES.has(lastSegment) || INFRA_FOLDER_NAMES.has(lastSegment);
+}
+
+/**
+ * districtPath is optional so every existing two-argument call site --
+ * comparing archetypes across a revision, or a plain language/loc lookup --
+ * keeps working unchanged; only the renderer's own building placement has a
+ * district to hand.
+ */
+export function archetypeFor(language: string, loc: number, districtPath?: string): Archetype {
   if (UTILITY_LANGUAGES.has(language)) {
+    return "utility";
+  }
+  if (districtPath !== undefined && isInfrastructureDistrict(districtPath)) {
     return "utility";
   }
   const order: Archetype[] = ["house", "townhouse", "office", "tower"];

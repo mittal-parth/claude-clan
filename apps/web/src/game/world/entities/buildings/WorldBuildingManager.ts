@@ -22,6 +22,7 @@ import { markerFor, rubbleMarkers } from "../../../math/overlay";
 import { archetypeFor, tierFor } from "../../../math/palette";
 import { bakeBuilding } from "../../../textures/buildings";
 import { TILE_ANCHOR_Y } from "../../../textures/core";
+import { buildingFacingAt, type TerrainGrid } from "../../../layouts/terrain";
 import type { FileChange } from "../../../WorldScene";
 
 export interface BuildingView {
@@ -64,6 +65,7 @@ export class WorldBuildingManager {
   syncBuildings(
     snapshot: WorldSnapshot,
     hasFitCamera: boolean,
+    terrain: TerrainGrid | undefined,
     ambient?: AmbientLife,
   ): void {
     const seen = new Set<string>();
@@ -90,7 +92,7 @@ export class WorldBuildingManager {
       }
       this.views.set(
         building.path,
-        this.raise(building, existing !== undefined, hasFitCamera, ambient),
+        this.raise(building, existing !== undefined, hasFitCamera, terrain, ambient),
       );
     }
 
@@ -106,11 +108,18 @@ export class WorldBuildingManager {
     building: Building,
     replacing: boolean,
     hasFitCamera: boolean,
+    terrain: TerrainGrid | undefined,
     ambient?: AmbientLife,
   ): BuildingView {
-    const archetype = archetypeFor(building.language, building.loc);
+    const archetype = archetypeFor(building.language, building.loc, building.district);
     const tier = tierFor(building.loc);
-    const baked = bakeBuilding(this.scene, archetype, tier, building.language);
+    // Only house and townhouse actually vary by facing (see FACING_VARIES in
+    // buildings.ts); computing it regardless is cheap and keeps this call
+    // site simple rather than special-casing two archetypes here too.
+    const facing = terrain
+      ? buildingFacingAt(building.plot.x, building.plot.y, terrain)
+      : "v";
+    const baked = bakeBuilding(this.scene, archetype, tier, building.language, facing);
     const point = projection.project(building.plot.x, building.plot.y);
 
     const sprite = this.scene.add

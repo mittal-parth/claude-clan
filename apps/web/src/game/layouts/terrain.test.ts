@@ -1,9 +1,10 @@
+import { BLOCK } from "@sudo-city/protocol";
 import type { WorldSnapshot } from "@sudo-city/protocol";
 import { describe, expect, it } from "vitest";
-import { coastLanes } from "./coast";
+import { isOnAirportGround } from "./airport";
+import { coastLanes, isOnCoastInstallation } from "./coast";
 import { createPortRoads } from "./portRoads";
 import {
-  BLOCK_STRIDE,
   COAST_RING,
   COUNTRYSIDE_RING,
   OUTER_RING,
@@ -12,27 +13,32 @@ import {
   ROAD_SOUTH,
   ROAD_WEST,
   buildTerrain,
+  buildingFacingAt,
+  isPlotCell,
   isRoadLane,
   roadMaskAt,
   type TerrainCell,
 } from "./terrain";
 
-const SIZE = 16;
+// Four blocks square: (25 - 1) / BLOCK === 4, so the field tiles exactly with
+// no remainder, and the "src" / "test" districts each get two whole blocks.
+const SIZE = BLOCK * 4 + 1;
 
 /**
- * Mirrors layoutWorld output: two districts tiling a 16x16 field, with plots on
- * the odd lanes that findPlotInDistrict would have handed out.
+ * Mirrors layoutWorld output: two block-aligned districts tiling the field,
+ * with plots on the lattice's own ring cells (isPlotCell), exactly as
+ * layoutWorld would hand out.
  */
 function snapshot(): WorldSnapshot {
   const plots = [
     { x: 1, y: 1 },
-    { x: 3, y: 1 },
-    { x: 5, y: 3 },
-    { x: 1, y: 5 },
-    { x: 7, y: 7 },
-    { x: 9, y: 1 },
-    { x: 11, y: 3 },
-    { x: 13, y: 9 },
+    { x: 5, y: 1 },
+    { x: BLOCK + 1, y: 1 },
+    { x: 1, y: BLOCK + 1 },
+    { x: BLOCK * 2 + 1, y: 1 },
+    { x: BLOCK * 2 + 5, y: 1 },
+    { x: BLOCK * 3 + 1, y: 1 },
+    { x: BLOCK * 2 + 1, y: BLOCK + 1 },
   ];
   return {
     id: "world:test",
@@ -41,12 +47,12 @@ function snapshot(): WorldSnapshot {
     generatedAt: "2026-08-08T00:00:00.000Z",
     size: { width: SIZE, height: SIZE },
     districts: [
-      { path: "src", x: 0, y: 0, width: 8, height: 16, weight: 100 },
-      { path: "test", x: 8, y: 0, width: 8, height: 16, weight: 60 },
+      { path: "src", x: 0, y: 0, width: BLOCK * 2, height: BLOCK * 4, weight: 100 },
+      { path: "test", x: BLOCK * 2, y: 0, width: BLOCK * 2, height: BLOCK * 4, weight: 60 },
     ],
     buildings: plots.map((plot, index) => ({
       path: `src/file-${index}.ts`,
-      district: plot.x < 8 ? "src" : "test",
+      district: plot.x < BLOCK * 2 ? "src" : "test",
       language: "TypeScript",
       loc: 40 + index * 30,
       plot,
@@ -110,31 +116,43 @@ describe("terrain bounds", () => {
 });
 
 describe("street grid", () => {
-  it("puts a street on every BLOCK_STRIDE-th lane from the district origin", () => {
-    const district = { path: "src", x: 0, y: 0, width: 24, height: 24, weight: 1 };
-
-    expect(isRoadLane(district, 0, 1)).toBe(true);
-    expect(isRoadLane(district, BLOCK_STRIDE, 1)).toBe(true);
-    expect(isRoadLane(district, 1, BLOCK_STRIDE)).toBe(true);
-    expect(isRoadLane(district, 1, 1)).toBe(false);
-    expect(isRoadLane(district, BLOCK_STRIDE - 1, BLOCK_STRIDE - 1)).toBe(false);
+  it("puts a street on every BLOCK-th lane, regardless of district", () => {
+    expect(isRoadLane(0, 1)).toBe(true);
+    expect(isRoadLane(BLOCK, 1)).toBe(true);
+    expect(isRoadLane(1, BLOCK)).toBe(true);
+    expect(isRoadLane(1, 1)).toBe(false);
+    expect(isRoadLane(BLOCK - 1, BLOCK - 1)).toBe(false);
   });
 
-  it("offsets the lane grid to each district's own origin", () => {
-    const district = { path: "test", x: 8, y: 0, width: 24, height: 24, weight: 1 };
-
-    expect(isRoadLane(district, 8, 1)).toBe(true);
-    expect(isRoadLane(district, 8 + BLOCK_STRIDE, 1)).toBe(true);
-    expect(isRoadLane(district, 9, 1)).toBe(false);
+  it("is the same lattice on both sides of a district boundary", () => {
+    // Before the lattice, each district measured its own lanes from its own
+    // origin, so two neighbouring districts whose origins differed by an odd
+    // amount put their lanes one tile apart. A global lattice has no origin to
+    // differ: isRoadLane depends only on the coordinate.
+    expect(isRoadLane(BLOCK * 2, 1)).toBe(true);
+    expect(isRoadLane(BLOCK * 2 - 1, 1)).toBe(false);
+    expect(isRoadLane(BLOCK * 2 + 1, 1)).toBe(false);
   });
 
-  it("never puts a street on an odd lane, where plots live", () => {
-    const district = { path: "src", x: 0, y: 0, width: 24, height: 24, weight: 1 };
+  it("never puts a street on a plot cell", () => {
+    for (let x = 0; x < BLOCK * 4; x += 1) {
+      for (let y = 0; y < BLOCK * 4; y += 1) {
+        if (isPlotCell(x, y)) {
+          expect(isRoadLane(x, y)).toBe(false);
+        }
+      }
+    }
+  });
 
-    // findPlotInDistrict starts at ceil(x)+1 and steps 2, so plots are odd.
-    for (let x = 1; x < 24; x += 2) {
-      for (let y = 1; y < 24; y += 2) {
-        expect(isRoadLane(district, x, y)).toBe(false);
+  it("gives every plot cell frontage on a lane", () => {
+    for (let x = 0; x < BLOCK * 4; x += 1) {
+      for (let y = 0; y < BLOCK * 4; y += 1) {
+        if (!isPlotCell(x, y)) {
+          continue;
+        }
+        const adjacent =
+          isRoadLane(x + 1, y) || isRoadLane(x - 1, y) || isRoadLane(x, y + 1) || isRoadLane(x, y - 1);
+        expect(adjacent).toBe(true);
       }
     }
   });
@@ -148,12 +166,23 @@ describe("street grid", () => {
     }
   });
 
-  it("leaves the lane between building columns as greenery or a lot", () => {
+  it("leaves an empty verge cell as greenery or a lot", () => {
     const grid = buildTerrain(snapshot());
 
-    // x=2,y=2 is neither a plot (odd lanes) nor a street lane (stride 4).
-    expect(["park", "ground"]).toContain(grid.cellAt(2, 2)?.kind);
-    expect(grid.cellAt(2, 2)?.kind).not.toBe("road");
+    // (1, 2) is a verge cell: not a lane, not a plot ring position, and not
+    // part of the courtyard core, so it only ever gets the plain treatment.
+    expect(["park", "ground"]).toContain(grid.cellAt(1, 2)?.kind);
+    expect(grid.cellAt(1, 2)?.kind).not.toBe("road");
+  });
+
+  it("leaves the block's courtyard core as greenery or a lot, like any other interior cell", () => {
+    const grid = buildTerrain(snapshot());
+    for (let dx = 2; dx <= 4; dx += 1) {
+      for (let dy = 2; dy <= 4; dy += 1) {
+        const kind = grid.cellAt(dx, dy)?.kind;
+        expect(["park", "ground"]).toContain(kind);
+      }
+    }
   });
 
   it("produces a connected grid, not isolated fragments", () => {
@@ -166,7 +195,7 @@ describe("street grid", () => {
 
   it("meets at a crossroads where two streets intersect", () => {
     const grid = buildTerrain(snapshot());
-    const junction = grid.cellAt(BLOCK_STRIDE, BLOCK_STRIDE);
+    const junction = grid.cellAt(BLOCK, BLOCK);
 
     expect(junction?.kind).toBe("road");
     expect(junction?.roadMask).toBe(
@@ -177,7 +206,8 @@ describe("street grid", () => {
   it("turns a corner at the city edge", () => {
     const grid = buildTerrain(snapshot());
 
-    // (0,0): no street north or west, streets running east and south.
+    // (0,0): no street north or west (outside the field), streets running
+    // east and south along the field's own ring road.
     expect(grid.cellAt(0, 0)?.roadMask).toBe(ROAD_EAST | ROAD_SOUTH);
   });
 });
@@ -200,10 +230,10 @@ describe("the dock road", () => {
 
   it("welds itself to a city street rather than dead-ending at the field", () => {
     const grid = buildTerrain(snapshot());
-    const linkRow = 6;
+    // The field's east edge (x = SIZE - 1) is entirely a lattice lane, so the
+    // link always finds a street to join on its very first try: the ideal row.
+    const linkRow = Math.min(SIZE - 1, Math.max(0, Math.round(coastLanes(SIZE).lighthouse)));
 
-    // The city's own street row reaches the field edge; the link picks it up
-    // one cell further out, so the two masks see each other.
     expect(grid.cellAt(SIZE - 1, linkRow)?.kind).toBe("road");
     expect(grid.cellAt(SIZE, linkRow)?.kind).toBe("road");
     expect(grid.cellAt(SIZE - 1, linkRow)?.roadMask ?? 0).toBeGreaterThan(0);
@@ -226,6 +256,107 @@ describe("the dock road", () => {
     for (const building of world.buildings) {
       expect(grid.cellAt(building.plot.x, building.plot.y)?.kind).toBe("ground");
     }
+  });
+});
+
+describe("landmark clearings", () => {
+  it("never seeds a tree, pine, bush or rock inside a coastal installation's own ground", () => {
+    const grid = buildTerrain(snapshot());
+    let checked = 0;
+
+    for (const cell of grid.cells) {
+      if (!isOnCoastInstallation(cell.x, cell.y, SIZE, SIZE)) {
+        continue;
+      }
+      checked += 1;
+      expect(cell.prop).toBeUndefined();
+    }
+    // The fixture's coastline has to actually pass through the harbour's and
+    // the naval base's own reserved ground, or this test would trivially pass
+    // by never finding a cell to check.
+    expect(checked).toBeGreaterThan(0);
+  });
+
+  it("never seeds a tree, pine, bush or rock inside the airport's own ground", () => {
+    const grid = buildTerrain(snapshot());
+    let checked = 0;
+
+    for (const cell of grid.cells) {
+      // Restricted to genuinely outside-city cells: the airport's reserved
+      // rectangles are only ever consulted for the countryside ring (see
+      // classify() in terrain.ts), and a corner of one can geometrically
+      // touch the field's own edge column without that column ever being
+      // reached through this path -- it is governed by classifyCity instead.
+      const outsideCity = cell.x < 0 || cell.x >= SIZE || cell.y < 0 || cell.y >= SIZE;
+      if (!outsideCity || !isOnAirportGround(cell.x, cell.y, SIZE, SIZE)) {
+        continue;
+      }
+      checked += 1;
+      expect(cell.prop).toBeUndefined();
+    }
+    expect(checked).toBeGreaterThan(0);
+  });
+
+  it("leaves the ground kind and colour of a reserved tile untouched -- only its prop is suppressed", () => {
+    const grid = buildTerrain(snapshot());
+
+    for (const cell of grid.cells) {
+      if (!isOnCoastInstallation(cell.x, cell.y, SIZE, SIZE)) {
+        continue;
+      }
+      // Still ordinary countryside grass (or sand/water, further out) --
+      // the clearing is invisible, not a bare patch standing out from its
+      // surroundings.
+      expect(["grass", "sand", "water", "road"]).toContain(cell.kind);
+    }
+  });
+});
+
+describe("building facing", () => {
+  // One district covering the whole field, so every lattice lane is a road
+  // regardless of district boundaries -- isolates buildingFacingAt's own
+  // logic from roadClassAt's.
+  const FACING_SIZE = BLOCK * 3 + 1;
+  function facingSnapshot(): WorldSnapshot {
+    return {
+      id: "world:facing",
+      repoPath: "/fixture",
+      revision: "facing",
+      generatedAt: "2026-08-11T00:00:00.000Z",
+      size: { width: FACING_SIZE, height: FACING_SIZE },
+      districts: [
+        { path: "src", x: 0, y: 0, width: FACING_SIZE - 1, height: FACING_SIZE - 1, weight: 1 },
+      ],
+      buildings: [],
+    };
+  }
+
+  it("faces the +v wall toward a street on the south side of the plot", () => {
+    const grid = buildTerrain(facingSnapshot());
+    // (9, 11): the south-mid ring position of block (1,1) -- its only
+    // frontage is the lane at y = 12, directly on its +v side.
+    expect(buildingFacingAt(9, 11, grid)).toBe("v");
+  });
+
+  it("faces the +u wall toward a street on the east side of the plot", () => {
+    const grid = buildTerrain(facingSnapshot());
+    // (11, 9): the east-mid ring position of block (1,1) -- its only
+    // frontage is the lane at x = 12, directly on its +u side.
+    expect(buildingFacingAt(11, 9, grid)).toBe("u");
+  });
+
+  it("prefers +v when a corner plot fronts both visible walls", () => {
+    const grid = buildTerrain(facingSnapshot());
+    // (11, 11): the south-east corner of block (1,1) -- both x = 12 and
+    // y = 12 are lanes, so either wall is a legitimate street frontage.
+    expect(buildingFacingAt(11, 11, grid)).toBe("v");
+  });
+
+  it("falls back to +v when neither visible wall fronts a street", () => {
+    const grid = buildTerrain(facingSnapshot());
+    // (7, 1): the north-mid ring position of block (1,0) -- its only
+    // frontage is at y = 0, the -v side, which drawBox never plates.
+    expect(buildingFacingAt(7, 1, grid)).toBe("v");
   });
 });
 
@@ -303,7 +434,7 @@ describe("determinism", () => {
     // Build on a park cell so the change is actually observable; a bare lot
     // and a built plot both classify as "ground".
     const park = before.cells.find(
-      (cell) => cell.kind === "park" && cell.x > 0 && cell.x < 8,
+      (cell) => cell.kind === "park" && cell.x > 0 && cell.x < BLOCK * 2,
     );
     if (!park) {
       throw new Error("fixture produced no park cell to build on");
@@ -328,8 +459,11 @@ describe("determinism", () => {
     expect(after.cellAt(park.x, park.y)?.kind).toBe("ground");
   });
 
-  it("keeps the block stride aligned with the layout package's plot stride", () => {
-    // findPlotInDistrict steps 2, so a stride of 4 always lands on a free lane.
-    expect(BLOCK_STRIDE % 2).toBe(0);
+  it("keeps every plot cell off the lattice's own lanes", () => {
+    for (let x = 0; x < BLOCK * 6; x += 1) {
+      for (let y = 0; y < BLOCK * 6; y += 1) {
+        expect(isPlotCell(x, y) && isRoadLane(x, y)).toBe(false);
+      }
+    }
   });
 });

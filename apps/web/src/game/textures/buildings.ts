@@ -1,14 +1,25 @@
 import { Archetype, TERRAIN_COLORS, BuildingPalette, paletteFor, bodyHeightFor } from "../math/palette";
 import { TILE_HEIGHT, Baker, TILE_WIDTH, shade, fillFace, diamond, strokeFace, HALF_W, Point3, HALF_H, TILE_ANCHOR_Y, createBaker } from "./core";
 import { FOOTPRINT } from "./terrain";
+import type { BuildingFacing } from "../layouts/terrain";
 import Phaser, { Scene } from "phaser";
+
+/**
+ * Only "house" and "townhouse" actually vary their bake by facing (a door,
+ * an awning) -- office, tower and utility have no wall-mounted street detail
+ * to reorient, so their key stays facing-independent and the bake cache
+ * isn't doubled for archetypes where the second half would be identical.
+ */
+const FACING_VARIES: ReadonlySet<Archetype> = new Set(["house", "townhouse"]);
 
 export function buildingTextureKey(
   archetype: Archetype,
   tier: number,
   language: string,
+  facing: BuildingFacing = "v",
 ): string {
-  return `bld:${archetype}:${tier}:${language}`;
+  const suffix = FACING_VARIES.has(archetype) ? `:${facing}` : "";
+  return `bld:${archetype}:${tier}:${language}${suffix}`;
 }
 
 
@@ -351,12 +362,26 @@ export function drawLanguageBadge(
 }
 
 
+/**
+ * The canvas only ever reserves TILE_ANCHOR_Y worth of room below the tile
+ * point (see bakeBuilding: originY = height - TILE_ANCHOR_Y), so the
+ * shadow's own near corner -- the one that reaches furthest down-screen --
+ * must keep (u + v) at or under 1 tile. FOOTPRINT + 0.04 diamond offset by
+ * 0.08 put that corner at 0.42 + 0.04 + 0.08 = 0.54 per axis, (u + v) = 1.08:
+ * two extra pixels below the canvas, clipped off in every building bake.
+ */
+const SHADOW_OFFSET = 0.03;
+
 export function drawShadow(baker: Baker, originY: number): void {
   // Cast down-right, away from the upper-left sun.
   baker.graphics.fillStyle(TERRAIN_COLORS.shadow, 0.2);
   baker.graphics.fillPoints(
     diamond(FOOTPRINT + 0.04).map((point) =>
-      baker.at([point[0] + 0.08, point[1] + 0.08, 0], HALF_W, originY),
+      baker.at(
+        [point[0] + SHADOW_OFFSET, point[1] + SHADOW_OFFSET, 0],
+        HALF_W,
+        originY,
+      ),
     ),
     true,
   );
@@ -669,11 +694,53 @@ export function drawHouse(
   originY: number,
   body: number,
   palette: BuildingPalette,
+  facing: BuildingFacing,
 ): void {
   const half = FOOTPRINT * 0.82;
   drawBox(baker, originY, half, 0, body, palette, palette.wall);
   drawWindows(baker, originY, half, 0, body, palette, 1, 2);
+  drawDoorway(baker, originY, half, palette, facing);
   drawPitchedRoof(baker, originY, half, body, 20, palette);
+}
+
+
+/**
+ * A doorway on whichever of the two visible walls faces the plot's own
+ * street -- the detail "facing the street" actually means. Only +u and +v
+ * are ever plated (see drawBox), so a plot fronting -u or -v falls back to
+ * whichever facing buildingFacingAt already chose for it; there is no third
+ * wall to put it on.
+ */
+function drawDoorway(
+  baker: Baker,
+  originY: number,
+  half: number,
+  palette: BuildingPalette,
+  facing: BuildingFacing,
+): void {
+  const doorHalf = Math.min(half * 0.24, 0.15);
+  // A fixed pixel height, not scaled from `half` -- `half` is a grid-space
+  // half-width (u/v tile units), not a z-space measurement, and the
+  // shortest house body (26px, tier 0) still comfortably clears a 12px door.
+  const doorTop = 12;
+  const doorColor = shade(palette.wallShadow, -8);
+
+  const points: Point3[] =
+    facing === "v"
+      ? [
+          [-doorHalf, half, doorTop],
+          [doorHalf, half, doorTop],
+          [doorHalf, half, 0],
+          [-doorHalf, half, 0],
+        ]
+      : [
+          [half, -doorHalf, doorTop],
+          [half, doorHalf, doorTop],
+          [half, doorHalf, 0],
+          [half, -doorHalf, 0],
+        ];
+  fillFace(baker, doorColor, 1, points, HALF_W, originY);
+  strokeFace(baker, palette.trim, 0.7, 1, points, HALF_W, originY);
 }
 
 
@@ -752,25 +819,28 @@ export function drawTownhouse(
   originY: number,
   body: number,
   palette: BuildingPalette,
+  facing: BuildingFacing,
 ): void {
   const half = FOOTPRINT * 0.9;
   drawBox(baker, originY, half, 0, body, palette, palette.roof);
   drawWindows(baker, originY, half, 10, body - 6, palette, 2, 2);
 
-  // Shopfront awning across the lit wall.
-  fillFace(
-    baker,
-    palette.trim,
-    1,
-    [
-      [-half, half, 16],
-      [half, half, 16],
-      [half, half, 8],
-      [-half, half, 8],
-    ],
-    HALF_W,
-    originY,
-  );
+  // Shopfront awning across whichever wall faces the street.
+  const awning: Point3[] =
+    facing === "v"
+      ? [
+          [-half, half, 16],
+          [half, half, 16],
+          [half, half, 8],
+          [-half, half, 8],
+        ]
+      : [
+          [half, -half, 16],
+          [half, half, 16],
+          [half, half, 8],
+          [half, -half, 8],
+        ];
+  fillFace(baker, palette.trim, 1, awning, HALF_W, originY);
   // Parapet.
   fillFace(
     baker,
@@ -964,8 +1034,9 @@ export function bakeBuilding(
   archetype: Archetype,
   tier: number,
   language: string,
+  facing: BuildingFacing = "v",
 ): BakedBuilding {
-  const key = buildingTextureKey(archetype, tier, language);
+  const key = buildingTextureKey(archetype, tier, language, facing);
   const cached = buildingCache.get(key);
   if (cached && scene.textures.exists(key)) {
     return cached;
@@ -982,10 +1053,10 @@ export function bakeBuilding(
 
   switch (archetype) {
     case "house":
-      drawHouse(baker, originY, body, palette);
+      drawHouse(baker, originY, body, palette, facing);
       break;
     case "townhouse":
-      drawTownhouse(baker, originY, body, palette);
+      drawTownhouse(baker, originY, body, palette, facing);
       break;
     case "office":
       drawOffice(baker, originY, body, tier, palette);

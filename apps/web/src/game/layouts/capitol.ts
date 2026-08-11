@@ -23,7 +23,7 @@ import {
   inCapitolDistrict,
   type CapitolDistrict,
 } from "@sudo-city/protocol";
-import { chance, hashCoords, mod, pickIndex, unitFloat } from "../math/hash";
+import { chance, hashCoords, pickIndex, unitFloat } from "../math/hash";
 import type { PropKind, TerrainCell } from "./terrain";
 
 /**
@@ -82,14 +82,15 @@ export function capitolCell(
 
   // The boulevard. roadMask is filled in later by roadMaskAt, which sees these
   // cells exactly as it sees the city's own streets — that is what welds the
-  // ring to the surrounding grid.
+  // ring to the surrounding grid. It is always the widest class: the one
+  // landmark every city has in common should never read as a back lane.
   if (
     x === mall.minX ||
     x === mall.maxX ||
     y === mall.minY ||
     y === mall.maxY
   ) {
-    return { x, y, kind: "road", variant: 0, roadMask: 0 };
+    return { x, y, kind: "road", variant: 0, roadMask: 0, roadClass: "boulevard" };
   }
 
   if (isPaved(du, dv)) {
