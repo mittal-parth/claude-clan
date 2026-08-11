@@ -23,6 +23,8 @@ import {
 import { worldToScreen } from "../../utils/hitZoneUtils";
 import { isCanvasPointer } from "../../utils/pointerUtils";
 import {
+  AIRPORT_TERMINAL_HALF_U,
+  AIRPORT_TERMINAL_HALF_V,
   airportLayoutKey,
   connectAirportToRoad,
   createAirportLayout,
@@ -91,9 +93,17 @@ export class WorldAirportManager {
     this.airportClickListener = listener;
   }
 
-  airportLayout(snapshot?: WorldSnapshot): AirportLayout {
-    const size = snapshot?.size ?? { width: 8, height: 8 };
-    return createAirportLayout(size.width, size.height);
+  /**
+   * The runway is placed from the field's own size — it runs along
+   * `height + 2.4`, off the island's southwest shore — so a layout is only
+   * meaningful for the city it was derived from.
+   *
+   * There is deliberately no default size. A fallback field here is invisible
+   * at the call site and silently puts the whole campus somewhere no city
+   * ever was; callers that might not have a snapshot say so explicitly.
+   */
+  airportLayout(snapshot: WorldSnapshot): AirportLayout {
+    return createAirportLayout(snapshot.size.width, snapshot.size.height);
   }
 
   private parkedAircraftRotation(airport: AirportLayout): number {
@@ -198,7 +208,15 @@ export class WorldAirportManager {
         AIRPORT_TERMINAL_KEY,
       )
       .setOrigin(0.5, 1)
-      .setDepth(projection.depth(airport.terminal.x + 1.55, airport.terminal.y + 0.82) + 12)
+      // A multi-tile sprite gets one sort key, taken from the front of its
+      // footprint: keyed on the centre, an aircraft parked at the stand sinks
+      // behind five tiles of facade.
+      .setDepth(
+        projection.depth(
+          airport.terminal.x + AIRPORT_TERMINAL_HALF_U,
+          airport.terminal.y + AIRPORT_TERMINAL_HALF_V,
+        ) + 12,
+      )
       .setInteractive({ pixelPerfect: true, useHandCursor: true });
     this.bindAirportInteractions(this.airportTerminal);
 
@@ -214,7 +232,10 @@ export class WorldAirportManager {
       .setInteractive({ pixelPerfect: true, useHandCursor: true });
     this.bindAirportInteractions(this.airportTower);
 
-    const windsockGrid = { x: airport.apron.x + 1.72, y: airport.apron.y + 0.7 };
+    // Anchored to the stand, not the apron centre: the apron grew with the
+    // terminal, and an apron-relative offset walked the windsock into the
+    // parked aircraft's wing.
+    const windsockGrid = { x: airport.gate.x + 1.73, y: airport.gate.y + 0.38 };
     const windsockPoint = projection.project(windsockGrid.x, windsockGrid.y);
     const windsock = this.scene.add
       .sprite(windsockPoint.x, windsockPoint.y + TILE_ANCHOR_Y, AIRPORT_WINDSOCK_KEY)
@@ -394,6 +415,10 @@ export class WorldAirportManager {
   }
 
   async playFlightTakeoff(snapshot?: WorldSnapshot): Promise<void> {
+    // No city, no runway to roll down. The cover transition still plays, so
+    // the journey reads as a jump cut rather than as an aeroplane taxiing
+    // across a field that is not there.
+    if (!snapshot) return;
     const airport = this.airportLayout(snapshot);
     const gate = projection.project(airport.gate.x, airport.gate.y);
     const threshold = projection.project(
@@ -498,6 +523,7 @@ export class WorldAirportManager {
   }
 
   async playFlightLanding(snapshot?: WorldSnapshot): Promise<void> {
+    if (!snapshot) return;
     const airport = this.airportLayout(snapshot);
     const approachGrid = runwayExitPoint(airport, 18);
     const approachGround = projection.project(approachGrid.x, approachGrid.y);

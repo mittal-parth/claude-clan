@@ -444,9 +444,22 @@ export class WorldScene extends Phaser.Scene {
     await this.navyManager.revealAfterTravel(this.transitionManager);
   }
 
-  async revealAfterAirportTravel(): Promise<void> {
+  /**
+   * `destination` is the snapshot the caller already matched against the
+   * arrival's destination key, and it is what the runway is derived from.
+   *
+   * Taking the scene's own `this.snapshot` instead is what put the aeroplane
+   * down in the sea. The runway is sized from the field (`runwayY` is
+   * `height + 2.4`), so flying the departure city's approach into a smaller
+   * one aims the touchdown tens of tiles past the island — and the two are
+   * separate sources of truth: React gates the arrival on the `world` prop
+   * while `this.snapshot` is set by setWorld(), which defers itself to the
+   * scene's CREATE event whenever the scene is not yet active. Passing the
+   * one the caller verified removes the gap rather than narrowing it.
+   */
+  async revealAfterAirportTravel(destination?: WorldSnapshot): Promise<void> {
     await this.airportManager.revealAfterAirportTravel(
-      this.snapshot,
+      destination ?? this.snapshot,
       this.transitionManager,
     );
   }

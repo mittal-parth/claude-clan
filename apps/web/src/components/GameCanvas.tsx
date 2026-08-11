@@ -606,7 +606,11 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
         return;
       }
       handledAirportArrivalRef.current = airportArrival.id;
-      void sceneRef.current.revealAfterAirportTravel().then(() => {
+      // Hand the landing the very world this effect just matched against the
+      // arrival's destination key. The scene's own snapshot is updated by a
+      // different effect and can still be the departure city's, which lands
+      // the aeroplane on the destination's open water.
+      void sceneRef.current.revealAfterAirportTravel(world).then(() => {
         transitioningRef.current = false;
         coverDoneRef.current = false;
         departureCityRef.current = undefined;

@@ -1,5 +1,12 @@
-import { Baker, Point3, fillFace, strokeFace, diamond } from "../core";
+import { Baker, HALF_H, HALF_W, Point3, fillFace, strokeFace, diamond } from "../core";
 import { AIRPORT } from "../airport/terminal";
+import {
+  AIRPORT_APRON_HALF_U,
+  AIRPORT_APRON_HALF_V,
+  AIRPORT_TERMINAL_HALF_U,
+  AIRPORT_TERMINAL_HALF_V,
+  createAirportLayout,
+} from "../../layouts/airport";
 import { TERRAIN_COLORS } from "../../math/palette";
 
 export const AIRPORT_APRON_KEY = "fx:airport-apron";
@@ -50,12 +57,24 @@ export function drawAirportLabel(
 
 /** A broad concrete apron makes the terminal, stand and taxi route one campus. */
 export function bakeAirportApron(baker: Baker): void {
-  const width = 384;
-  const height = 192;
+  // Every marking below is placed by asking the layout where things actually
+  // are, rather than by restating tuned offsets that drift the moment the
+  // campus moves. The apron and everything on it are all pinned to the field's
+  // height, so those terms cancel and any city size gives the same answers.
+  const layout = createAirportLayout(24, 24);
+  const relU = (x: number): number => x - layout.apron.x;
+  const relV = (y: number): number => y - layout.apron.y;
+  const standU = relU(layout.gate.x);
+  const standV = relV(layout.gate.y);
+  const entryU = relU(layout.runwayEntry.x);
+  const frontageV = relV(layout.terminal.y + AIRPORT_TERMINAL_HALF_V);
+
+  const halfU = AIRPORT_APRON_HALF_U;
+  const halfV = AIRPORT_APRON_HALF_V;
+  const width = Math.ceil((halfU + halfV) * HALF_W * 2) + 16;
+  const height = Math.ceil((halfU + halfV) * HALF_H * 2) + 16;
   const originX = width / 2;
   const originY = height / 2;
-  const halfU = 2.25;
-  const halfV = 1.45;
   const slab: Point3[] = [
     [-halfU, -halfV, 0],
     [halfU, -halfV, 0],
@@ -77,7 +96,7 @@ export function bakeAirportApron(baker: Baker): void {
   // Expansion joints make the large slab read as poured concrete rather than
   // a single flat polygon.
   baker.graphics.lineStyle(1, AIRPORT.concreteDark, 0.42);
-  for (const u of [-1.45, -0.65, 0.15, 0.95, 1.75]) {
+  for (let u = -halfU + 0.75; u < halfU; u += 0.8) {
     const from = baker.at([u, -halfV, 1], originX, originY);
     const to = baker.at([u, halfV, 1], originX, originY);
     baker.graphics.lineBetween(from.x, from.y, to.x, to.y);
@@ -88,26 +107,30 @@ export function bakeAirportApron(baker: Baker): void {
     baker.graphics.lineBetween(from.x, from.y, to.x, to.y);
   }
 
-  // Gate stand lead-in and stop bars.
+  // Gate stand lead-in: off the taxiway entry, curving in to the stand.
   baker.graphics.lineStyle(3, AIRPORT.gold, 0.96);
   const lead = [
-    baker.at([2.1, 0.62, 2], originX, originY),
-    baker.at([0.75, 0.62, 2], originX, originY),
-    baker.at([0.15, 0.18, 2], originX, originY),
-    baker.at([-0.6, 0.18, 2], originX, originY),
+    baker.at([entryU, halfV, 2], originX, originY),
+    baker.at([entryU, standV + 0.43, 2], originX, originY),
+    baker.at([entryU - 0.5, standV + 0.1, 2], originX, originY),
+    baker.at([standU, standV, 2], originX, originY),
   ];
   baker.graphics.strokePoints(lead, false);
-  for (const u of [-0.72, -0.54, -0.36]) {
-    const a = baker.at([u, -0.2, 2], originX, originY);
-    const b = baker.at([u, 0.52, 2], originX, originY);
+  for (const u of [standU - 0.18, standU, standU + 0.18]) {
+    const a = baker.at([u, standV - 0.38, 2], originX, originY);
+    const b = baker.at([u, standV + 0.34, 2], originX, originY);
     baker.graphics.lineBetween(a.x, a.y, b.x, b.y);
   }
 
-  // Baggage/service lane and pedestrian hatch beside the terminal doors.
+  // Baggage/service lane hatched along the terminal kerb. Drawn at the
+  // frontage rather than behind it — set back into the footprint it is simply
+  // covered by the building and does nothing at all.
   baker.graphics.lineStyle(2, AIRPORT.white, 0.58);
-  for (let u = -1.9; u < 0.9; u += 0.42) {
-    const a = baker.at([u, -1.12, 2], originX, originY);
-    const b = baker.at([u + 0.2, -0.92, 2], originX, originY);
+  const kerbFrom = relU(layout.terminal.x) - AIRPORT_TERMINAL_HALF_U + 0.2;
+  const kerbTo = relU(layout.terminal.x) + AIRPORT_TERMINAL_HALF_U - 0.4;
+  for (let u = kerbFrom; u < kerbTo; u += 0.42) {
+    const a = baker.at([u, frontageV + 0.05, 2], originX, originY);
+    const b = baker.at([u + 0.2, frontageV + 0.25, 2], originX, originY);
     baker.graphics.lineBetween(a.x, a.y, b.x, b.y);
   }
   baker.finish(AIRPORT_APRON_KEY, width, height);
