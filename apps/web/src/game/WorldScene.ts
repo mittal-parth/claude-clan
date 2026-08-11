@@ -442,6 +442,8 @@ export class WorldScene extends Phaser.Scene {
   private airportHoverListener?: (info?: ShipHoverInfo) => void;
   private airportClickListener?: () => void;
   private capitolClickListener?: () => void;
+  private capitolHoverListener?: (info?: ShipHoverInfo) => void;
+  private capitolHoverHideTimer?: Phaser.Time.TimerEvent;
 
   /**
    * The east-coast harbour. Purely scenery: none of these sprites is made
@@ -546,6 +548,10 @@ export class WorldScene extends Phaser.Scene {
 
   setCapitolClickListener(listener: () => void): void {
     this.capitolClickListener = listener;
+  }
+
+  setCapitolHoverListener(listener: (info?: ShipHoverInfo) => void): void {
+    this.capitolHoverListener = listener;
   }
 
   setTravelTransitionActive(active: boolean): void {
@@ -1080,6 +1086,8 @@ export class WorldScene extends Phaser.Scene {
     for (const sprite of this.propSprites) {
       sprite.destroy();
     }
+    this.cancelCapitolHoverHide();
+    this.capitolHoverListener?.(undefined);
     this.groundSprites = [];
     this.propSprites = [];
 
@@ -1173,6 +1181,8 @@ export class WorldScene extends Phaser.Scene {
     for (const sprite of this.propSprites) {
       sprite.destroy();
     }
+    this.cancelCapitolHoverHide();
+    this.capitolHoverListener?.(undefined);
     this.groundSprites = [];
     this.propSprites = [];
 
@@ -1219,6 +1229,24 @@ export class WorldScene extends Phaser.Scene {
    * middle would let a block standing in front of it disappear behind the
    * facade.
    */
+  private showCapitolHover(info: ShipHoverInfo): void {
+    this.cancelCapitolHoverHide();
+    this.capitolHoverListener?.(info);
+  }
+
+  private scheduleHideCapitolHover(): void {
+    this.cancelCapitolHoverHide();
+    this.capitolHoverHideTimer = this.time.delayedCall(32, () => {
+      this.capitolHoverHideTimer = undefined;
+      this.capitolHoverListener?.(undefined);
+    });
+  }
+
+  private cancelCapitolHoverHide(): void {
+    this.capitolHoverHideTimer?.remove(false);
+    this.capitolHoverHideTimer = undefined;
+  }
+
   private drawCapitol(size: WorldSize): void {
     if (!capitolFits(size)) {
       return;
@@ -1240,8 +1268,23 @@ export class WorldScene extends Phaser.Scene {
       .setScale(CAPITOL_SCALE)
       .setDepth(projection.depth(sort.x, sort.y))
       .setInteractive({ pixelPerfect: true, useHandCursor: true });
+    capitol.on("pointerover", () => {
+      if (this.travelTransitionActive) return;
+      const screen = this.worldToScreen(capitol.x, capitol.y - 360);
+      this.showCapitolHover({
+        cityId: "capitol",
+        title: "TOWNHALL",
+        action: "Open the issue shop",
+        screenX: screen.x,
+        screenY: screen.y,
+      });
+    });
+    capitol.on("pointerout", () => this.scheduleHideCapitolHover());
     capitol.on("pointerdown", () => {
+      if (this.travelTransitionActive) return;
       playUiClickSound();
+      this.cancelCapitolHoverHide();
+      this.capitolHoverListener?.(undefined);
       this.capitolClickListener?.();
     });
     this.propSprites.push(capitol);

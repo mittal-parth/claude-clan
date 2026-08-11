@@ -144,6 +144,18 @@ export default function App(props: AppProps) {
         onBuildingDragEnd={state.handleBuildingDrop}
       />
 
+      {state.shipHover ? (
+        <div
+          className="pointer-events-none absolute z-30 min-w-max -translate-x-1/2 -translate-y-full border border-white/20 bg-[#081923]/95 px-3 py-2 text-left text-white shadow-xl backdrop-blur-sm"
+          style={{ left: state.shipHover.screenX, top: state.shipHover.screenY - 12 }}
+        >
+          <span className="retro block text-[8px] text-amber-200">{state.shipHover.title}</span>
+          <span className="mt-1 block text-[10px] text-sky-100/65">{state.shipHover.action}</span>
+        </div>
+      ) : null}
+
+      <div aria-hidden="true" className="hud-vignette" />
+
       <AppHud
         state={state}
         onSignIn={onSignIn}
