@@ -3,14 +3,21 @@
  *
  * The world is a bounded island: the district field in the middle, a ring of
  * countryside, a sand coast, then ocean out to a hard edge that doubles as the
- * camera bound. Streets are derived from the layout package's plot stride
- * rather than invented: findPlotInDistrict() steps 2 and insets by 1, so every
- * even lane inside a district is guaranteed free.
+ * camera bound. Streets run on the protocol package's global block lattice
+ * rather than on anything derived from a district: every district used to
+ * invent its own street phase from its own fractional origin, and two
+ * districts whose origins differed by an odd amount put their lanes one tile
+ * apart -- a twin road. One shared lattice makes that unrepresentable.
  */
 
 import {
+  ARTERIAL_BLOCKS,
+  BLOCK,
   capitolDistrict,
   capitolFits,
+  isCourtyardCell,
+  isPlotCell,
+  isRoadLane,
   type CapitolDistrict,
   type DistrictRect,
   type WorldSnapshot,
@@ -18,7 +25,7 @@ import {
 import { capitolCell } from "./capitol";
 import { createPortRoads, type PortRoadPlan } from "./portRoads";
 import { COAST_RING, COUNTRYSIDE_RING, OUTER_RING } from "./rings";
-import { chance, hashCoords, mod, pickIndex, unitFloat } from "../math/hash";
+import { chance, hashCoords, hashText, mod, pickIndex, unitFloat } from "../math/hash";
 
 export {
   COUNTRYSIDE_RING,
@@ -27,14 +34,7 @@ export {
   OUTER_RING,
 } from "./rings";
 
-/**
- * Streets every 6 lanes. Free lanes inside a district sit at even offsets and
- * buildings at odd ones, so an even stride always lands on a free lane and can
- * never collide with a plot. Six leaves a five-wide block — three building
- * columns and the greenery between them — where four made the city read as
- * mostly road.
- */
-export const BLOCK_STRIDE = 6;
+export { BLOCK, isCourtyardCell, isPlotCell, isRoadLane } from "@sudo-city/protocol";
 
 /**
  * "plaza" is paving: the apron around the capitol and the walk that carries it
@@ -54,6 +54,19 @@ export type TerrainKind =
 
 export type PropKind = "tree" | "pine" | "bush" | "rock" | "fountain";
 
+/**
+ * A lane's class is decided by what it separates, not by anything persisted:
+ * `boulevard` on the field's own edge ring, on the capitol's ring, and
+ * between two different top-level folders; `street` between two districts of
+ * the same top-level folder, and on every ARTERIAL_BLOCKS-th lane regardless
+ * (which is what gives even a single-district repository a main road);
+ * `lane` everywhere else. Deriving it from the districts already on the
+ * snapshot -- rather than storing it -- is what keeps a PR city's roads
+ * identical to main's: main's districts are pinned onto the PR snapshot
+ * verbatim, so the same derivation produces the same classes.
+ */
+export type RoadClass = "boulevard" | "street" | "lane";
+
 export interface TerrainCell {
   x: number;
   y: number;
@@ -62,6 +75,8 @@ export interface TerrainCell {
   variant: number;
   /** 4-bit N/E/S/W neighbour mask; only meaningful when kind is "road". */
   roadMask: number;
+  /** Only meaningful when kind is "road". */
+  roadClass?: RoadClass;
   prop?: PropKind;
   /**
    * Planting that belongs to a designed layout rather than to scatter, and so
@@ -167,8 +182,10 @@ function shoreDistance(
 }
 
 /**
- * Indexes districts by integer cell. Districts tile the field exactly, so
- * assigning by cell centre gives each cell exactly one owner.
+ * Indexes districts by integer cell. District rectangles are block-aligned and
+ * half-open (a cell at x === district.x + district.width belongs to the next
+ * district, or to no district at all on the field's own edge), so every cell
+ * has exactly one owner with no rounding at the boundary.
  */
 function indexDistricts(
   districts: readonly DistrictRect[],
@@ -177,10 +194,10 @@ function indexDistricts(
 ): Map<string, DistrictRect> {
   const index = new Map<string, DistrictRect>();
   for (const district of districts) {
-    const startX = Math.max(0, Math.round(district.x));
-    const startY = Math.max(0, Math.round(district.y));
-    const endX = Math.min(width - 1, Math.ceil(district.x + district.width) - 1);
-    const endY = Math.min(height - 1, Math.ceil(district.y + district.height) - 1);
+    const startX = Math.max(0, district.x);
+    const startY = Math.max(0, district.y);
+    const endX = Math.min(width - 1, district.x + district.width - 1);
+    const endY = Math.min(height - 1, district.y + district.height - 1);
     for (let y = startY; y <= endY; y += 1) {
       for (let x = startX; x <= endX; x += 1) {
         index.set(cellKey(x, y), district);
@@ -190,13 +207,73 @@ function indexDistricts(
   return index;
 }
 
-/** A street lane runs along every BLOCK_STRIDE-th lane from the district origin. */
-export function isRoadLane(district: DistrictRect, x: number, y: number): boolean {
-  const originX = Math.ceil(district.x);
-  const originY = Math.ceil(district.y);
-  return (
-    mod(x - originX, BLOCK_STRIDE) === 0 || mod(y - originY, BLOCK_STRIDE) === 0
-  );
+/** The top-level path segment a district lives under, "" for the repo root. */
+function topSegment(path: string): string {
+  const slash = path.indexOf("/");
+  return slash === -1 ? path : path.slice(0, slash);
+}
+
+const ROAD_CLASS_RANK: Record<RoadClass, number> = { lane: 0, street: 1, boulevard: 2 };
+
+function widerRoadClass(left: RoadClass, right: RoadClass): RoadClass {
+  return ROAD_CLASS_RANK[left] >= ROAD_CLASS_RANK[right] ? left : right;
+}
+
+/**
+ * The class of a single (non-junction) lane cell -- the arm reaching out from
+ * a junction, or an ordinary mid-block lane cell. Determines its own
+ * orientation from its own coordinate, so calling it on a junction's four
+ * orthogonal neighbours classifies each of the junction's own arms.
+ */
+function laneClass(
+  x: number,
+  y: number,
+  districtAt: ReadonlyMap<string, DistrictRect>,
+): RoadClass {
+  const vertical = mod(x, BLOCK) === 0;
+  const a = districtAt.get(cellKey(vertical ? x - 1 : x, vertical ? y : y - 1));
+  const b = districtAt.get(cellKey(vertical ? x + 1 : x, vertical ? y : y + 1));
+
+  let boundary: RoadClass;
+  if (!a || !b) {
+    // The field's own edge ring: nothing lies on the far side.
+    boundary = "boulevard";
+  } else if (topSegment(a.path) !== topSegment(b.path)) {
+    boundary = "boulevard";
+  } else if (a.path !== b.path) {
+    boundary = "street";
+  } else {
+    boundary = "lane";
+  }
+
+  const arterial = vertical
+    ? mod(x, BLOCK * ARTERIAL_BLOCKS) === 0
+    : mod(y, BLOCK * ARTERIAL_BLOCKS) === 0;
+  const floor: RoadClass = arterial ? "street" : "lane";
+
+  return widerRoadClass(boundary, floor);
+}
+
+/**
+ * The class of any road lane cell, junction or straight run. A junction takes
+ * the widest class of its own four arms -- the boulevard a junction sits on
+ * must not be narrowed just because a back lane happens to cross it there.
+ */
+export function roadClassAt(
+  x: number,
+  y: number,
+  districtAt: ReadonlyMap<string, DistrictRect>,
+): RoadClass {
+  const junction = mod(x, BLOCK) === 0 && mod(y, BLOCK) === 0;
+  if (!junction) {
+    return laneClass(x, y, districtAt);
+  }
+  return [
+    laneClass(x + 1, y, districtAt),
+    laneClass(x - 1, y, districtAt),
+    laneClass(x, y + 1, districtAt),
+    laneClass(x, y - 1, districtAt),
+  ].reduce(widerRoadClass);
 }
 
 export function buildTerrain(snapshot: WorldSnapshot): TerrainGrid {
@@ -229,10 +306,7 @@ export function buildTerrain(snapshot: WorldSnapshot): TerrainGrid {
     width,
     height,
     isLand: (x, y) => shoreDistance(x, y, width, height) <= COUNTRYSIDE_RING + COAST_RING,
-    isCityRoad: (x, y) => {
-      const district = districtAt.get(cellKey(x, y));
-      return district !== undefined && isRoadLane(district, x, y);
-    },
+    isCityRoad: (x, y) => isRoadLane(x, y),
   });
 
   for (let y = bounds.minY; y <= bounds.maxY; y += 1) {
@@ -280,7 +354,8 @@ function classify(
   // branch above: it runs from the city edge out to the two aprons and must
   // never be in a position to pave over a plot.
   if (ports.has(x, y)) {
-    return { x, y, kind: "road", variant: 0, roadMask: 0 };
+    // A working road, not a back lane and not a boulevard.
+    return { x, y, kind: "road", variant: 0, roadMask: 0, roadClass: "street" };
   }
 
   const distance = shoreDistance(x, y, width, height);
@@ -306,6 +381,17 @@ function classify(
   };
 }
 
+/**
+ * Classifies one city cell against the lattice.
+ *
+ * The order matters and is the fix for the old checkerboard: a plot cell is
+ * classified as ground whether or not a building actually stands there yet,
+ * so the allocator and the terrain pass can never disagree about which cells
+ * are streets. isPlotCell only ever returns true for a cell isRoadLane
+ * already rejected, so a building can no longer win a fight with a road tile
+ * for the same cell -- there is no fight, because the two sets are disjoint
+ * by construction.
+ */
 function classifyCity(
   x: number,
   y: number,
@@ -314,27 +400,37 @@ function classifyCity(
 ): TerrainCell {
   const district = districtAt.get(cellKey(x, y));
 
-  // A plot always wins — a building must never be planted on a street.
   if (occupied.has(cellKey(x, y))) {
     return { x, y, kind: "ground", variant: 0, roadMask: 0 };
+  }
+  if (isRoadLane(x, y)) {
+    return { x, y, kind: "road", variant: 0, roadMask: 0, roadClass: roadClassAt(x, y, districtAt) };
   }
   if (!district) {
     return grassCell(x, y, 0x9c1);
   }
-  if (isRoadLane(district, x, y)) {
-    return { x, y, kind: "road", variant: 0, roadMask: 0 };
-  }
-
-  // The lane between two building columns becomes greenery or a bare lot.
-  const seed = hashCoords(x, y, 0x3f0);
-  if (!chance(seed, 0.6)) {
+  if (isPlotCell(x, y)) {
+    // An empty lot -- a plot cell nothing has been sited on yet.
     return { x, y, kind: "ground", variant: 0, roadMask: 0 };
   }
+
+  const courtyard = isCourtyardCell(x, y);
+  const seed = hashCoords(x, y, courtyard ? 0x3f3 : 0x3f0);
+  if (!chance(seed, courtyard ? 0.7 : 0.4)) {
+    return { x, y, kind: "ground", variant: 0, roadMask: 0 };
+  }
+  // Salting the variant pick with the district's own path, rather than only
+  // the tile coordinate, is what gives one neighbourhood's parks a different
+  // lean between the two park textures than its neighbour's -- still random
+  // tile to tile, but biased the same way across one district, which is the
+  // only way ground tone can read as belonging to a place rather than to a
+  // single square of it.
+  const districtSalt = hashText(district.path, 0x3f4);
   return {
     x,
     y,
     kind: "park",
-    variant: pickIndex(hashCoords(x, y, 0x3f1), 2),
+    variant: pickIndex(hashCoords(x, y, 0x3f1) ^ districtSalt, 2),
     roadMask: 0,
     prop: parkProp(hashCoords(x, y, 0x3f2)),
   };

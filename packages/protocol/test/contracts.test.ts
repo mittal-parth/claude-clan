@@ -88,6 +88,31 @@ describe("protocol contracts", () => {
     ).toThrow();
   });
 
+  it("carries layoutVersion when present, and parses fine without it", () => {
+    const withVersion = GameEventSchema.parse({
+      ...base,
+      type: "world.ready",
+      snapshot: { ...snapshot, layoutVersion: 2 },
+    });
+    if (withVersion.type !== "world.ready") {
+      throw new Error("expected a world.ready event");
+    }
+    expect(withVersion.snapshot.layoutVersion).toBe(2);
+
+    // A snapshot persisted by older code has no layoutVersion at all -- that
+    // absence is itself the signal the server uses to tell a stale snapshot
+    // from a current one, so it must still parse rather than be rejected.
+    const withoutVersion = GameEventSchema.parse({
+      ...base,
+      type: "world.ready",
+      snapshot,
+    });
+    if (withoutVersion.type !== "world.ready") {
+      throw new Error("expected a world.ready event");
+    }
+    expect(withoutVersion.snapshot.layoutVersion).toBeUndefined();
+  });
+
   it("rejects a snapshot without a world size", () => {
     const { size: _size, ...withoutSize } = snapshot;
 

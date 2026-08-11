@@ -1,7 +1,12 @@
 import {
-  CAPITOL_FRONT_EXTENT_V,
+  BLOCK,
+  CAPITOL_BLOCKS_U,
+  CAPITOL_BLOCKS_V,
   CAPITOL_HALF_U,
   CAPITOL_HALF_V,
+  CAPITOL_MIN_FIELD_HEIGHT,
+  CAPITOL_MIN_FIELD_WIDTH,
+  blocksAcross,
   capitolDistrict,
   capitolFits,
   inCapitolDistrict,
@@ -41,21 +46,36 @@ function snapshot(size = SIZE): WorldSnapshot {
 }
 
 describe("the capitol reserve", () => {
-  it("sits at the centre of the field", () => {
+  it("sits near the centre of the field, on whole blocks either side", () => {
     const mall = capitolDistrict({ width: SIZE, height: SIZE });
+    const sideBlocks = blocksAcross(SIZE);
 
-    expect(mall.centerX).toBe(Math.floor((SIZE - 1) / 2));
-    expect(mall.centerY).toBe(Math.floor((SIZE - 1) / 2));
+    // The reserve is seated on block boundaries: its own width and height are
+    // exact multiples of BLOCK, so its perimeter is always a lattice lane.
+    expect(mall.minX % BLOCK).toBe(0);
+    expect(mall.minY % BLOCK).toBe(0);
     expect(mall.maxX - mall.minX).toBe(CAPITOL_HALF_U * 2);
-    expect(mall.maxY - mall.minY).toBe(
-      CAPITOL_HALF_V + CAPITOL_FRONT_EXTENT_V,
-    );
+    expect(mall.maxY - mall.minY).toBe(CAPITOL_HALF_V * 2);
+
+    // CAPITOL_BLOCKS_U is odd and CAPITOL_BLOCKS_V is even, so a square field
+    // cannot centre the reserve exactly on both axes at once -- the floor
+    // division in capitolDistrict is documented to leave up to half a block
+    // of slack on one side rather than grow the whole field for it. The two
+    // margins can therefore differ by at most one block.
+    const marginBeforeX = mall.minX / BLOCK;
+    const marginAfterX = sideBlocks - CAPITOL_BLOCKS_U - marginBeforeX;
+    expect(Math.abs(marginBeforeX - marginAfterX)).toBeLessThanOrEqual(1);
+
+    const marginBeforeY = mall.minY / BLOCK;
+    const marginAfterY = sideBlocks - CAPITOL_BLOCKS_V - marginBeforeY;
+    expect(Math.abs(marginBeforeY - marginAfterY)).toBeLessThanOrEqual(1);
   });
 
   it("is declined by a field too small to give the block away", () => {
     expect(capitolFits({ width: 12, height: 12 })).toBe(false);
-    expect(capitolFits({ width: 23, height: 16 })).toBe(true);
-    expect(capitolFits({ width: 23, height: 15 })).toBe(false);
+    expect(capitolFits({ width: CAPITOL_MIN_FIELD_WIDTH, height: CAPITOL_MIN_FIELD_HEIGHT })).toBe(true);
+    expect(capitolFits({ width: CAPITOL_MIN_FIELD_WIDTH - 1, height: CAPITOL_MIN_FIELD_HEIGHT })).toBe(false);
+    expect(capitolFits({ width: CAPITOL_MIN_FIELD_WIDTH, height: CAPITOL_MIN_FIELD_HEIGHT - 1 })).toBe(false);
     expect(capitolFits({ width: SIZE, height: SIZE })).toBe(true);
   });
 
@@ -112,27 +132,31 @@ describe("the mall's ground", () => {
     }
   });
 
-  it("lays apron, one tile of lawn, then boulevard on every side", () => {
+  it("lays apron, lawn, then boulevard on every side", () => {
     const mall = capitolDistrict({ width: SIZE, height: SIZE });
     const kindAt = (du: number, dv: number) =>
       capitolCell(mall, mall.centerX + du, mall.centerY + dv)?.kind;
 
     // Sideways, clear of the approach: building to du 5, the baked apron
-    // overhangs du 6, and boulevard is du 7.
+    // overhangs du 6, lawn carries to du CAPITOL_HALF_U - 1, and the
+    // boulevard sits on the reserve's own perimeter at du CAPITOL_HALF_U.
     for (const side of [1, -1]) {
       expect(kindAt(side * 6, 0)).toBe("park");
-      expect(kindAt(side * 7, 0)).toBe("road");
+      expect(kindAt(side * (CAPITOL_HALF_U - 1), 0)).toBe("park");
+      expect(kindAt(side * CAPITOL_HALF_U, 0)).toBe("road");
     }
 
-    // Behind: building to dv -2, the baked apron overhangs dv -3, and
-    // boulevard is dv -4.
+    // Behind: building to dv -2, the baked apron overhangs dv -3, lawn to
+    // -(CAPITOL_HALF_V - 1), boulevard at -CAPITOL_HALF_V.
     expect(kindAt(0, -3)).toBe("park");
-    expect(kindAt(0, -4)).toBe("road");
+    expect(kindAt(0, -(CAPITOL_HALF_V - 1))).toBe("park");
+    expect(kindAt(0, -CAPITOL_HALF_V)).toBe("road");
 
-    // In front, off the approach, the one lawn tile remains at dv 2 and the
-    // boulevard is now at dv 3.
-    expect(kindAt(6, 2)).toBe("park");
-    expect(kindAt(6, 3)).toBe("road");
+    // In front, off the approach, lawn runs to CAPITOL_HALF_V - 1 and the
+    // boulevard is at CAPITOL_HALF_V -- the reserve is symmetric front and
+    // back now that it is sized in whole blocks either side of the building.
+    expect(kindAt(6, CAPITOL_HALF_V - 1)).toBe("park");
+    expect(kindAt(6, CAPITOL_HALF_V)).toBe("road");
   });
 
   it("walks the approach from the apron to the boulevard at stair width", () => {
@@ -140,9 +164,9 @@ describe("the mall's ground", () => {
     const kindAt = (du: number, dv: number) =>
       capitolCell(mall, mall.centerX + du, mall.centerY + dv)?.kind;
 
-    // The two rows at dv 1 and dv 2 carry concrete from the stair into the
-    // existing walk, with the front boulevard closing it at dv 3.
-    for (let dv = 1; dv <= CAPITOL_FRONT_EXTENT_V - 1; dv += 1) {
+    // Every row between the apron and the boulevard carries concrete from the
+    // stair into the walk, with the boulevard closing it at CAPITOL_HALF_V.
+    for (let dv = 1; dv <= CAPITOL_HALF_V - 1; dv += 1) {
       for (let du = -1; du <= 1; du += 1) {
         expect(kindAt(du, dv)).toBe("plaza");
       }
@@ -151,7 +175,7 @@ describe("the mall's ground", () => {
       expect(kindAt(2, dv)).toBe("park");
       expect(kindAt(-2, dv)).toBe("park");
     }
-    expect(kindAt(0, 3)).toBe("road");
+    expect(kindAt(0, CAPITOL_HALF_V)).toBe("road");
 
     // The walk runs to the front only; the back keeps its unbroken lawn.
     expect(kindAt(0, -3)).toBe("park");
@@ -163,22 +187,17 @@ describe("the mall's ground", () => {
       capitolCell(mall, mall.centerX + du, mall.centerY + dv)?.prop;
 
     // Mirroring across the wing axis is what reads as a designed mall.
-    for (
-      let dv = -CAPITOL_HALF_V + 1;
-      dv <= CAPITOL_FRONT_EXTENT_V - 1;
-      dv += 1
-    ) {
-      expect(propAt(CAPITOL_HALF_U - 1, dv)).toBe(
-        propAt(-(CAPITOL_HALF_U - 1), dv),
-      );
+    for (let dv = -(CAPITOL_HALF_V - 1); dv <= CAPITOL_HALF_V - 1; dv += 1) {
+      expect(propAt(CAPITOL_HALF_U - 1, dv)).toBe(propAt(-(CAPITOL_HALF_U - 1), dv));
     }
-    // The rear and front corners of the remaining lawn are marked.
-    expect(propAt(CAPITOL_HALF_U - 1, -CAPITOL_HALF_V + 1)).toBe("fountain");
-    expect(propAt(-(CAPITOL_HALF_U - 1), -CAPITOL_HALF_V + 1)).toBe("fountain");
-    expect(propAt(CAPITOL_HALF_U - 1, CAPITOL_FRONT_EXTENT_V - 1)).toBe("fountain");
-    expect(propAt(-(CAPITOL_HALF_U - 1), CAPITOL_FRONT_EXTENT_V - 1)).toBe("fountain");
+    // All four corners of the lawn are marked, front and back alike -- the
+    // reserve's symmetry means neither pair needs its own separate assertion.
+    expect(propAt(CAPITOL_HALF_U - 1, -(CAPITOL_HALF_V - 1))).toBe("fountain");
+    expect(propAt(-(CAPITOL_HALF_U - 1), -(CAPITOL_HALF_V - 1))).toBe("fountain");
+    expect(propAt(CAPITOL_HALF_U - 1, CAPITOL_HALF_V - 1)).toBe("fountain");
+    expect(propAt(-(CAPITOL_HALF_U - 1), CAPITOL_HALF_V - 1)).toBe("fountain");
     // The ceremonial approach stays open.
-    expect(propAt(0, CAPITOL_FRONT_EXTENT_V - 1)).toBeUndefined();
+    expect(propAt(0, CAPITOL_HALF_V - 1)).toBeUndefined();
   });
 
   it("exempts its planting from the decoration budget", () => {
@@ -228,7 +247,7 @@ describe("the mall inside a built world", () => {
   });
 
   it("leaves a small city untouched", () => {
-    const small = snapshot(14);
+    const small = snapshot(CAPITOL_MIN_FIELD_WIDTH - 1);
     const grid = buildTerrain(small);
     const centre = grid.cellAt(6, 6);
 

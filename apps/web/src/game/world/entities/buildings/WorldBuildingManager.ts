@@ -108,7 +108,7 @@ export class WorldBuildingManager {
     hasFitCamera: boolean,
     ambient?: AmbientLife,
   ): BuildingView {
-    const archetype = archetypeFor(building.language, building.loc);
+    const archetype = archetypeFor(building.language, building.loc, building.district);
     const tier = tierFor(building.loc);
     const baked = bakeBuilding(this.scene, archetype, tier, building.language);
     const point = projection.project(building.plot.x, building.plot.y);

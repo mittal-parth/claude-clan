@@ -7,9 +7,9 @@
  */
 
 import Phaser from "phaser";
-import { hashCoords, pickIndex } from "../math/hash";
+import { hashCoords, pickIndex, unitFloat } from "../math/hash";
 import type { IsoProjection } from "../math/iso";
-import type { TerrainCell, TerrainGrid } from "../layouts/terrain";
+import type { RoadClass, TerrainCell, TerrainGrid } from "../layouts/terrain";
 import {
   COAST_RING,
   COUNTRYSIDE_RING,
@@ -41,6 +41,23 @@ const WOODEN_SHIP_CORNER_INSET = 0.18;
 
 /** Milliseconds a car takes to cross one tile. */
 const CAR_TILE_MS = 900;
+
+/**
+ * How many copies of a road cell go into the spawn pool, by class. A road
+ * with no class recorded (the airport's taxiway loop, which carries no
+ * district) defaults to "street" in tileKeyFor, so it is weighted the same
+ * here.
+ */
+const ROAD_CLASS_TRAFFIC_WEIGHT: Record<RoadClass, number> = {
+  boulevard: 4,
+  street: 2,
+  lane: 1,
+};
+
+/** Chance a car at a junction takes the widest road on offer rather than a random one. */
+const PREFER_WIDER_ROAD_CHANCE = 0.7;
+
+const ROAD_CLASS_RANK: Record<RoadClass, number> = { lane: 0, street: 1, boulevard: 2 };
 
 export interface AmbientDepths {
   ground: number;
@@ -223,10 +240,21 @@ export class AmbientLife {
       return;
     }
 
+    // Weight the spawn pool toward the wider roads, so a glance at the city
+    // shows more traffic on its main roads than its back lanes rather than
+    // an even scatter that ignores the road hierarchy entirely.
+    const pool: TerrainCell[] = [];
+    for (const cell of drivable) {
+      const weight = ROAD_CLASS_TRAFFIC_WEIGHT[cell.roadClass ?? "street"];
+      for (let copy = 0; copy < weight; copy += 1) {
+        pool.push(cell);
+      }
+    }
+
     const count = Math.min(MAX_CARS, Math.floor(drivable.length / 8));
     for (let index = 0; index < count; index += 1) {
-      const cell = drivable[
-        pickIndex(hashCoords(index, index * 7, 0xca4), drivable.length)
+      const cell = pool[
+        pickIndex(hashCoords(index, index * 7, 0xca4), pool.length)
       ] as TerrainCell;
       const point = this.projection.project(cell.x, cell.y);
       const sprite = this.scene.add
@@ -266,9 +294,22 @@ export class AmbientLife {
       (cell) => !(cell.x === car.from?.x && cell.y === car.from?.y),
     );
     const choices = forward.length > 0 ? forward : options;
-    const next = choices[
-      Math.floor(Math.random() * choices.length)
-    ] as TerrainCell;
+
+    // At a junction with a choice of roads, usually take the widest one on
+    // offer -- hash-driven on the car's own position, not Math.random, so the
+    // preference is deterministic for a given approach rather than reshuffled
+    // on every rebuild.
+    const widestRank = Math.max(
+      ...choices.map((cell) => ROAD_CLASS_RANK[cell.roadClass ?? "street"]),
+    );
+    const widest = choices.filter(
+      (cell) => ROAD_CLASS_RANK[cell.roadClass ?? "street"] === widestRank,
+    );
+    const preferWidest =
+      widest.length < choices.length &&
+      unitFloat(hashCoords(car.cell.x, car.cell.y, 0xca5)) < PREFER_WIDER_ROAD_CHANCE;
+    const pool = preferWidest ? widest : choices;
+    const next = pool[Math.floor(Math.random() * pool.length)] as TerrainCell;
 
     const point = this.projection.project(next.x, next.y);
     car.from = car.cell;

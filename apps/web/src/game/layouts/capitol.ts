@@ -17,13 +17,12 @@
  */
 
 import {
-  CAPITOL_FRONT_EXTENT_V,
   CAPITOL_HALF_U,
   CAPITOL_HALF_V,
   inCapitolDistrict,
   type CapitolDistrict,
 } from "@sudo-city/protocol";
-import { chance, hashCoords, mod, pickIndex, unitFloat } from "../math/hash";
+import { chance, hashCoords, pickIndex, unitFloat } from "../math/hash";
 import type { PropKind, TerrainCell } from "./terrain";
 
 /**
@@ -39,17 +38,21 @@ export const CAPITOL_OFFSET_V = -1;
 /**
  * The mall in layers, working outward from the building:
  *
- *   building | half-tile apron | 1 tile lawn | boulevard
+ *   building | half-tile apron | lawn | boulevard
  *
  * The apron is half a tile wide, so it cannot be terrain — the grid has no
  * half tiles. It is baked into the capitol's own texture instead and simply
  * overhangs the first lawn ring, which is why the tiles it covers are still
  * classified as lawn here. Only the walk out to the road, which has to line up
  * with the road, is real paving.
+ *
+ * The reserve grew to whole blocks (CAPITOL_HALF_U/V are now 9 and 6, up from
+ * 7 and 4) so the lawn is now symmetric front and back — three tiles deep on
+ * every side rather than the old mismatched one-tile strip.
  */
 const LAWN_HALF_U = CAPITOL_HALF_U - 1;
 const LAWN_BACK_V = CAPITOL_HALF_V - 1;
-const LAWN_FRONT_V = CAPITOL_FRONT_EXTENT_V - 1;
+const LAWN_FRONT_V = CAPITOL_HALF_V - 1;
 
 /**
  * Half-width of the ceremonial approach, in tiles.
@@ -82,14 +85,15 @@ export function capitolCell(
 
   // The boulevard. roadMask is filled in later by roadMaskAt, which sees these
   // cells exactly as it sees the city's own streets — that is what welds the
-  // ring to the surrounding grid.
+  // ring to the surrounding grid. It is always the widest class: the one
+  // landmark every city has in common should never read as a back lane.
   if (
     x === mall.minX ||
     x === mall.maxX ||
     y === mall.minY ||
     y === mall.maxY
   ) {
-    return { x, y, kind: "road", variant: 0, roadMask: 0 };
+    return { x, y, kind: "road", variant: 0, roadMask: 0, roadClass: "boulevard" };
   }
 
   if (isPaved(du, dv)) {
