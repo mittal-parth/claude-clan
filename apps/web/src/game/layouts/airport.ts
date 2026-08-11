@@ -26,6 +26,27 @@ export interface AirportLayout {
   accessRoadStart: AirportPoint;
 }
 
+/**
+ * Half-extents of the terminal's footprint, in tiles. Two consumers have to
+ * agree on this rectangle — the placement below, which keeps it off the
+ * buildable field, and the bake, which derives every one of its own
+ * dimensions from it — so it lives here, on the pure side, rather than as a
+ * copy on each. The scene also needs the *front* corner for its depth key.
+ */
+export const AIRPORT_TERMINAL_HALF_U = 2.6;
+
+export const AIRPORT_TERMINAL_HALF_V = 0.95;
+
+/**
+ * Half-extents of the concrete apron, shared with its bake for the same
+ * reason. Everything that stands on tarmac — terminal, tower, stand — is
+ * placed against these, so a prop can never end up on grass without a test
+ * saying so.
+ */
+export const AIRPORT_APRON_HALF_U = 4.5;
+
+export const AIRPORT_APRON_HALF_V = 1.45;
+
 export const MIN_AIRPORT_RUNWAY_LENGTH = 18;
 export const MAX_AIRPORT_RUNWAY_LENGTH = 22;
 
@@ -58,9 +79,18 @@ export function createAirportLayout(width: number, height: number): AirportLayou
     runwayLength,
     runwayWidth: 1.44,
     departureThreshold: { x: runwayStartX + 0.42, y: runwayY },
-    terminal: { x: -1.7, y: safeHeight - 0.55 },
-    tower: { x: -3.18, y: safeHeight - 0.72 },
-    apron: { x: -1.05, y: safeHeight + 0.46 },
+    // The terminal is 5.2 tiles long and drawn from its centre, so its near
+    // end reaches x + AIRPORT_TERMINAL_HALF_U. Keeping that just short of 0
+    // is what stops the frontage from standing through a file's building on
+    // the city's west column.
+    terminal: { x: -2.82, y: safeHeight - 0.62 },
+    // Off the terminal's near end, on the extended tarmac. Screen-right means
+    // +x, and y stays past the field's last row so the tower is outside the
+    // buildable area even though its x is positive.
+    tower: { x: 2.3, y: safeHeight + 0.25 },
+    // Runs from the tower back past the terminal's far end. The far edge is
+    // pinned by the terminal, so the slab is lengthened at the +x end only.
+    apron: { x: -1.2, y: safeHeight + 0.46 },
     gate: { x: -1.03, y: safeHeight + 0.78 },
     taxiHold: { x: runwayEntryX, y: runwayY - 0.86 },
     runwayEntry: { x: runwayEntryX, y: runwayY },
