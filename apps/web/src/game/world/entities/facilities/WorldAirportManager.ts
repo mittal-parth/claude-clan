@@ -21,6 +21,7 @@ import {
   type ScreenPoint,
 } from "../../core/worldMath";
 import { worldToScreen } from "../../utils/hitZoneUtils";
+import { isCanvasPointer } from "../../utils/pointerUtils";
 import {
   airportLayoutKey,
   connectAirportToRoad,
@@ -268,7 +269,8 @@ export class WorldAirportManager {
       });
     });
     sprite.on("pointerout", () => this.airportHoverListener?.(undefined));
-    sprite.on("pointerdown", () => {
+    sprite.on("pointerdown", (pointer: Phaser.Input.Pointer) => {
+      if (!isCanvasPointer(pointer)) return;
       if (this.isTravelTransitionActive()) return;
       playUiClickSound();
       this.airportHoverListener?.(undefined);

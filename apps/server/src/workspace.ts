@@ -55,6 +55,20 @@ interface City {
   pendingScan?: Promise<WorldSnapshot>;
 }
 
+/**
+ * Whether an issue is a synthesised stand-in for a local git worktree rather
+ * than something a person opened on GitHub.
+ *
+ * refreshRoster() pushes one of these per checked-out worktree so the branch
+ * shows up as a city you can travel to, and a `file://` url is what tells the
+ * two apart — a GitHub issue always has an https one. Keep the test here
+ * rather than repeating the prefix: the roster, the city list and the issue
+ * board all have to agree on what counts as local.
+ */
+function isLocalWorktreeIssue(issue: Pick<IssueRef, "url">): boolean {
+  return issue.url?.startsWith("file://") ?? false;
+}
+
 class CityRegistry {
   private readonly cities = new Map<CityId, City>();
   private readonly pullRequests = new Map<CityId, PullRequestRef>();
@@ -99,8 +113,18 @@ class CityRegistry {
     return this.issues.get(id);
   }
 
+  /**
+   * The issue board only — the bazaar under the capitol, where you pick
+   * something to fix. Local worktrees are deliberately excluded: they are
+   * already-checked-out branches, not work anyone reported, and offering one
+   * as an issue to fix invites dispatching the mayor at a city that exists.
+   * They keep their entry in `this.issues` because that is what gives them a
+   * city id and a place in listCities().
+   */
   listIssues(): Issue[] {
-    return [...this.issues.values()].map((issue) => ({ ...issue }));
+    return [...this.issues.values()]
+      .filter((issue) => !isLocalWorktreeIssue(issue))
+      .map((issue) => ({ ...issue }));
   }
 
   knownPullRequestIds(): CityId[] {
@@ -150,7 +174,7 @@ class CityRegistry {
       });
     }
     for (const [id, issue] of this.issues) {
-      const isLocalWorktree = issue.url?.startsWith("file://");
+      const isLocalWorktree = isLocalWorktreeIssue(issue);
       if (!this.cities.has(id) && !this.pendingBuilds.has(id) && !isLocalWorktree) {
         continue;
       }

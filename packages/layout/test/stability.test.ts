@@ -1,4 +1,4 @@
-import type { SourceFile, WorldMap } from "@sudo-city/protocol";
+import { capitolFits, type SourceFile, type WorldMap } from "@sudo-city/protocol";
 import { describe, expect, it } from "vitest";
 import { fieldSizeFor, layoutWorld } from "../src/index.js";
 
@@ -165,7 +165,12 @@ describe("snapshot geometry", () => {
   });
 
   it("scales the field to the repository", () => {
-    expect(fieldSizeFor(1)).toBe(12);
+    // A one-file repository still gets a field the capitol fits in; below that
+    // floor the city renders with no monument at all.
+    expect(capitolFits({ width: fieldSizeFor(1), height: fieldSizeFor(1) })).toBe(
+      true,
+    );
+    expect(fieldSizeFor(1)).toBeLessThan(fieldSizeFor(2_000));
     expect(fieldSizeFor(85)).toBeLessThan(32);
     expect(fieldSizeFor(2_000)).toBeGreaterThan(fieldSizeFor(200));
     // Even sizes keep district origins aligned with the odd-lane plot grid.

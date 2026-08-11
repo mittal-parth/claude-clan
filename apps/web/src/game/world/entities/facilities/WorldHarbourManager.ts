@@ -24,6 +24,7 @@ import {
 } from "../../core/worldConstants";
 import type { ScreenPoint } from "../../core/worldMath";
 import { createFootprintHitZone, worldToScreen } from "../../utils/hitZoneUtils";
+import { isCanvasPointer } from "../../utils/pointerUtils";
 import {
   createHarbourLayout,
   harbourLayoutKey,
@@ -309,7 +310,8 @@ export class WorldHarbourManager {
       });
     });
     ship.on("pointerout", () => this.scheduleHideHarbourHover());
-    ship.on("pointerdown", () => {
+    ship.on("pointerdown", (pointer: Phaser.Input.Pointer) => {
+      if (!isCanvasPointer(pointer)) return;
       if (this.isTravelTransitionActive()) return;
       playUiClickSound();
       this.cancelHarbourHoverHide();
@@ -360,7 +362,8 @@ export class WorldHarbourManager {
       });
     });
     sprite.on("pointerout", () => this.scheduleHideHarbourHover());
-    sprite.on("pointerdown", () => {
+    sprite.on("pointerdown", (pointer: Phaser.Input.Pointer) => {
+      if (!isCanvasPointer(pointer)) return;
       if (this.isTravelTransitionActive()) return;
       playUiClickSound();
       this.cancelHarbourHoverHide();

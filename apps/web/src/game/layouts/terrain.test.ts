@@ -1,5 +1,7 @@
 import type { WorldSnapshot } from "@sudo-city/protocol";
 import { describe, expect, it } from "vitest";
+import { coastLanes } from "./coast";
+import { createPortRoads } from "./portRoads";
 import {
   BLOCK_STRIDE,
   COAST_RING,
@@ -177,6 +179,53 @@ describe("street grid", () => {
 
     // (0,0): no street north or west, streets running east and south.
     expect(grid.cellAt(0, 0)?.roadMask).toBe(ROAD_EAST | ROAD_SOUTH);
+  });
+});
+
+describe("the dock road", () => {
+  it("carries the street grid out to both aprons", () => {
+    const grid = buildTerrain(snapshot());
+    const road = createPortRoads({
+      width: SIZE,
+      height: SIZE,
+      isLand: () => true,
+      isCityRoad: () => true,
+    });
+    const lanes = coastLanes(SIZE);
+
+    for (const lane of [lanes.navy, lanes.harbour]) {
+      expect(grid.cellAt(road.spineX, Math.round(lane))?.kind).toBe("road");
+    }
+  });
+
+  it("welds itself to a city street rather than dead-ending at the field", () => {
+    const grid = buildTerrain(snapshot());
+    const linkRow = 6;
+
+    // The city's own street row reaches the field edge; the link picks it up
+    // one cell further out, so the two masks see each other.
+    expect(grid.cellAt(SIZE - 1, linkRow)?.kind).toBe("road");
+    expect(grid.cellAt(SIZE, linkRow)?.kind).toBe("road");
+    expect(grid.cellAt(SIZE - 1, linkRow)?.roadMask ?? 0).toBeGreaterThan(0);
+    expect((grid.cellAt(SIZE, linkRow)?.roadMask ?? 0) & ROAD_WEST).toBe(ROAD_WEST);
+  });
+
+  it("never paves a cell the city wanted for something else", () => {
+    const world = snapshot();
+    const grid = buildTerrain(world);
+
+    // Everything outside the field that is road belongs to the dock road, and
+    // none of it may stand on water or on a plot.
+    const outside = grid.roads.filter(
+      (cell) => cell.x > SIZE - 1 || cell.x < 0 || cell.y > SIZE - 1 || cell.y < 0,
+    );
+    expect(outside.length).toBeGreaterThan(0);
+    for (const cell of outside) {
+      expect(cell.x).toBeGreaterThan(SIZE - 1);
+    }
+    for (const building of world.buildings) {
+      expect(grid.cellAt(building.plot.x, building.plot.y)?.kind).toBe("ground");
+    }
   });
 });
 

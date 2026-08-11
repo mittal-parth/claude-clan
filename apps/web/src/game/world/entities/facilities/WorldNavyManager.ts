@@ -79,6 +79,7 @@ import {
 } from "../../core/worldConstants";
 import type { ScreenPoint } from "../../core/worldMath";
 import { createFootprintHitZone, worldToScreen } from "../../utils/hitZoneUtils";
+import { isCanvasPointer } from "../../utils/pointerUtils";
 import { AmbientLife, prefersReducedMotion } from "../../../systems/ambient";
 import { bakeTerrainTextures } from "../../../textures/init";
 import { TILE_ANCHOR_Y, TILE_HEIGHT, TILE_WIDTH } from "../../../textures/core";
@@ -362,7 +363,8 @@ export class WorldNavyManager {
       this.navyBattleship.on("pointerout", () => {
         this.scheduleHideNavyHover();
       });
-      this.navyBattleship.on("pointerdown", () => {
+      this.navyBattleship.on("pointerdown", (pointer: Phaser.Input.Pointer) => {
+        if (!isCanvasPointer(pointer)) return;
         if (this.isTravelTransitionActive()) return;
         playUiClickSound();
         this.cancelNavyHoverHide();
@@ -443,7 +445,8 @@ export class WorldNavyManager {
       });
     });
     sprite.on("pointerout", () => this.scheduleHideNavyHover());
-    sprite.on("pointerdown", () => {
+    sprite.on("pointerdown", (pointer: Phaser.Input.Pointer) => {
+      if (!isCanvasPointer(pointer)) return;
       if (this.isTravelTransitionActive()) return;
       playUiClickSound();
       this.cancelNavyHoverHide();
