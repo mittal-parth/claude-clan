@@ -11,7 +11,8 @@
  * unrepresentable: there is only ever one place a road can be.
  */
 
-function floorMod(value: number, modulus: number): number {
+/** Always returns a value in [0, modulus), unlike JS's own remainder operator. */
+export function mod(value: number, modulus: number): number {
   return ((value % modulus) + modulus) % modulus;
 }
 
@@ -31,7 +32,7 @@ export const ARTERIAL_BLOCKS = 3;
 
 /** True on a lattice lane: the shared street grid, independent of any district. */
 export function isRoadLane(x: number, y: number): boolean {
-  return floorMod(x, BLOCK) === 0 || floorMod(y, BLOCK) === 0;
+  return mod(x, BLOCK) === 0 || mod(y, BLOCK) === 0;
 }
 
 /**
@@ -44,15 +45,15 @@ export function isRoadLane(x: number, y: number): boolean {
  * becomes the courtyard's core instead of a landlocked building.
  */
 export function isPlotCell(x: number, y: number): boolean {
-  const ox = floorMod(x, BLOCK);
-  const oy = floorMod(y, BLOCK);
+  const ox = mod(x, BLOCK);
+  const oy = mod(y, BLOCK);
   return ox % 2 === 1 && oy % 2 === 1 && !(ox === 3 && oy === 3);
 }
 
 /** True for the 3x3 core of a block: offsets 2..4 in both axes. */
 export function isCourtyardCell(x: number, y: number): boolean {
-  const ox = floorMod(x, BLOCK);
-  const oy = floorMod(y, BLOCK);
+  const ox = mod(x, BLOCK);
+  const oy = mod(y, BLOCK);
   return ox >= 2 && ox <= 4 && oy >= 2 && oy <= 4;
 }
 
@@ -82,3 +83,43 @@ export const RING_ORDER: ReadonlyArray<readonly [number, number]> = [
   [3, 5],
   [1, 3],
 ];
+
+/**
+ * Nudges a proposed centre coordinate so that a fixed-size ring around it
+ * never sits exactly one tile parallel to a lattice lane -- the shape a twin
+ * road takes. A ring edge is safe when it lands *on* a lane (residue 0, which
+ * welds the two into one road) or at least two tiles clear of one (residue
+ * 2..4); residue 1 or BLOCK-1 is the one-tile gap that reads as a doubled
+ * road running beside the real street.
+ *
+ * This is deliberately independent of the reserve's own size: it works for
+ * any fixed half-extent, symmetric or not, so a landmark's footprint never
+ * has to grow to a whole number of blocks just to stay off this trap -- only
+ * its centre has to move, and only by a tile or two.
+ */
+export function nearestLatticeSafeCentre(
+  ideal: number,
+  halfBefore: number,
+  halfAfter: number,
+): number {
+  const isSafeEdge = (edge: number): boolean => {
+    const residue = mod(edge, BLOCK);
+    return residue !== 1 && residue !== BLOCK - 1;
+  };
+  const isSafe = (candidate: number): boolean =>
+    isSafeEdge(candidate - halfBefore) && isSafeEdge(candidate + halfAfter);
+
+  if (isSafe(ideal)) {
+    return ideal;
+  }
+  for (let delta = 1; delta <= BLOCK; delta += 1) {
+    if (isSafe(ideal - delta)) {
+      return ideal - delta;
+    }
+    if (isSafe(ideal + delta)) {
+      return ideal + delta;
+    }
+  }
+  // Unreachable: BLOCK candidates cover every residue class at least once.
+  return ideal;
+}

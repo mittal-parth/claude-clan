@@ -1,7 +1,6 @@
 import {
   BLOCK,
-  CAPITOL_BLOCKS_U,
-  CAPITOL_BLOCKS_V,
+  CAPITOL_RESERVE_BLOCKS,
   LAYOUT_VERSION,
   MIN_SIDE_BLOCKS,
   PLOTS_PER_BLOCK,
@@ -65,7 +64,7 @@ export interface LayoutResult {
 const TARGET_FILL = 0.85;
 
 /** Blocks the capitol reserve takes out of the middle of the field. */
-const CAPITOL_BLOCKS = CAPITOL_BLOCKS_U * CAPITOL_BLOCKS_V;
+const CAPITOL_BLOCKS = CAPITOL_RESERVE_BLOCKS;
 
 /** Headroom over one block per district, so the recursive split always has somewhere to cut. */
 const DISTRICT_SLACK = 1.15;

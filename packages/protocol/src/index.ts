@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 export * from "./lattice";
-import { BLOCK, blocksAcross } from "./lattice";
+import { BLOCK, nearestLatticeSafeCentre } from "./lattice";
 
 export const PlotSchema = z.object({
   x: z.number().int().nonnegative(),
@@ -362,21 +362,19 @@ export const ServerMessageSchema = z.discriminatedUnion("kind", [
  */
 
 /**
- * The reserve, in blocks. Three by two: the capitol is far wider than it is
- * deep, and a 3x2 reserve gives a 17x11 interior — three tiles of lawn on
- * every side of the 11x5 building — with its boulevard sitting on lattice
- * lanes, so the ring is part of the city's own grid instead of a road running
- * one tile beside one. Before this the reserve's perimeter was picked from the
- * building's own extents with no reference to the lattice at all, so wherever
- * it happened to run beside a street lane the two roads sat one tile apart —
- * a twin road at the one landmark every city has in common.
+ * Half-extents of the reserve, in tiles, measured from the centre tile. The
+ * front v extent is one tile shorter than the rear so the rearward building
+ * offset leaves a deliberate, slightly larger forecourt.
+ *
+ * These are sized directly from the building outward, one layer at a time,
+ * and nothing is spare: building | 1 tile paved apron | 1 tile lawn |
+ * boulevard. The reserve's own *size* has no need to be a whole number of
+ * blocks -- see nearestLatticeSafeCentre below, which is what keeps the ring
+ * off the lattice's twin-road trap without growing the footprint at all.
  */
-export const CAPITOL_BLOCKS_U = 3;
-export const CAPITOL_BLOCKS_V = 2;
-
-/** Half-extents in tiles, derived from the block counts: 9 and 6. */
-export const CAPITOL_HALF_U = (CAPITOL_BLOCKS_U * BLOCK) / 2;
-export const CAPITOL_HALF_V = (CAPITOL_BLOCKS_V * BLOCK) / 2;
+export const CAPITOL_HALF_U = 7;
+export const CAPITOL_HALF_V = 4;
+export const CAPITOL_FRONT_EXTENT_V = CAPITOL_HALF_V - 1;
 
 export interface CapitolDistrict {
   /** Centre tile — where the capitol sprite is anchored. */
@@ -390,42 +388,57 @@ export interface CapitolDistrict {
 }
 
 /**
- * The reserve is seated on whole blocks so its own perimeter is lattice lanes,
- * not an arbitrary offset from the field's centre tile. When the field's block
- * count and the reserve's don't share parity, the floor division below can
- * leave the mall up to half a block off true centre — accepted deliberately:
- * forcing parity would grow the field by a whole block for a three-tile gain.
+ * The centre is nudged off the field's exact midpoint just enough to keep the
+ * reserve's ring from ever running exactly one tile parallel to a real
+ * street -- the shape a twin road takes. Growing the reserve to a whole
+ * number of blocks would also solve this, but at the cost of the building's
+ * own lawn size; nudging the centre by at most a couple of tiles keeps the
+ * building's footprint exactly as designed and is imperceptible next to a
+ * monument this size.
  */
 export function capitolDistrict(size: WorldSize): CapitolDistrict {
-  const bx = Math.floor((blocksAcross(size.width) - CAPITOL_BLOCKS_U) / 2);
-  const by = Math.floor((blocksAcross(size.height) - CAPITOL_BLOCKS_V) / 2);
-  const minX = bx * BLOCK;
-  const minY = by * BLOCK;
-  const maxX = minX + CAPITOL_BLOCKS_U * BLOCK;
-  const maxY = minY + CAPITOL_BLOCKS_V * BLOCK;
+  const idealX = Math.floor((size.width - 1) / 2);
+  const idealY = Math.floor((size.height - 1) / 2);
+  const centerX = nearestLatticeSafeCentre(idealX, CAPITOL_HALF_U, CAPITOL_HALF_U);
+  const centerY = nearestLatticeSafeCentre(idealY, CAPITOL_HALF_V, CAPITOL_FRONT_EXTENT_V);
   return {
-    minX,
-    minY,
-    maxX,
-    maxY,
-    centerX: minX + CAPITOL_HALF_U,
-    centerY: minY + CAPITOL_HALF_V,
+    centerX,
+    centerY,
+    minX: centerX - CAPITOL_HALF_U,
+    minY: centerY - CAPITOL_HALF_V,
+    maxX: centerX + CAPITOL_HALF_U,
+    maxY: centerY + CAPITOL_FRONT_EXTENT_V,
   };
 }
 
 /**
- * The smallest field that can spare the reserve and still be a town around it:
- * the reserve itself, plus one more block of city on every side.
+ * The smallest field that can host the mall and still have somewhere to build.
  *
- * fieldSizeFor() floors the city at this, so every repository gets a capitol
+ * The reserve itself, plus nine tiles of slack in each axis — a block and a
+ * half of city on every side, which is the least that keeps the monument
+ * reading as standing *in* a town rather than as the town.
+ *
+ * fieldSizeFor() floors the city at these, so every repository gets a capitol
  * however few files it has. Before it did, a field was sized purely from the
- * file count and small repos came out too narrow for the reserve, so
- * capitolFits() was false and the capitol was simply absent from every
- * repository below about fifty files.
+ * file count and small repos came out at the 12-tile minimum — under the
+ * reserve's own width, so capitolFits() was false and the capitol was simply
+ * absent from every repository below about fifty files.
  */
+export const CAPITOL_MIN_FIELD_WIDTH = CAPITOL_HALF_U * 2 + 9;
+export const CAPITOL_MIN_FIELD_HEIGHT =
+  CAPITOL_HALF_V + CAPITOL_FRONT_EXTENT_V + 9;
+
+/** The smallest field the lattice will produce regardless of the capitol. */
 export const MIN_SIDE_BLOCKS = 5;
-export const CAPITOL_MIN_FIELD_WIDTH = MIN_SIDE_BLOCKS * BLOCK + 1;
-export const CAPITOL_MIN_FIELD_HEIGHT = (MIN_SIDE_BLOCKS - 1) * BLOCK + 1;
+
+/**
+ * Block-equivalent area the reserve costs, for field-size budgeting only --
+ * the reserve itself is not block-aligned, but the field still needs to
+ * clear its footprint plus the districts around it.
+ */
+export const CAPITOL_RESERVE_BLOCKS =
+  Math.ceil((CAPITOL_HALF_U * 2 + 1) / BLOCK) *
+  Math.ceil((CAPITOL_HALF_V + CAPITOL_FRONT_EXTENT_V + 1) / BLOCK);
 
 /**
  * Whether a field is big enough to give the reserve away.
