@@ -1,9 +1,12 @@
-import type {
-  Building,
-  DistrictRect,
-  Plot,
-  WorldMap,
-  WorldSnapshot,
+import {
+  capitolDistrict,
+  capitolFits,
+  type Building,
+  type DistrictRect,
+  type Plot,
+  type WorldMap,
+  type WorldSize,
+  type WorldSnapshot,
 } from "@sudo-city/protocol";
 
 export type { DistrictRect } from "@sudo-city/protocol";
@@ -72,10 +75,18 @@ export function layoutWorld(
   const plots: Record<string, Plot> = {};
   const occupied = new Set<string>();
 
+  // The capitol's reserve is marked taken before a single file is placed, so
+  // both the district search and the overflow search step over it for free.
+  // A plot allocated inside the mall would put an office block through the
+  // rotunda, and the renderer has no say in where files land.
+  reserveCapitol({ width, height }, occupied);
+
   for (const file of world.files) {
     const persisted = options.previousPlots?.[file.path];
     // A plot from a larger field would sit outside the city; reallocate it
-    // rather than leaving a building stranded off the ground plane.
+    // rather than leaving a building stranded off the ground plane. A plot
+    // persisted from before the mall existed is reallocated for the same
+    // reason — occupied already holds every reserve tile.
     if (
       persisted &&
       persisted.x < width &&
@@ -247,6 +258,19 @@ function placeRow(
         y: bounds.y + thickness,
         height: Math.max(0, bounds.height - thickness),
       };
+}
+
+/** Marks every tile of the central capitol reserve as taken. */
+function reserveCapitol(size: WorldSize, occupied: Set<string>): void {
+  if (!capitolFits(size)) {
+    return;
+  }
+  const mall = capitolDistrict(size);
+  for (let y = mall.minY; y <= mall.maxY; y += 1) {
+    for (let x = mall.minX; x <= mall.maxX; x += 1) {
+      occupied.add(plotKey({ x, y }));
+    }
+  }
 }
 
 /**

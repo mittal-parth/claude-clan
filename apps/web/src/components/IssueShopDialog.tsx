@@ -2,9 +2,7 @@ import type { Issue } from "@sudo-city/protocol";
 import {
   ArrowRight,
   ExternalLink,
-  GitPullRequest,
   Hammer,
-  Radio,
   Search,
   User,
   Wrench,
@@ -39,6 +37,25 @@ function issueCode(issue: Issue): string {
   return `#${issue.number}`.padStart(4, " ");
 }
 
+function FixButton({ onTake }: { onTake: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation();
+        onTake();
+      }}
+      className="group/btn inline-flex shrink-0 cursor-pointer items-center gap-2 border border-amber-300/30 bg-amber-400/10 px-3 py-1.5 transition-colors hover:border-amber-300 hover:bg-amber-400 hover:text-black"
+    >
+      <Wrench className="size-3.5 text-amber-300 transition-transform group-hover/btn:rotate-45 group-hover/btn:text-black" aria-hidden="true" />
+      <span className="retro text-[8px] leading-4 text-amber-100 group-hover/btn:text-black">
+        FIX ISSUE<br />IN CITY
+      </span>
+      <ArrowRight className="size-3 text-amber-300/70 transition-transform group-hover/btn:translate-x-0.5 group-hover/btn:text-black" aria-hidden="true" />
+    </button>
+  );
+}
+
 function IssueRow({
   issue,
   onTake,
@@ -48,8 +65,17 @@ function IssueRow({
 }) {
   return (
     <div
+      role="button"
+      tabIndex={0}
+      onClick={onTake}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          onTake();
+        }
+      }}
       className={cn(
-        "airport-destination group relative grid w-full grid-cols-[auto_1fr_auto] items-center gap-3 overflow-hidden border border-white/10 bg-white/[0.035] p-3 text-left transition-colors",
+        "airport-destination group relative grid w-full cursor-pointer grid-cols-[auto_1fr_auto] items-center gap-3 overflow-hidden border border-white/10 bg-white/[0.035] p-3 text-left transition-colors hover:border-amber-300/40 hover:bg-amber-400/[0.08]",
       )}
     >
       <span className="airport-destination-code retro text-amber-300" aria-hidden="true">
@@ -83,17 +109,7 @@ function IssueRow({
         </span>
       </span>
       <span className="flex items-center justify-end">
-        <button
-          type="button"
-          onClick={onTake}
-          className="group/btn inline-flex items-center gap-2 border border-amber-300/30 bg-amber-400/10 px-3 py-1.5 transition-colors hover:border-amber-300 hover:bg-amber-400 hover:text-black"
-        >
-          <Wrench className="size-3.5 text-amber-300 transition-transform group-hover/btn:rotate-45 group-hover/btn:text-black" aria-hidden="true" />
-          <span className="retro text-[8px] leading-4 text-amber-100 group-hover/btn:text-black">
-            FIX ISSUE<br />IN CITY
-          </span>
-          <ArrowRight className="size-3 text-amber-300/70 transition-transform group-hover/btn:translate-x-0.5 group-hover/btn:text-black" aria-hidden="true" />
-        </button>
+        <FixButton onTake={onTake} />
       </span>
     </div>
   );
@@ -147,29 +163,9 @@ export default function IssueShopDialog({
                 </span>
               </DialogTitle>
               <DialogDescription className="max-w-xl text-xs leading-5 text-sky-100/55">
-                Select an open city issue to construct a dedicated issue worktree city and dispatch a Claude crew to resolve it.
+                Select an open city issue to read the full report, then send it to the mayor's order box to dispatch a fix.
               </DialogDescription>
             </DialogHeader>
-          </div>
-
-          <div className="relative z-10 mt-4 grid grid-cols-[1fr_auto_1fr] items-center gap-3 border border-white/10 bg-black/20 px-3 py-2.5">
-            <div className="min-w-0">
-              <span className="retro block text-[7px] text-sky-200/45">DEPARTING</span>
-              <span className="retro mt-1 block truncate text-[9px] text-white">
-                {activeCityId.toUpperCase()}
-              </span>
-            </div>
-            <div className="airport-route-line flex items-center gap-2 text-amber-300" aria-hidden="true">
-              <span />
-              <GitPullRequest className="size-4" />
-              <span />
-            </div>
-            <div className="min-w-0 text-right">
-              <span className="retro block text-[7px] text-sky-200/45">DESTINATION</span>
-              <span className="retro mt-1 block text-[9px] text-amber-200">
-                ISSUE WORKTREE
-              </span>
-            </div>
           </div>
         </div>
 

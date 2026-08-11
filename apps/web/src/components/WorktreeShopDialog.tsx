@@ -92,7 +92,7 @@ function WorktreeRow({
         <button
           type="button"
           onClick={onTake}
-          className="group/btn inline-flex items-center gap-2 border border-amber-300/30 bg-amber-400/10 px-3 py-1.5 transition-colors hover:border-amber-300 hover:bg-amber-400 hover:text-black"
+          className="group/btn inline-flex cursor-pointer items-center gap-2 border border-amber-300/30 bg-amber-400/10 px-3 py-1.5 transition-colors hover:border-amber-300 hover:bg-amber-400 hover:text-black"
         >
           <Ship className="size-3.5 text-amber-300 transition-transform group-hover/btn:-rotate-12 group-hover/btn:text-black" aria-hidden="true" />
           <span className="retro text-[8px] leading-4 text-amber-100 group-hover/btn:text-black">
@@ -155,26 +155,6 @@ export default function WorktreeShopDialog({
                 Your own manifest: open pull requests you filed, and issue worktrees you've already got a crew building. Pick one and the feeder ship carries you straight there.
               </DialogDescription>
             </DialogHeader>
-          </div>
-
-          <div className="relative z-10 mt-4 grid grid-cols-[1fr_auto_1fr] items-center gap-3 border border-white/10 bg-black/20 px-3 py-2.5">
-            <div className="min-w-0">
-              <span className="retro block text-[7px] text-sky-200/45">DEPARTING</span>
-              <span className="retro mt-1 block truncate text-[9px] text-white">
-                {activeCityId.toUpperCase()}
-              </span>
-            </div>
-            <div className="airport-route-line flex items-center gap-2 text-amber-300" aria-hidden="true">
-              <span />
-              <Ship className="size-4" />
-              <span />
-            </div>
-            <div className="min-w-0 text-right">
-              <span className="retro block text-[7px] text-sky-200/45">DESTINATION</span>
-              <span className="retro mt-1 block text-[9px] text-sky-200">
-                OWN WORKTREE
-              </span>
-            </div>
           </div>
         </div>
 

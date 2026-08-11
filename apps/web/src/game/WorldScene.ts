@@ -1,11 +1,16 @@
-import type {
-  Building,
-  CitySummary,
-  Issue,
-  PullRequestOverlay,
-  WorldSnapshot,
+import {
+  capitolDistrict,
+  capitolFits,
+  inCapitolDistrict,
+  type Building,
+  type CitySummary,
+  type Issue,
+  type PullRequestOverlay,
+  type WorldSize,
+  type WorldSnapshot,
 } from "@sudo-city/protocol";
 import Phaser from "phaser";
+import { CAPITOL_OFFSET_V, capitolDepthTile } from "./capitol";
 import { AmbientLife, prefersReducedMotion } from "./ambient";
 import { ConstructionSites, type ConstructionTarget } from "./construction";
 import { playUiClickSound } from "@/lib/play-ui-click";
@@ -164,6 +169,12 @@ import {
   roadTextureKey,
   terrainTextureKey,
 } from "./textures";
+import {
+  bakeCapitol,
+  CAPITOL_ANCHOR_Y,
+  CAPITOL_KEY,
+  CAPITOL_SCALE,
+} from "./capitolTextures";
 
 /** Tints applied to a marked building; the marker sprite carries its own colour. */
 const ADDED_TINT = 0xffcf94;
@@ -430,6 +441,7 @@ export class WorldScene extends Phaser.Scene {
   private airportBeacon?: Phaser.GameObjects.Arc;
   private airportHoverListener?: (info?: ShipHoverInfo) => void;
   private airportClickListener?: () => void;
+  private capitolClickListener?: () => void;
 
   /**
    * The east-coast harbour. Purely scenery: none of these sprites is made
@@ -479,6 +491,7 @@ export class WorldScene extends Phaser.Scene {
 
   create(): void {
     bakeTerrainTextures(this);
+    bakeCapitol(this);
 
     // The background IS the open ocean — only the shoreline band gets real
     // tiles, so this has to be the same blue they fade into.
@@ -529,6 +542,10 @@ export class WorldScene extends Phaser.Scene {
 
   setAirportClickListener(listener: () => void): void {
     this.airportClickListener = listener;
+  }
+
+  setCapitolClickListener(listener: () => void): void {
+    this.capitolClickListener = listener;
   }
 
   setTravelTransitionActive(active: boolean): void {
@@ -888,7 +905,7 @@ export class WorldScene extends Phaser.Scene {
     // Terrain only needs redrawing when the footprint of the city changed.
     if (!previous || terrainChanged(previous, snapshot)) {
       this.terrain = buildTerrain(snapshot);
-      this.drawTerrain(this.terrain);
+      this.drawTerrain(this.terrain, snapshot.size);
       this.applyCameraBounds(this.terrain);
       this.ambient?.rebuild(this.terrain);
     }
@@ -1149,7 +1166,7 @@ export class WorldScene extends Phaser.Scene {
    * ocean is the camera's background colour, and decoration is thinned to a
    * budget on large worlds.
    */
-  private drawTerrain(terrain: TerrainGrid): void {
+  private drawTerrain(terrain: TerrainGrid, size: WorldSize): void {
     for (const sprite of this.groundSprites) {
       sprite.destroy();
     }
@@ -1179,7 +1196,8 @@ export class WorldScene extends Phaser.Scene {
 
       if (
         cell.prop &&
-        unitFloat(hashCoords(cell.x, cell.y, 0xd0e)) < propOdds
+        (cell.keepProp ||
+          unitFloat(hashCoords(cell.x, cell.y, 0xd0e)) < propOdds)
       ) {
         const prop = this.add
           .sprite(point.x, point.y + TILE_ANCHOR_Y, propTextureKey(cell.prop))
@@ -1188,6 +1206,45 @@ export class WorldScene extends Phaser.Scene {
         this.propSprites.push(prop);
       }
     }
+
+    this.drawCapitol(size);
+  }
+
+  /**
+   * The capitol stands on the reserve that capitol.ts has already laid as lawn
+   * and boulevard, so this only has to place the building itself.
+   *
+   * Its depth is taken from the front of the portico rather than the centre
+   * tile: the sprite spans thirteen tiles of ground, and sorting it by its
+   * middle would let a block standing in front of it disappear behind the
+   * facade.
+   */
+  private drawCapitol(size: WorldSize): void {
+    if (!capitolFits(size)) {
+      return;
+    }
+    const mall = capitolDistrict(size);
+    const anchor = projection.project(
+      mall.centerX,
+      mall.centerY + CAPITOL_OFFSET_V,
+    );
+    const sort = capitolDepthTile(mall);
+
+    const capitol = this.add
+      .sprite(
+        anchor.x,
+        anchor.y + CAPITOL_ANCHOR_Y * CAPITOL_SCALE,
+        CAPITOL_KEY,
+      )
+      .setOrigin(0.5, 1)
+      .setScale(CAPITOL_SCALE)
+      .setDepth(projection.depth(sort.x, sort.y))
+      .setInteractive({ pixelPerfect: true, useHandCursor: true });
+    capitol.on("pointerdown", () => {
+      playUiClickSound();
+      this.capitolClickListener?.();
+    });
+    this.propSprites.push(capitol);
   }
 
   /**
@@ -1215,7 +1272,20 @@ export class WorldScene extends Phaser.Scene {
   private syncBuildings(snapshot: WorldSnapshot): void {
     const seen = new Set<string>();
 
+    // The allocator already keeps the mall clear (reserveCapitol in
+    // @sudo-city/layout), so this is a backstop for one case only: a snapshot
+    // generated before the reserve existed and served from cache. Skipping the
+    // plot costs one building until the world is next laid out; drawing it
+    // would put an office block through the rotunda.
+    const mall = capitolFits(snapshot.size)
+      ? capitolDistrict(snapshot.size)
+      : undefined;
+
     for (const building of snapshot.buildings) {
+      if (mall && inCapitolDistrict(mall, building.plot.x, building.plot.y)) {
+        continue;
+      }
+
       seen.add(building.path);
       const existing = this.views.get(building.path);
 

@@ -36,8 +36,8 @@ import type { PropKind, TerrainKind } from "./terrain";
 
 export const TILE_WIDTH = 96;
 export const TILE_HEIGHT = 48;
-const HALF_W = TILE_WIDTH / 2;
-const HALF_H = TILE_HEIGHT / 2;
+export const HALF_W = TILE_WIDTH / 2;
+export const HALF_H = TILE_HEIGHT / 2;
 
 /**
  * Sprites are positioned at the tile's bottom corner with origin (0.5, 1), so
@@ -53,17 +53,17 @@ const ROAD_HALF = 0.3;
 const KERB_HALF = 0.4;
 
 /** [u, v, height] — u/v in tile units from the tile centre, height in pixels up. */
-type Point3 = readonly [number, number, number];
+export type Point3 = readonly [number, number, number];
 
 /** A point on the ground plane, in the same tile units as Point3's u/v. */
 type Corner = readonly [number, number];
 
-function shade(color: number, amount: number): number {
+export function shade(color: number, amount: number): number {
   const value = Phaser.Display.Color.IntegerToColor(color);
   return amount >= 0 ? value.lighten(amount).color : value.darken(-amount).color;
 }
 
-function createBaker(scene: Phaser.Scene) {
+export function createBaker(scene: Phaser.Scene) {
   const graphics = scene.make.graphics({ x: 0, y: 0 }, false);
 
   return {
@@ -95,9 +95,9 @@ function createBaker(scene: Phaser.Scene) {
   };
 }
 
-type Baker = ReturnType<typeof createBaker>;
+export type Baker = ReturnType<typeof createBaker>;
 
-function fillFace(
+export function fillFace(
   baker: Baker,
   color: number,
   alpha: number,
@@ -112,7 +112,7 @@ function fillFace(
   );
 }
 
-function strokeFace(
+export function strokeFace(
   baker: Baker,
   color: number,
   alpha: number,
@@ -472,6 +472,7 @@ export const TERRAIN_VARIANT_COUNTS: Record<TerrainKind, number> = {
   water: WATER_VARIANTS,
   ground: 1,
   road: 1,
+  plaza: 1,
 };
 
 /**
@@ -629,6 +630,7 @@ function bakeTerrainAtlas(scene: Phaser.Scene, baker: Baker): void {
   place(terrainTextureKey("ground", 0), (x, y) =>
     drawGroundTile(baker, x, y, TERRAIN_COLORS.ground, 11),
   );
+  place(terrainTextureKey("plaza", 0), (x, y) => drawPlazaTile(baker, x, y));
   for (let variant = 0; variant < WATER_VARIANTS; variant += 1) {
     place(terrainTextureKey("water", variant), (x, y) =>
       drawWaterTile(baker, x, y, variant),
@@ -672,6 +674,44 @@ function drawGroundTile(
       originY,
     );
     baker.graphics.fillRect(point.x, point.y, 3, 2);
+  }
+}
+
+/**
+ * Paving: the capitol's apron and the walk out to its boulevard.
+ *
+ * Deliberately the same stone as the pavement beside every street in the city,
+ * so the walk reads as continuous with the road it meets rather than as a
+ * different material that happens to touch it. The quartered joint is what
+ * keeps a run of these from looking like one flat sheet.
+ */
+function drawPlazaTile(baker: Baker, originX: number, originY: number): void {
+  fillFace(baker, TERRAIN_COLORS.pavement, 1, diamond(0.5), originX, originY);
+  strokeFace(
+    baker,
+    shade(TERRAIN_COLORS.pavement, -10),
+    0.55,
+    1,
+    diamond(0.5),
+    originX,
+    originY,
+  );
+  // Slab joints across the middle of the tile, in grid space so they line up
+  // tile to tile.
+  baker.graphics.lineStyle(1, shade(TERRAIN_COLORS.pavement, -8), 0.5);
+  for (const line of [
+    [
+      [-0.5, 0, 0],
+      [0.5, 0, 0],
+    ],
+    [
+      [0, -0.5, 0],
+      [0, 0.5, 0],
+    ],
+  ] as Point3[][]) {
+    const from = baker.at(line[0] as Point3, originX, originY);
+    const to = baker.at(line[1] as Point3, originX, originY);
+    baker.graphics.lineBetween(from.x, from.y, to.x, to.y);
   }
 }
 

@@ -324,6 +324,104 @@ export const ServerMessageSchema = z.discriminatedUnion("kind", [
   }),
 ]);
 
+// ---------------------------------------------------------------------------
+// The capitol district
+// ---------------------------------------------------------------------------
+
+/**
+ * The capitol stands on a reserved block at the centre of every city. Its
+ * geometry lives here, in the package both sides already share, because two
+ * independent consumers have to agree on it exactly:
+ *
+ *  - the layout allocator, which must never hand a file a plot inside the
+ *    reserve, and
+ *  - the renderer's terrain pass, which lays the mall's lawn and the boulevard
+ *    that rings it.
+ *
+ * Disagreement between the two plants an office block through the rotunda, so
+ * neither side is allowed its own copy of the numbers.
+ */
+
+/**
+ * Half-extents of the reserve, in tiles, measured from the centre tile. The
+ * front v extent is one tile shorter than the rear so the rearward building
+ * offset leaves a deliberate, slightly larger forecourt.
+ *
+ * These are sized directly from the building outward, one layer at a time, and
+ * nothing is spare. The capitol occupies tiles -5..5 along u and -2..2 along v,
+ * and then:
+ *
+ *   building | 1 tile paved apron | 1 tile lawn | boulevard
+ *
+ * which puts the boulevard on the reserve's perimeter at u ±7, rear v -4 and
+ * front v +3. Any wider and the mall opens dead ground around the monument;
+ * any narrower and the wings overhang the road.
+ *
+ * The building is far wider than it is deep — the wings run along u — so the
+ * reserve is a rectangle rather than a square.
+ */
+export const CAPITOL_HALF_U = 7;
+export const CAPITOL_HALF_V = 4;
+export const CAPITOL_FRONT_EXTENT_V = CAPITOL_HALF_V - 1;
+
+export interface CapitolDistrict {
+  /** Centre tile — where the capitol sprite is anchored. */
+  centerX: number;
+  centerY: number;
+  /** Inclusive reserve bounds; the perimeter of this rectangle is boulevard. */
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
+}
+
+/**
+ * The centre tile is derived from the field size alone, so a city rebuilt at a
+ * different size still puts its capitol in the middle rather than leaving the
+ * old one stranded.
+ */
+export function capitolDistrict(size: WorldSize): CapitolDistrict {
+  const centerX = Math.floor((size.width - 1) / 2);
+  const centerY = Math.floor((size.height - 1) / 2);
+  return {
+    centerX,
+    centerY,
+    minX: centerX - CAPITOL_HALF_U,
+    minY: centerY - CAPITOL_HALF_V,
+    maxX: centerX + CAPITOL_HALF_U,
+    maxY: centerY + CAPITOL_FRONT_EXTENT_V,
+  };
+}
+
+/**
+ * Whether a field is big enough to give the reserve away.
+ *
+ * A twelve-tile city is smaller than the mall, and reserving it would leave a
+ * repository with nowhere to put its own buildings. Both consumers ask this
+ * first, so a field that cannot host the capitol simply has no capitol rather
+ * than a monument standing on top of the whole town.
+ */
+export function capitolFits(size: WorldSize): boolean {
+  return (
+    size.width >= CAPITOL_HALF_U * 2 + 9 &&
+    size.height >= CAPITOL_HALF_V + CAPITOL_FRONT_EXTENT_V + 9
+  );
+}
+
+/** True for any tile inside the reserve, boulevard included. */
+export function inCapitolDistrict(
+  district: CapitolDistrict,
+  x: number,
+  y: number,
+): boolean {
+  return (
+    x >= district.minX &&
+    x <= district.maxX &&
+    y >= district.minY &&
+    y <= district.maxY
+  );
+}
+
 export type EffortLevel = z.infer<typeof EffortLevelSchema>;
 export type Building = z.infer<typeof BuildingSchema>;
 export type ChangedFile = z.infer<typeof ChangedFileSchema>;
