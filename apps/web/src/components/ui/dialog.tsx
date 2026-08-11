@@ -44,7 +44,13 @@ const DialogContent = React.forwardRef<
       {...props}
     >
       {children}
-      <DialogPrimitive.Close className="absolute right-4 top-4 rounded-sm opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:pointer-events-none data-[state=open]:bg-accent data-[state=open]:text-muted-foreground">
+      {/*
+        z-50 keeps the button above content that opens its own stacking context
+        -- a header with `relative z-10` would otherwise sit on top of it and
+        swallow the clicks. The negative margin against the padding widens the
+        hit area to a comfortable target without moving the glyph.
+      */}
+      <DialogPrimitive.Close className="absolute right-4 top-4 z-50 -m-2 inline-flex cursor-pointer items-center justify-center rounded-sm p-2 opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:pointer-events-none data-[state=open]:bg-accent data-[state=open]:text-muted-foreground">
         <X className="h-4 w-4" />
         <span className="sr-only">Close</span>
       </DialogPrimitive.Close>

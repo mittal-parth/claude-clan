@@ -63,6 +63,34 @@ function cellKey(x: number, y: number): string {
   return `${x}:${y}`;
 }
 
+/** How far, in tiles, the natural shoreline wanders either side of the ring. */
+const SHORE_JITTER = 2.4;
+/**
+ * Tiles over which the dredged port frontage blends back into natural shore, so
+ * the change of character reads as the harbour works ending rather than a seam.
+ */
+const FRONTAGE_FADE = 3;
+
+/**
+ * How much shoreline wander a cell gets, from 0 (dredged straight) to 1.
+ *
+ * The island's east side, alongside the city, is its port frontage: both aprons
+ * and the lighthouse stand there and their sea walls are engineered straight.
+ * A wandering shore on that stretch pushes sand tiles out past the quay wall
+ * and under the berthed ships. Everywhere else keeps its ragged natural coast.
+ */
+function shoreJitterScale(
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+): number {
+  if (x < width) return 1;
+  // Distance, in tiles, past either end of the city's own height band.
+  const beyond = Math.max(0, -y, y - (height - 1));
+  return Math.min(1, beyond / FRONTAGE_FADE);
+}
+
 /** Euclidean distance from a point to the city rectangle; 0 when inside. */
 function distanceOutsideCity(
   x: number,
@@ -162,8 +190,14 @@ function classify(
   }
 
   // Jitter the shoreline so the island is not a rounded rectangle. Only ever
-  // applied outside the city, so it can never erode buildable ground.
-  const distance = raw + (unitFloat(hashCoords(x, y, 0x5ea)) - 0.5) * 2.4;
+  // applied outside the city, so it can never erode buildable ground -- and
+  // damped to nothing along the port frontage, where it would otherwise leave
+  // sand standing through a quay and under a moored hull.
+  const distance =
+    raw +
+    (unitFloat(hashCoords(x, y, 0x5ea)) - 0.5) *
+      SHORE_JITTER *
+      shoreJitterScale(x, y, width, height);
 
   if (distance <= COUNTRYSIDE_RING) {
     return grassCell(x, y, 0x7ee);

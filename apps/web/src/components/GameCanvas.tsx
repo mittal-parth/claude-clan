@@ -24,6 +24,15 @@ export interface CanvasFileChange {
 export interface CanvasTravelRequest {
   id: string;
   cityId: string;
+  /** Which fleet carries this trip. Defaults to the container ship. */
+  ship?: "container" | "navy";
+  /**
+   * Voyages of the harbour's container ship. Set when the trip is carrying a
+   * container -- taking an issue out -- and cleared when she sails home empty.
+   * A request without this flag still travels, just without the crane work.
+   * Only meaningful when `ship` is "container".
+   */
+  carriesContainer?: boolean;
 }
 
 /** A cross-repository journey: its world arrives only after the flight leaves. */
@@ -82,6 +91,9 @@ interface GameCanvasProps {
   onAirportTravelCovered?: (travel: CanvasAirportTravel) => void;
   onAirportArrivalComplete?: (travel: CanvasAirportTravel) => void;
   onIssueShopClick?: () => void;
+  /** Clicking the harbour's container ship: take an issue, or sail home. */
+  onHarbourShipClick?: () => void;
+  onNavyShipClick?: () => void;
   onAirportClick?: () => void;
   onAirportHover?: (info?: ShipHoverInfo) => void;
   onSelectBuilding?: (building?: Building) => void;
@@ -122,6 +134,8 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
       onAirportTravelCovered,
       onAirportArrivalComplete,
       onIssueShopClick,
+      onHarbourShipClick,
+      onNavyShipClick,
       onAirportClick,
       onAirportHover,
       onSelectBuilding,
@@ -145,6 +159,8 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
     const airportTravelCoveredRef = useRef(onAirportTravelCovered);
     const airportArrivalCompleteRef = useRef(onAirportArrivalComplete);
     const issueShopClickRef = useRef(onIssueShopClick);
+    const harbourShipClickRef = useRef(onHarbourShipClick);
+    const navyShipClickRef = useRef(onNavyShipClick);
     const cityIdRef = useRef(cityId);
     const worldKeyRef = useRef(worldKey);
     const initialWorldReadyRef = useRef(false);
@@ -164,6 +180,10 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
     const departureCityRef = useRef<string | undefined>(undefined);
     const destinationCityRef = useRef<string | undefined>(undefined);
     const handledTravelRequestRef = useRef<string | undefined>(undefined);
+    /** Set for the duration of a container-ship voyage; undefined otherwise. */
+    const containerVoyageRef = useRef<{ carriesContainer: boolean } | undefined>(
+      undefined,
+    );
     const handledAirportTravelRef = useRef<string | undefined>(undefined);
     const handledAirportArrivalRef = useRef<string | undefined>(undefined);
 
@@ -180,6 +200,8 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
     airportTravelCoveredRef.current = onAirportTravelCovered;
     airportArrivalCompleteRef.current = onAirportArrivalComplete;
     issueShopClickRef.current = onIssueShopClick;
+    harbourShipClickRef.current = onHarbourShipClick;
+    navyShipClickRef.current = onNavyShipClick;
     cityIdRef.current = cityId;
     worldKeyRef.current = worldKey;
     initialWorldReadyCallbackRef.current = onInitialWorldReady;
@@ -211,11 +233,20 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
       const scene = sceneRef.current;
       scene?.setWorld(destinationWorld, destinationCityId, worldKeyRef.current);
       scene?.setOverlay(travelOverlayRef.current);
-      scene?.prepareArrivalForTravel(
-        departureCityRef.current,
-        destinationCityId,
-      );
-      void scene?.revealAfterTravel().then(() => {
+      // A container voyage continues in the new city -- she sails in and the
+      // crane lands her box -- so it reveals through the harbour rather than
+      // the PR fleet's arrival.
+      const voyage = containerVoyageRef.current;
+      if (voyage) {
+        scene?.prepareContainerArrival(voyage.carriesContainer);
+      } else {
+        scene?.prepareArrivalForTravel();
+      }
+      const reveal = voyage
+        ? scene?.revealAfterContainerVoyage(voyage.carriesContainer)
+        : scene?.revealAfterTravel();
+      void Promise.resolve(reveal).then(() => {
+        containerVoyageRef.current = undefined;
         const completedCityId = destinationCityRef.current;
         transitioningRef.current = false;
         coverDoneRef.current = false;
@@ -234,7 +265,10 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
     // that land mid-transition -- the cloud cover already hides the world,
     // so a second click can't mean anything useful yet. Shared by the
     // in-scene ship click and the issue shop's programmatic travel request.
-    function beginTravel(targetCityId: string): boolean {
+    function beginTravel(
+      targetCityId: string,
+      voyage?: { carriesContainer: boolean },
+    ): boolean {
       const scene = sceneRef.current;
       if (
         !scene ||
@@ -243,6 +277,7 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
       ) {
         return false;
       }
+      containerVoyageRef.current = voyage;
       transitioningRef.current = true;
       coverDoneRef.current = false;
       revealStartedRef.current = false;
@@ -255,7 +290,10 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
       // isn't needlessly delayed by the animation's fixed duration; a slow
       // (lazy PR build) travel just leaves the clouds covering a little
       // longer, which reads fine as a loading state.
-      void scene.coverForTravel(targetCityId).then(() => {
+      const cover = voyage
+        ? scene.coverForContainerVoyage(voyage.carriesContainer)
+        : scene.coverForTravel(targetCityId);
+      void cover.then(() => {
         coverDoneRef.current = true;
         tryReveal();
       });
@@ -354,13 +392,25 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
       const host = hostRef.current;
       const scene = new WorldScene();
       scene.setSelectionListener((building) => selectRef.current?.(building));
-      scene.setShipHoverListener((info) => shipHoverRef.current?.(info));
-      scene.setShipClickListener(beginTravel);
+
       scene.setAirportHoverListener((info) =>
         (airportHoverRef.current ?? shipHoverRef.current)?.(info),
       );
       scene.setAirportClickListener(() => airportClickRef.current?.());
-      scene.setIssueShopClickListener(() => issueShopClickRef.current?.());
+      // The whole harbour is one click target -- the sign shares the ship's
+      // own handler rather than opening the (currently unwired) issue shop.
+      scene.setHarbourSignClickListener(() => harbourShipClickRef.current?.());
+      scene.setHarbourShipHoverListener((info) =>
+        (airportHoverRef.current ?? shipHoverRef.current)?.(info),
+      );
+      scene.setHarbourShipClickListener(() => harbourShipClickRef.current?.());
+      // The whole naval base is one click target -- land-side props share the
+      // battleship's own handler.
+      scene.setNavySignClickListener(() => navyShipClickRef.current?.());
+      scene.setNavyShipHoverListener((info) =>
+        (airportHoverRef.current ?? shipHoverRef.current)?.(info),
+      );
+      scene.setNavyShipClickListener(() => navyShipClickRef.current?.());
       scene.setBuildingDragListener((building) => {
         draggingBuildingRef.current = building;
         const source = scene.getBuildingPreviewSource(building);
@@ -517,7 +567,11 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
       ) {
         return;
       }
-      if (beginTravel(travelRequest.cityId)) {
+      const voyage =
+        (travelRequest.ship ?? "container") === "container"
+          ? { carriesContainer: travelRequest.carriesContainer ?? false }
+          : undefined;
+      if (beginTravel(travelRequest.cityId, voyage)) {
         handledTravelRequestRef.current = travelRequest.id;
       }
     }, [travelRequest]);
