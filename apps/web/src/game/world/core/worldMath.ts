@@ -3,6 +3,7 @@ import type { Building, WorldSnapshot } from "@sudo-city/protocol";
 import { archetypeFor, tierFor } from "../../math/palette";
 import { hashText, pickIndex } from "../../math/hash";
 import { AIRCRAFT_ART_HEADING, SHORE_BAND } from "./worldConstants";
+import { TILE_WIDTH, TILE_HEIGHT } from "../../textures/core";
 import {
   roadTextureKey,
   terrainTextureKey,
@@ -65,6 +66,21 @@ export function cubicPath(
 
 export function aircraftRotation(from: ScreenPoint, to: ScreenPoint): number {
   return Math.atan2(to.y - from.y, to.x - from.x) - AIRCRAFT_ART_HEADING;
+}
+
+/**
+ * World-space heading a baked-frame hull should face while sailing along a
+ * screen-space tangent, so its heading tracks the curve it is actually
+ * tracing at every point along a turn instead of snapping between two fixed
+ * bearings partway through. Frame 0's bow points along grid -v (see
+ * `bakeHarbourContainerShip`), which a yaw of theta rotates to
+ * `(sin(theta), -cos(theta))` -- this is that mapping inverted.
+ */
+export function headingFromTangent(dx: number, dy: number): number {
+  if (dx === 0 && dy === 0) return 0;
+  const du = dx / TILE_WIDTH + dy / TILE_HEIGHT;
+  const dv = dy / TILE_HEIGHT - dx / TILE_WIDTH;
+  return Math.atan2(du, -dv);
 }
 
 /** Returns a random point just beyond one edge of the screen-fixed viewport. */

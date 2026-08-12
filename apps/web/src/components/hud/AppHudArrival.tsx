@@ -1,6 +1,7 @@
 import { Plane } from "lucide-react";
 
 import type { useGameState } from "@/hooks/use-game-state";
+import { cityNameFromRepo } from "@/lib/app-utils";
 
 export interface AppHudArrivalProps {
   state: ReturnType<typeof useGameState>;
@@ -26,7 +27,7 @@ export function AppHudArrival({ state }: AppHudArrivalProps) {
           <p className="mt-1 text-[10px] text-sky-100/60">
             {airportArrivalDelayed
               ? "The destination survey is taking longer than expected."
-              : "Cloud cover holding while the destination city is surveyed…"}
+              : `Please wait, we're about to land at ${cityNameFromRepo(airportArrival.destinationKey)}…`}
           </p>
         </div>
       </div>

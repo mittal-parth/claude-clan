@@ -8,9 +8,8 @@ import { HudButton } from "./HudButton";
 import QuestLog from "@/components/ui/8bit/blocks/quest-log";
 import {
   statusLabel,
-  cityLabel,
-  cityNameFromRepo,
-  fileBasename,
+  titleFromRepoPath,
+  repoRootPath,
   maxBudgetUsd,
 } from "@/lib/app-utils";
 import { getCrewMember, effortLabel, crewSpriteUrl } from "@/crew/catalog";
@@ -72,24 +71,24 @@ export function AppHudConsole({
   const activeQuestCount = quests.filter(
     (quest) => quest.status === "active",
   ).length;
-  const cityName =
-    activeCity && activeCity.kind === "pull-request"
-      ? cityLabel(activeCity)
-      : cityNameFromRepo(world?.repoPath);
-  const cityStatusLine =
+  const repoName = titleFromRepoPath(
+    repoRootPath(world?.repoPath, activeCityId) ?? "",
+  );
+  const branchLabel =
     activeCity?.status === "building"
       ? "constructing…"
-      : activeCity && activeCity.kind === "pull-request"
-        ? activeCity.ref
-        : world?.repoPath
-          ? fileBasename(world.repoPath)
-          : "linking";
+      : (activeCity?.ref ?? "main");
+  const cityDetail =
+    activeCity &&
+    (activeCity.kind === "pull-request" || activeCity.kind === "issue")
+      ? activeCity.title
+      : undefined;
 
   return (
     <div className="hud-column hud-column--console">
       <HudWindow
         id="hud-console"
-        title={cityName}
+        title="Claude City"
         fill
         expanded={hud.console}
         onToggle={() => toggleHud("console")}
@@ -178,10 +177,13 @@ export function AppHudConsole({
       >
         <div className="hud-masthead justify-between">
           <div className="min-w-0">
-            <h1 className="hud-masthead__name retro">{cityName}</h1>
+            <h1 className="hud-masthead__name retro">{repoName}</h1>
             <p className="hud-masthead__sub retro">
-              {cityStatusLine} · mayor console
+              {branchLabel} City · mayor console
             </p>
+            {cityDetail ? (
+              <p className="hud-masthead__detail retro">{cityDetail}</p>
+            ) : null}
           </div>
         </div>
 

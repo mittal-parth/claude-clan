@@ -129,7 +129,7 @@ export class WorldTerrainManager {
       this.showCapitolHover({
         cityId: "capitol",
         title: "TOWNHALL",
-        action: "Open the issue shop",
+        action: "View city issues",
         screenX: screen.x,
         screenY: screen.y,
       });

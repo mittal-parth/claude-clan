@@ -71,6 +71,25 @@ export function cityNameFromRepo(repoPath: string | undefined): string {
 }
 
 /**
+ * A PR/issue city's `world.repoPath` is its worktree, not the repo root
+ * (`worktreePath` in `@sudo-city/cities` nests it under
+ * `.sudocity/worktrees/<cityId>`), so its basename is the city id, not the
+ * repo name. Strip that suffix so the masthead can show the repo name
+ * regardless of which city is active.
+ */
+export function repoRootPath(
+  repoPath: string | undefined,
+  cityId: string,
+): string | undefined {
+  if (!repoPath) return repoPath;
+  const suffix = `.sudocity/worktrees/${cityId}`;
+  const normalised = repoPath.replace(/\\/g, "/");
+  return normalised.endsWith(suffix)
+    ? normalised.slice(0, -suffix.length).replace(/\/+$/, "")
+    : repoPath;
+}
+
+/**
  * How long a site stands after the work on it actually finishes.
  *
  * The site's lifetime is the work's lifetime: it opens when a tool starts on a
