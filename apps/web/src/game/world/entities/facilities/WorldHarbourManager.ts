@@ -14,15 +14,13 @@ import {
   SHIP_FAIRWAY_TILES,
   SHIP_OFFING_TILES,
   SHIP_TURNAROUND_MS,
-  SHIP_TURN_END,
-  SHIP_TURN_START,
   SKY_DEPTH,
   YAW_ALONGSIDE_IN,
   YAW_INBOUND,
   YAW_OUTBOUND,
   YAW_SEAWARD,
 } from "../../core/worldConstants";
-import type { ScreenPoint } from "../../core/worldMath";
+import { headingFromTangent, type ScreenPoint } from "../../core/worldMath";
 import { createFootprintHitZone, worldToScreen } from "../../utils/hitZoneUtils";
 import { isCanvasPointer } from "../../utils/pointerUtils";
 import {
@@ -703,13 +701,15 @@ export class WorldHarbourManager {
             weight.a * from.x + weight.b * through.x + weight.c * to.x,
             weight.a * from.y + weight.b * through.y + weight.c * to.y,
           );
-          const helm = Phaser.Math.Clamp(
-            (t - SHIP_TURN_START) / (SHIP_TURN_END - SHIP_TURN_START),
-            0,
-            1,
-          );
-          const eased = helm * helm * (3 - 2 * helm);
-          this.setShipYaw(yaw.from + (yaw.to - yaw.from) * eased);
+          // Derivative of the quadratic bezier above: the instantaneous
+          // direction of travel at this point on the curve, so the hull's
+          // heading tracks the turn continuously instead of snapping between
+          // yaw.from and yaw.to over a narrow window in the middle.
+          const tangentX =
+            2 * inverse * (through.x - from.x) + 2 * t * (to.x - through.x);
+          const tangentY =
+            2 * inverse * (through.y - from.y) + 2 * t * (to.y - through.y);
+          this.setShipYaw(headingFromTangent(tangentX, tangentY));
         },
         onComplete: () => resolve(),
       });

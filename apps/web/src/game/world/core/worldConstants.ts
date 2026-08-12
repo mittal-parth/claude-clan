@@ -66,9 +66,6 @@ export const NAVY_HOVER_LABEL_LIFT = 190;
 export const NAVY_HIT_ZONE_LIFT = 100;
 export const HARBOUR_HIT_ZONE_LIFT = 100;
 
-export const SHIP_TURN_START = 0.28;
-export const SHIP_TURN_END = 0.72;
-
 export const YAW_OUTBOUND = 0;
 export const YAW_SEAWARD = Math.PI / 2;
 export const YAW_ALONGSIDE_IN = Math.PI;

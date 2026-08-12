@@ -223,11 +223,222 @@
     );
 }
 
-.login-screen__card {
+/* The foreman standing beside the dialogue box -- kept modest so the box,
+ * not the portrait, is the thing the eye lands on first. */
+.login-screen__speaker {
+  position: relative;
+  z-index: 2;
+  flex: none;
+  height: clamp(6.5rem, 11vw, 8.5rem);
+  width: auto;
+  object-fit: contain;
+  image-rendering: pixelated;
+  filter: drop-shadow(0 10px 12px rgb(0 0 0 / 0.55));
+}
+
+.login-screen__dialogue {
+  position: relative;
+  z-index: 1;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* A JRPG-style name tag sitting flush on the frame's top border -- in flow,
+ * not absolutely placed, so it never drifts off the box at odd widths. */
+.login-screen__nameplate {
+  position: relative;
+  z-index: 2;
+  display: inline-block;
+  margin-left: 1.25rem;
+  margin-bottom: -3px;
+  padding: 0.3rem 0.85rem;
+  border: 3px solid var(--foreground);
+  border-bottom: none;
+  background: var(--hud-accent);
+  color: var(--primary-foreground);
+  font-size: 9px;
+  letter-spacing: 0.2em;
+}
+
+.login-screen__dialogue-frame {
+  position: relative;
+  border: 3px solid var(--foreground);
+  background: color-mix(in oklab, var(--card) 94%, transparent);
+  backdrop-filter: blur(16px) saturate(140%);
+  padding: 1.35rem 1.5rem 1.15rem;
   box-shadow:
     inset 0 1px 0 color-mix(in oklab, var(--foreground) 16%, transparent),
     0 28px 70px -30px rgb(0 0 0 / 0.95),
     8px 8px 0 color-mix(in oklab, var(--hud-shade) 42%, transparent);
+}
+
+/* A speech-bubble pointer aimed back at the foreman, so the box reads as
+ * something being said rather than a card that happens to sit near him. */
+.login-screen__dialogue-frame::before {
+  content: "";
+  position: absolute;
+  left: -13px;
+  bottom: 5.5rem;
+  width: 0;
+  height: 0;
+  border-style: solid;
+  border-width: 8px 13px 8px 0;
+  border-color: transparent var(--foreground) transparent transparent;
+}
+
+.login-screen__dialogue-frame::after {
+  content: "";
+  position: absolute;
+  left: -8px;
+  bottom: calc(5.5rem + 3px);
+  width: 0;
+  height: 0;
+  border-style: solid;
+  border-width: 5px 9px 5px 0;
+  border-color: transparent
+    color-mix(in oklab, var(--card) 94%, transparent)
+    transparent transparent;
+}
+
+/* Four pixel corner brackets, matching the HUD windows elsewhere. */
+.login-screen__dialogue-corners {
+  --login-bracket: color-mix(in oklab, var(--hud-accent) 65%, transparent);
+  position: absolute;
+  inset: 4px;
+  pointer-events: none;
+  background-image:
+    linear-gradient(var(--login-bracket), var(--login-bracket)),
+    linear-gradient(var(--login-bracket), var(--login-bracket)),
+    linear-gradient(var(--login-bracket), var(--login-bracket)),
+    linear-gradient(var(--login-bracket), var(--login-bracket)),
+    linear-gradient(var(--login-bracket), var(--login-bracket)),
+    linear-gradient(var(--login-bracket), var(--login-bracket)),
+    linear-gradient(var(--login-bracket), var(--login-bracket)),
+    linear-gradient(var(--login-bracket), var(--login-bracket));
+  background-repeat: no-repeat;
+  background-size:
+    9px 2px,
+    2px 9px,
+    9px 2px,
+    2px 9px,
+    9px 2px,
+    2px 9px,
+    9px 2px,
+    2px 9px;
+  background-position:
+    left top,
+    left top,
+    right top,
+    right top,
+    left bottom,
+    left bottom,
+    right bottom,
+    right bottom;
+}
+
+.login-screen__dialogue-title {
+  font-size: 14px;
+  color: var(--primary);
+  letter-spacing: 0.06em;
+}
+
+.login-screen__dialogue-text {
+  margin-top: 0.55rem;
+  font-size: 11px;
+  line-height: 1.65;
+  color: var(--foreground);
+}
+
+.login-screen__choices {
+  margin-top: 1.15rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  border-top: 1px dashed
+    color-mix(in oklab, var(--foreground) 22%, transparent);
+  padding-top: 0.9rem;
+}
+
+.login-screen__choice {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  border: 2px solid color-mix(in oklab, var(--foreground) 14%, transparent);
+  background: color-mix(in oklab, var(--foreground) 3%, transparent);
+  padding: 0.6rem 0.75rem;
+  font-family: inherit;
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--foreground);
+  text-decoration: none;
+  cursor: pointer;
+  transition:
+    border-color 140ms var(--hud-ease),
+    background-color 140ms var(--hud-ease),
+    color 140ms var(--hud-ease),
+    transform 140ms var(--hud-ease);
+}
+
+.login-screen__choice-cursor {
+  color: var(--hud-accent);
+  opacity: 0;
+  transition:
+    opacity 140ms var(--hud-ease),
+    transform 140ms var(--hud-ease);
+  transform: translateX(-4px);
+}
+
+.login-screen__choice:hover,
+.login-screen__choice:focus-visible {
+  border-color: var(--hud-accent);
+  background: color-mix(in oklab, var(--hud-accent) 14%, transparent);
+  color: var(--hud-accent);
+  transform: translateX(2px);
+  outline: none;
+}
+
+.login-screen__choice:hover .login-screen__choice-cursor,
+.login-screen__choice:focus-visible .login-screen__choice-cursor {
+  opacity: 1;
+  transform: translateX(0);
+}
+
+.login-screen__choice--primary {
+  border-color: color-mix(in oklab, var(--hud-accent) 55%, transparent);
+  background: color-mix(in oklab, var(--hud-accent) 10%, transparent);
+}
+
+.login-screen__dialogue-footnote {
+  margin-top: 0.85rem;
+  font-size: 8px;
+  line-height: 1.5;
+  color: var(--muted-foreground);
+}
+
+@media (max-width: 640px) {
+  .login-screen__stage {
+    flex-direction: column;
+    align-items: center;
+  }
+
+  .login-screen__speaker {
+    height: 6rem;
+  }
+
+  .login-screen__dialogue {
+    width: 100%;
+    margin-top: 0.5rem;
+  }
+
+  .login-screen__dialogue-frame::before,
+  .login-screen__dialogue-frame::after {
+    display: none;
+  }
+
+  .login-screen__nameplate {
+    margin-left: 1.1rem;
+  }
 }
 
 
@@ -828,6 +1039,16 @@
   letter-spacing: 0.18em;
   text-transform: uppercase;
   color: var(--hud-accent);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hud-masthead__detail {
+  margin-top: 2px;
+  font-size: 8px;
+  letter-spacing: 0.1em;
+  color: var(--muted-foreground);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
