@@ -1,17 +1,17 @@
 import { repoKeyFor } from "@sudo-city/cities";
 import type { RepoSummary } from "@sudo-city/protocol";
-import type { FastifyInstance, FastifyReply } from "fastify";
+import type { FastifyReply, FastifyRequest, FastifyInstance } from "fastify";
 import type { AuthContext } from "../auth-context.js";
-import { bearerToken, resolveSession } from "../auth-context.js";
+import { sessionToken, resolveSession } from "../auth-context.js";
 import type { DbSession } from "../db.js";
 import type { WorkspaceManager } from "../workspaces.js";
 
 async function requireSession(
-  request: { headers: { authorization?: string } },
+  request: FastifyRequest,
   reply: FastifyReply,
   auth: AuthContext,
 ): Promise<DbSession | undefined> {
-  const token = bearerToken(request as never);
+  const token = sessionToken(request);
   if (!token) {
     await reply.code(401).send({ error: "Not signed in" });
     return undefined;

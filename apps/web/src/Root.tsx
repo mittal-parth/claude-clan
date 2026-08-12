@@ -7,9 +7,7 @@ import {
   gateFor,
   readSessionFromHash,
   readStoredActiveRepo,
-  readStoredToken,
   writeStoredActiveRepo,
-  writeStoredToken,
   type AuthSession,
 } from "@/auth/gate";
 import LoginScreen from "@/components/LoginScreen";
@@ -21,7 +19,6 @@ type DemoTransition = "idle" | "loading" | "revealing";
 
 /** Owns login, repository selection, and the cross-repository airport journey. */
 export default function Root() {
-  const [token, setToken] = useState<string | undefined>(() => readStoredToken());
   const [session, setSession] = useState<AuthSession>({ authenticated: false });
   const [sessionChecked, setSessionChecked] = useState(false);
   const [activeRepoKey, setActiveRepoKey] = useState<string>();
@@ -68,19 +65,15 @@ export default function Root() {
   }
 
   useEffect(() => {
-    const { token: hashToken, error } = readSessionFromHash(window.location.hash);
-    if (hashToken) {
-      writeStoredToken(hashToken);
-      setToken(hashToken);
-    }
-    if (hashToken || error) {
+    const { error } = readSessionFromHash(window.location.hash);
+    if (error) {
       window.history.replaceState(null, "", window.location.pathname + window.location.search);
     }
   }, []);
 
   useEffect(() => {
     let cancelled = false;
-    fetchSession(token)
+    fetchSession()
       .then((result) => {
         if (!cancelled) {
           const nextSession: AuthSession =
@@ -104,10 +97,13 @@ export default function Root() {
     return () => {
       cancelled = true;
     };
-  }, [token]);
+    // Session is httpOnly-cookie-backed now -- there's no client-held token
+    // to re-key this on, so it runs once on mount. handleLogout updates
+    // `session` locally instead of relying on a re-run here.
+  }, []);
 
   const loadRepos = useCallback(() => {
-    if (!token || repoLoadInFlightRef.current !== undefined) return;
+    if (!session.authenticated || repoLoadInFlightRef.current !== undefined) return;
     const requestId = ++repoLoadRequestRef.current;
     const authEpoch = authEpochRef.current;
     repoLoadInFlightRef.current = requestId;
@@ -115,7 +111,7 @@ export default function Root() {
       requestId === repoLoadRequestRef.current && authEpoch === authEpochRef.current;
     setReposLoading(true);
     setReposError(undefined);
-    fetchRepos(token)
+    fetchRepos()
       .then((nextRepos) => {
         if (current()) setRepos(nextRepos);
       })
@@ -130,7 +126,7 @@ export default function Root() {
         }
         if (current()) setReposLoading(false);
       });
-  }, [token]);
+  }, [session.authenticated]);
 
   useEffect(() => {
     if (!activeRepoKey) return;
@@ -198,7 +194,7 @@ export default function Root() {
       beginAirportJourney(repo.key);
       return;
     }
-    if (!token) return;
+    if (!session.authenticated) return;
 
     const requestId = ++importRequestRef.current;
     const pending = { repoKey: repo.key, startedAt: Date.now() };
@@ -209,7 +205,7 @@ export default function Root() {
     const authEpoch = authEpochRef.current;
     const importIsCurrent = (): boolean =>
       requestId === importRequestRef.current && authEpoch === authEpochRef.current;
-    importRepo(token, repo.fullName)
+    importRepo(repo.fullName)
       .then(() => {
         if (!importIsCurrent()) return;
         repoLoadRequestRef.current += 1;
@@ -239,10 +235,8 @@ export default function Root() {
     airportTravelRef.current = undefined;
     airportArrivalRef.current = undefined;
     importingRef.current = undefined;
-    void logout(token);
-    writeStoredToken(undefined);
+    void logout();
     clearStoredActiveRepo();
-    setToken(undefined);
     setSession({ authenticated: false });
     setDemoTransition("idle");
     setActiveRepoKey(undefined);
@@ -279,7 +273,6 @@ export default function Root() {
       {gate === "login" || gate === "city" ? (
         <App
           activeRepoKey={gate === "login" ? DEMO_REPO_KEY : activeRepoKey!}
-          sessionToken={session.authenticated ? token : undefined}
           user={session.authenticated ? session.user : undefined}
           repoConnectionGeneration={repoConnectionGeneration}
           loginBackground={gate === "login"}

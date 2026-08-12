@@ -10,8 +10,7 @@ import { crewSpriteUrl } from "@/crew/catalog";
 export interface AppProps {
   /** "demo", or an owner/name repo key the signed-in user imported. */
   activeRepoKey: string;
-  /** The sealed session token, sent as the WS's first frame; absent in demo mode. */
-  sessionToken?: string;
+  /** Presence (not the value) drives whether the WS authenticates itself via a ticket; absent in demo mode. */
   user?: AuthUser;
   repoConnectionGeneration: number;
   /** Keeps the real demo canvas mounted behind the login card. */

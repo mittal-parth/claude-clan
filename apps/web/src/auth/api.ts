@@ -1,7 +1,14 @@
 import type { RepoSummary } from "@sudo-city/protocol";
 
-/** Mirrors App.tsx's VITE_WS_URL pattern: a build-time env var in production, a same-origin default for local dev. */
-export const API_URL = import.meta.env.VITE_API_URL ?? "http://127.0.0.1:4100";
+/**
+ * Relative by default: the API is reached through the web app's own origin
+ * (Vite's dev proxy locally, a Vercel rewrite in production -- see
+ * vite.config.ts and vercel.json), which is what lets the session cookie be
+ * httpOnly and same-origin instead of a cross-site cookie or a client-held
+ * bearer token. `VITE_API_URL` remains as an escape hatch for hitting the
+ * API directly (e.g. local debugging), not the normal path.
+ */
+export const API_URL = import.meta.env.VITE_API_URL ?? "";
 
 export function githubStartUrl(): string {
   return `${API_URL}/auth/github/start`;
@@ -18,34 +25,35 @@ export interface SessionResponse {
   user?: { id: number; login: string; avatarUrl: string };
 }
 
-/** The bearer token is an opaque session id that never changes -- refreshing the underlying GitHub token happens server-side, in place, so there's nothing for the client to adopt back. */
-function authedFetch(path: string, token: string | undefined, init?: RequestInit): Promise<Response> {
+/** Always same-origin (see API_URL), so the browser attaches the httpOnly session cookie on its own -- there's no token for this code to handle. */
+function authedFetch(path: string, init?: RequestInit): Promise<Response> {
   return fetch(`${API_URL}${path}`, {
     ...init,
-    headers: {
-      ...init?.headers,
-      ...(token ? { authorization: `Bearer ${token}` } : {}),
-    },
+    credentials: "same-origin",
   });
 }
 
-export async function fetchSession(token: string | undefined): Promise<SessionResponse> {
-  if (!token) {
-    return { authenticated: false, mode: "anonymous" };
-  }
-  const response = await authedFetch("/api/auth/session", token);
+export async function fetchSession(): Promise<SessionResponse> {
+  const response = await authedFetch("/api/auth/session");
   return (await response.json()) as SessionResponse;
 }
 
-export async function logout(token: string | undefined): Promise<void> {
-  if (!token) {
-    return;
-  }
-  await authedFetch("/api/auth/logout", token, { method: "POST" });
+export async function logout(): Promise<void> {
+  await authedFetch("/api/auth/logout", { method: "POST" });
 }
 
-export async function fetchRepos(token: string): Promise<RepoSummary[]> {
-  const response = await authedFetch("/api/repos", token);
+/** Mints a single-use ticket for the WebSocket handshake, which sits outside the same-origin API proxy and so can't rely on the cookie the way a fetch does. */
+export async function fetchWsTicket(): Promise<string | undefined> {
+  const response = await authedFetch("/api/auth/ws-ticket", { method: "POST" });
+  if (!response.ok) {
+    return undefined;
+  }
+  const body = (await response.json()) as { ticket: string };
+  return body.ticket;
+}
+
+export async function fetchRepos(): Promise<RepoSummary[]> {
+  const response = await authedFetch("/api/repos");
   if (!response.ok) {
     throw new Error(`Failed to list repositories (${response.status})`);
   }
@@ -53,8 +61,8 @@ export async function fetchRepos(token: string): Promise<RepoSummary[]> {
   return body.repos;
 }
 
-export async function importRepo(token: string, fullName: string): Promise<{ workspaceKey: string }> {
-  const response = await authedFetch("/api/repos/import", token, {
+export async function importRepo(fullName: string): Promise<{ workspaceKey: string }> {
+  const response = await authedFetch("/api/repos/import", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ fullName }),
