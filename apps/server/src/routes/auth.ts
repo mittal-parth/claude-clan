@@ -134,7 +134,11 @@ export function registerAuthRoutes(app: FastifyInstance, auth: AuthContext): voi
         });
       }
     }
-    reply.clearCookie(SESSION_COOKIE_NAME, { path: "/" });
+    reply.clearCookie(SESSION_COOKIE_NAME, {
+      path: "/",
+      secure: auth.secureCookies,
+      sameSite: "lax",
+    });
     await reply.code(204).send();
   });
 }
