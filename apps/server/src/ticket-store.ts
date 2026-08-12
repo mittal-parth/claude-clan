@@ -24,6 +24,7 @@ export class TicketStore {
   consume(ticket: string): string | undefined {
     const entry = this.tickets.get(ticket);
     this.tickets.delete(ticket);
+    this.sweep();
     if (!entry || entry.expiresAt < Date.now()) {
       return undefined;
     }

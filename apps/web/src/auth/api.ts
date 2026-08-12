@@ -25,11 +25,17 @@ export interface SessionResponse {
   user?: { id: number; login: string; avatarUrl: string };
 }
 
-/** Always same-origin (see API_URL), so the browser attaches the httpOnly session cookie on its own -- there's no token for this code to handle. */
+/**
+ * Same-origin by default (see API_URL), so the browser attaches the httpOnly
+ * session cookie on its own -- there's no token for this code to handle.
+ * `include` when API_URL is overridden: a "same-origin" credentials mode
+ * would silently drop the cookie on that cross-origin escape-hatch request,
+ * making it look like auth is broken rather than just not being sent.
+ */
 function authedFetch(path: string, init?: RequestInit): Promise<Response> {
   return fetch(`${API_URL}${path}`, {
     ...init,
-    credentials: "same-origin",
+    credentials: API_URL ? "include" : "same-origin",
   });
 }
 

@@ -275,18 +275,28 @@ export function useGameState({
           // resolves: the server processes messages strictly in arrival
           // order, and a non-demo repo.select ahead of session.auth would
           // fail as unauthenticated.
-          void fetchWsTicket().then((ticket) => {
-            if (torndown || socket !== ws) return;
-            if (ticket) {
-              ws.send(
-                JSON.stringify({
-                  type: "session.auth",
-                  token: ticket,
-                } satisfies MayorCommand),
-              );
-            }
-            sendRepoSelect();
-          });
+          fetchWsTicket()
+            .then((ticket) => {
+              if (torndown || socket !== ws) return;
+              if (ticket) {
+                ws.send(
+                  JSON.stringify({
+                    type: "session.auth",
+                    token: ticket,
+                  } satisfies MayorCommand),
+                );
+              }
+              sendRepoSelect();
+            })
+            .catch((error: unknown) => {
+              // A network failure minting the ticket shouldn't strand the
+              // socket with repo.select never sent -- the server's own
+              // AUTH_REQUIRED reply (for a non-demo repo) is the visible
+              // signal from here, same as an expired/invalid ticket would
+              // produce.
+              console.error("Failed to fetch WS ticket", error);
+              sendRepoSelect();
+            });
         } else {
           sendRepoSelect();
         }
