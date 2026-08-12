@@ -1,6 +1,7 @@
 import { loadEnvFile } from "node:process";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import cookie from "@fastify/cookie";
 import cors from "@fastify/cors";
 import websocket from "@fastify/websocket";
 import {
@@ -23,9 +24,16 @@ const port = Number(process.env.PORT ?? 4100);
 const app = Fastify({ logger: true });
 
 const webOrigin = process.env.WEB_ORIGIN;
+// Real browser traffic reaches the API through the web app's own origin (a
+// same-origin proxy in front of it), so the session cookie never needs to
+// cross a site boundary. This CORS config only covers direct, non-proxied
+// callers -- credentialed requests still need an explicit origin, `*` can't
+// carry cookies.
 await app.register(cors, {
   origin: [webOrigin, "http://127.0.0.1:5173"].filter((value): value is string => Boolean(value)),
+  credentials: true,
 });
+await app.register(cookie);
 await app.register(websocket);
 
 const demoRepoPath = process.env.SUDO_CITY_REPO ?? process.env.INIT_CWD ?? process.cwd();
@@ -255,7 +263,10 @@ app.get("/ws", { websocket: true }, (socket) => {
         send(socket, { kind: "error", code: "AUTH_DISABLED", message: "Login is not configured on this server." });
         return;
       }
-      const session = await resolveSession(data.token, authContext, new Date());
+      // `data.token` here is a single-use WS ticket (see `/api/auth/ws-ticket`),
+      // not the session id itself -- page JS never holds that.
+      const sessionId = authContext.wsTickets.consume(data.token);
+      const session = sessionId ? await resolveSession(sessionId, authContext, new Date()) : undefined;
       if (!session) {
         send(socket, { kind: "error", code: "AUTH_INVALID", message: "Session is invalid or expired." });
         return;

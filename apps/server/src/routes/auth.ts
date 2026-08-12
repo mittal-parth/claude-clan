@@ -1,7 +1,12 @@
 import { authorizeUrl, installUrl, signState, verifyState } from "@sudo-city/cities";
 import type { FastifyInstance } from "fastify";
-import type { AuthContext } from "../auth-context.js";
-import { bearerToken, resolveSession } from "../auth-context.js";
+import {
+  SESSION_COOKIE_MAX_AGE_SECONDS,
+  SESSION_COOKIE_NAME,
+  sessionToken,
+  type AuthContext,
+  resolveSession,
+} from "../auth-context.js";
 
 export function registerAuthRoutes(app: FastifyInstance, auth: AuthContext): void {
   // Login: always the plain OAuth authorize endpoint, whether or not the
@@ -21,8 +26,8 @@ export function registerAuthRoutes(app: FastifyInstance, auth: AuthContext): voi
   app.get<{ Querystring: { code?: string; state?: string } }>(
     "/auth/github/callback",
     async (request, reply) => {
-      const { code, state } = request.query;
-      if (!code) {
+      const { code: githubCode, state } = request.query;
+      if (!githubCode) {
         await reply.code(400).send({ error: "Missing code" });
         return;
       }
@@ -38,13 +43,21 @@ export function registerAuthRoutes(app: FastifyInstance, auth: AuthContext): voi
       }
 
       try {
-        const tokens = await auth.githubAuth.exchangeCode(code);
+        const tokens = await auth.githubAuth.exchangeCode(githubCode);
         const viewer = await auth.githubAuth.viewer(tokens.accessToken);
         const sessionId = await auth.db.createSession(
           { id: viewer.id, login: viewer.login, avatarUrl: viewer.avatarUrl },
           tokens,
         );
-        await reply.redirect(`${auth.webOrigin}/#session=${sessionId}`);
+        // This callback lands on the API's own origin (it's GitHub's
+        // redirect_uri, registered outside this app), not the web app's --
+        // a cookie set here would be scoped to the wrong origin entirely.
+        // Handing off a one-time code and finishing on `/api/auth/finish`
+        // (reached through the web app's own domain, proxied to this same
+        // API) is what lets the browser see the Set-Cookie response as
+        // coming from the app's own origin.
+        const finishCode = auth.loginCodes.create(sessionId);
+        await reply.redirect(`${auth.webOrigin}/api/auth/finish?code=${finishCode}`);
       } catch (error) {
         app.log.error({ error }, "GitHub login callback failed");
         await reply.redirect(`${auth.webOrigin}/#session-error=1`);
@@ -52,8 +65,24 @@ export function registerAuthRoutes(app: FastifyInstance, auth: AuthContext): voi
     },
   );
 
+  app.get<{ Querystring: { code?: string } }>("/api/auth/finish", async (request, reply) => {
+    const sessionId = request.query.code ? auth.loginCodes.consume(request.query.code) : undefined;
+    if (!sessionId) {
+      await reply.redirect(`${auth.webOrigin}/#session-error=1`);
+      return;
+    }
+    reply.setCookie(SESSION_COOKIE_NAME, sessionId, {
+      httpOnly: true,
+      secure: auth.secureCookies,
+      sameSite: "lax",
+      path: "/",
+      maxAge: SESSION_COOKIE_MAX_AGE_SECONDS,
+    });
+    await reply.redirect(auth.webOrigin);
+  });
+
   app.get("/api/auth/session", async (request) => {
-    const token = bearerToken(request);
+    const token = sessionToken(request);
     if (!token) {
       return { authenticated: false as const, mode: "anonymous" as const };
     }
@@ -68,14 +97,29 @@ export function registerAuthRoutes(app: FastifyInstance, auth: AuthContext): voi
     };
   });
 
+  // Cookie-authenticated: mints a single-use ticket the client hands to the
+  // WebSocket in its `session.auth` message. The socket isn't behind the
+  // same-origin API proxy, so it can't rely on the browser attaching the
+  // httpOnly cookie the way a same-origin fetch does -- and page JS must
+  // never hold the real session id to send in its place.
+  app.post("/api/auth/ws-ticket", async (request, reply) => {
+    const token = sessionToken(request);
+    const session = token ? await resolveSession(token, auth, new Date()) : undefined;
+    if (!session) {
+      await reply.code(401).send({ error: "Not signed in" });
+      return;
+    }
+    return { ticket: auth.wsTickets.create(token!) };
+  });
+
   app.post("/api/auth/logout", async (request, reply) => {
-    const token = bearerToken(request);
+    const token = sessionToken(request);
     if (token) {
       const session = await resolveSession(token, auth, new Date());
       if (session) {
         await auth.db.revokeSession(token);
-        // Best-effort: the client discards its bearer token regardless of
-        // whether this call succeeds.
+        // Best-effort: the client's cookie is cleared regardless of whether
+        // this call succeeds.
         await fetch(`https://api.github.com/applications/${auth.clientId}/token`, {
           method: "DELETE",
           headers: {
@@ -90,6 +134,7 @@ export function registerAuthRoutes(app: FastifyInstance, auth: AuthContext): voi
         });
       }
     }
+    reply.clearCookie(SESSION_COOKIE_NAME, { path: "/" });
     await reply.code(204).send();
   });
 }

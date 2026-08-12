@@ -11,6 +11,7 @@ import {
   ServerMessageSchema,
 } from "@sudo-city/protocol";
 import type { AuthUser } from "@/auth/gate";
+import { fetchWsTicket } from "@/auth/api";
 import type {
   CanvasDragPreview,
   CanvasFileChange,
@@ -46,7 +47,6 @@ import { type CrewSelection } from "@/components/CrewSelectDialog";
 
 export interface GameStateProps {
   activeRepoKey: string;
-  sessionToken?: string;
   user?: AuthUser;
   repoConnectionGeneration: number;
   initialReveal?: boolean;
@@ -57,7 +57,6 @@ export interface GameStateProps {
 
 export function useGameState({
   activeRepoKey,
-  sessionToken,
   user,
   repoConnectionGeneration,
   initialReveal = false,
@@ -258,20 +257,39 @@ export function useGameState({
         attempt = 0;
         setReconnectAttempt(0);
         setConnection("online");
-        if (sessionToken) {
+
+        function sendRepoSelect(): void {
+          if (torndown || socket !== ws) return;
           ws.send(
             JSON.stringify({
-              type: "session.auth",
-              token: sessionToken,
+              type: "repo.select",
+              repoKey: activeRepoKey,
             } satisfies MayorCommand),
           );
         }
-        ws.send(
-          JSON.stringify({
-            type: "repo.select",
-            repoKey: activeRepoKey,
-          } satisfies MayorCommand),
-        );
+
+        if (user) {
+          // The socket never holds a bearer token -- it's authenticated via
+          // a single-use ticket minted by the cookie-authenticated
+          // `/api/auth/ws-ticket`. repo.select must not go out before this
+          // resolves: the server processes messages strictly in arrival
+          // order, and a non-demo repo.select ahead of session.auth would
+          // fail as unauthenticated.
+          void fetchWsTicket().then((ticket) => {
+            if (torndown || socket !== ws) return;
+            if (ticket) {
+              ws.send(
+                JSON.stringify({
+                  type: "session.auth",
+                  token: ticket,
+                } satisfies MayorCommand),
+              );
+            }
+            sendRepoSelect();
+          });
+        } else {
+          sendRepoSelect();
+        }
       });
       ws.addEventListener("close", () => {
         if (torndown) {
@@ -399,7 +417,7 @@ export function useGameState({
       socket?.close();
       socketRef.current = null;
     };
-  }, [activeRepoKey, sessionToken, repoConnectionGeneration]);
+  }, [activeRepoKey, user?.id, repoConnectionGeneration]);
 
   useEffect(() => {
     setAirportArrivalDelayed(false);

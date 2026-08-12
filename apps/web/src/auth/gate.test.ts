@@ -4,9 +4,7 @@ import {
   gateFor,
   readSessionFromHash,
   readStoredActiveRepo,
-  readStoredToken,
   writeStoredActiveRepo,
-  writeStoredToken,
 } from "./gate.js";
 
 describe("gateFor", () => {
@@ -32,10 +30,6 @@ describe("gateFor", () => {
 });
 
 describe("readSessionFromHash", () => {
-  it("extracts the sealed token from #session=", () => {
-    expect(readSessionFromHash("#session=abc.def")).toEqual({ token: "abc.def" });
-  });
-
   it("reports a session error", () => {
     expect(readSessionFromHash("#session-error=1")).toEqual({ error: true });
   });
@@ -44,19 +38,7 @@ describe("readSessionFromHash", () => {
     expect(readSessionFromHash("#foo=bar")).toEqual({});
     expect(readSessionFromHash("")).toEqual({});
   });
-
-  it("returns nothing for an empty token", () => {
-    expect(readSessionFromHash("#session=")).toEqual({});
-  });
 });
-
-describe("stored token guards", () => {
-  it("no-ops when sessionStorage is unavailable", () => {
-    expect(readStoredToken()).toBeUndefined();
-    expect(() => writeStoredToken("token")).not.toThrow();
-  });
-});
-
 
 describe("stored active repo guards", () => {
   it("round-trips demo and user-bound repo selections", () => {

@@ -31,63 +31,23 @@ export function gateFor(session: AuthSession, activeRepoKey: string | undefined)
   return "repos";
 }
 
-const SESSION_HASH_PREFIX = "#session=";
 const SESSION_ERROR_HASH = "#session-error=1";
 
 export interface HashSessionResult {
-  token?: string;
   error?: boolean;
 }
 
 /**
- * Reads the sealed session token GitHub's callback redirect left in the URL
- * fragment. A fragment (not a query string) so the token never reaches
- * Render's access logs on that hop, and never reaches the server again once
- * the SPA strips it.
+ * Reads the login-failure marker GitHub's callback redirect can leave in the
+ * URL fragment. There is no success case to read here: a successful login
+ * finishes on `/api/auth/finish`, which sets the session as an httpOnly
+ * cookie and redirects to a plain URL -- nothing for page JS to pick up.
  */
 export function readSessionFromHash(hash: string): HashSessionResult {
-  if (hash.startsWith(SESSION_HASH_PREFIX)) {
-    const token = hash.slice(SESSION_HASH_PREFIX.length);
-    return token ? { token } : {};
-  }
   if (hash === SESSION_ERROR_HASH) {
     return { error: true };
   }
   return {};
-}
-
-const SESSION_STORAGE_KEY = "sudo-city:session";
-
-/**
- * sessionStorage, not localStorage: it survives a reload/reconnect within
- * the tab but not a closed tab, which bounds how long an XSS-stolen token
- * (wrapping the user's GitHub token) stays useful. See login_plan.md §1 for
- * the fuller tradeoff and the custom-domain hardening path.
- */
-export function readStoredToken(): string | undefined {
-  if (typeof sessionStorage === "undefined") {
-    return undefined;
-  }
-  try {
-    return sessionStorage.getItem(SESSION_STORAGE_KEY) ?? undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-export function writeStoredToken(token: string | undefined): void {
-  if (typeof sessionStorage === "undefined") {
-    return;
-  }
-  try {
-    if (token) {
-      sessionStorage.setItem(SESSION_STORAGE_KEY, token);
-    } else {
-      sessionStorage.removeItem(SESSION_STORAGE_KEY);
-    }
-  } catch {
-    // A failed write only costs persistence across a reload, not the session.
-  }
 }
 
 export interface StoredActiveRepo {
