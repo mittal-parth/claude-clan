@@ -5,9 +5,12 @@ import {
   type Options,
   type PermissionResult,
   type Query,
+  type SandboxSettings,
   type SDKAssistantMessage,
   type SDKMessage,
 } from "@anthropic-ai/claude-agent-sdk";
+
+export type { SandboxSettings };
 import type {
   EffortLevel,
   GameEvent,
@@ -43,6 +46,13 @@ export interface AgentSessionOptions {
   disallowedTools?: readonly string[];
   /** Appended to the default system prompt -- e.g. review framing for a PR city. */
   systemPromptAppend?: string;
+  /**
+   * OS-level confinement for the commands this session runs (bubblewrap on
+   * Linux, Seatbelt on macOS). Left undefined the SDK does not sandbox, which
+   * is right for a local checkout you already trust and wrong for a server
+   * where one box holds every user's clone.
+   */
+  sandbox?: SandboxSettings;
 }
 
 export interface AgentStartOptions {
@@ -61,6 +71,7 @@ export class AgentSessionManager {
   private readonly safeTools: Set<string>;
   private readonly disallowedTools?: readonly string[];
   private readonly systemPromptAppend?: string;
+  private readonly sandbox?: SandboxSettings;
   private model: string;
   private effort: EffortLevel;
   private activeQuery?: Query;
@@ -77,6 +88,7 @@ export class AgentSessionManager {
     this.safeTools = new Set(options.safeTools ?? ["Read", "Glob", "Grep"]);
     this.disallowedTools = options.disallowedTools;
     this.systemPromptAppend = options.systemPromptAppend;
+    this.sandbox = options.sandbox;
   }
 
   /** Rations a shared budget across cities: called with the remaining balance before each start(). */
@@ -121,6 +133,7 @@ export class AgentSessionManager {
         maxTurns: this.maxTurns,
         model: this.model,
         permissionMode,
+        sandbox: this.sandbox,
         systemPrompt: this.systemPromptAppend
           ? {
               type: "preset",
