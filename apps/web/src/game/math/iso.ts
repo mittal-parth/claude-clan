@@ -1,3 +1,20 @@
+/**
+ * Tile dimensions live here rather than in textures/core.ts because they are
+ * projection geometry, not a drawing detail, and the pure modules that reason
+ * about screen-space placement must not pull Phaser in through the texture
+ * bakery.
+ */
+export const TILE_WIDTH = 96;
+export const TILE_HEIGHT = 48;
+export const HALF_TILE_WIDTH = TILE_WIDTH / 2;
+export const HALF_TILE_HEIGHT = TILE_HEIGHT / 2;
+
+/**
+ * Sprites are positioned at the tile's bottom corner with origin (0.5, 1), so
+ * every baked texture reserves this much room below the tile centre.
+ */
+export const TILE_ANCHOR_Y = HALF_TILE_HEIGHT;
+
 export interface IsoPoint {
   x: number;
   y: number;
