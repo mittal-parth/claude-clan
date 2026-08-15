@@ -74,4 +74,32 @@ export async function cloneRepo(options: CloneOptions): Promise<void> {
       }`,
     );
   }
+
+  await stripRemoteCredentials(
+    options.destination,
+    `https://github.com/${options.owner}/${options.name}.git`,
+  );
+}
+
+/**
+ * `git clone` writes the URL it was given into .git/config verbatim, embedded
+ * credentials and all -- so a freshly cloned repo carries its owner's GitHub
+ * token in plaintext inside the working tree. Every user's clones live under
+ * one root on this box, and a crew has Bash, so that file is readable by
+ * anyone else's agent: it turns "can see your code" into "can push to your
+ * repositories". Rewriting the remote without credentials leaves nothing at
+ * rest; the token is supplied per invocation when a PR fetch actually needs
+ * it (see ensureWorktree).
+ *
+ * There is a brief window between clone and rewrite where the token is on
+ * disk. Closing that entirely means never handing git a credentialed URL,
+ * which costs an auth mechanism this doesn't need yet.
+ */
+export async function stripRemoteCredentials(
+  repoPath: string,
+  cleanRemote: string,
+): Promise<void> {
+  await execFileAsync("git", ["remote", "set-url", "origin", cleanRemote], {
+    cwd: repoPath,
+  });
 }
