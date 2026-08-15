@@ -1,5 +1,8 @@
 .env
 .DS_Store
+# Per-user repo clones, when SUDO_CITY_CLONE_ROOT points inside the checkout.
+# The default is <tmpdir>/sudocity, but a local override lands here.
+.sudocity-clones/
 .pnpm-store/
 .sudocity/
 dist/

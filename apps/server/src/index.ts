@@ -1,5 +1,5 @@
 import { loadEnvFile } from "node:process";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import cors from "@fastify/cors";
 import websocket from "@fastify/websocket";
@@ -13,6 +13,7 @@ import {
 import Fastify from "fastify";
 import { WebSocket, type RawData } from "ws";
 import { buildAuthContext, resolveSession, type AuthContext } from "./auth-context.js";
+import { buildCrewPolicy, buildSandboxSettings } from "./policy.js";
 import { registerAuthRoutes } from "./routes/auth.js";
 import { registerRepoRoutes } from "./routes/repos.js";
 import { Workspace } from "./workspace.js";
@@ -56,7 +57,27 @@ try {
 }
 
 const GLOBAL_MAX_BUDGET_USD = Number(process.env.SUDO_CITY_MAX_BUDGET_USD ?? 1);
-const cloneRoot = process.env.SUDO_CITY_CLONE_ROOT ?? join(tmpdir(), "sudocity");
+// A signed-in user's lifetime allowance, enforced against a Postgres-backed
+// ledger so it survives restarts, evictions, and a multi-instance fleet. The
+// shared ceiling above still applies -- an order is capped by whichever of the
+// two runs out first.
+const PER_USER_MAX_BUDGET_USD = Number(
+  process.env.SUDO_CITY_USER_MAX_BUDGET_USD ?? 10,
+);
+// `??` would accept an empty SUDO_CITY_CLONE_ROOT= line (a very easy thing to
+// leave in a .env) as a real value, and join("") resolves against cwd -- which
+// drops every user's clone inside the server's own checkout, where it breaks
+// the deploy's clean-tree gate and gets picked up by test globs. Resolve to an
+// absolute path so a relative value can't land somewhere surprising either.
+const cloneRoot = resolve(
+  process.env.SUDO_CITY_CLONE_ROOT?.trim() || join(tmpdir(), "sudocity"),
+);
+const crewPolicy = buildCrewPolicy();
+const sandbox = buildSandboxSettings();
+app.log.info(
+  { crewPolicy, sandbox: sandbox ?? "disabled" },
+  "Crew policy for this deployment",
+);
 
 function send(socket: WebSocket, message: ServerMessage): void {
   socket.send(JSON.stringify(message));
@@ -95,6 +116,15 @@ const workspaces = new WorkspaceManager({
   log: app.log,
   cloneRoot,
   globalMaxBudgetUsd: GLOBAL_MAX_BUDGET_USD,
+  perUserMaxBudgetUsd: PER_USER_MAX_BUDGET_USD,
+  sandbox,
+  spendStore: authContext
+    ? {
+        spentUsd: (userId) => authContext!.db.userSpentUsd(userId),
+        addSpend: (userId, amountUsd) =>
+          authContext!.db.addUserSpend(userId, amountUsd),
+      }
+    : undefined,
   sink: {
     onEvent(workspaceKey, cityId, event: GameEvent) {
       const message = JSON.stringify({ kind: "event", event } satisfies ServerMessage);
@@ -154,6 +184,25 @@ app.addHook("onClose", async () => {
   await authContext?.db.close();
 });
 
+/**
+ * True when this connection is on the shared demo workspace and the
+ * deployment has switched off the things that cost money or do work there.
+ * Nobody authenticates to reach the demo city, so its socket commands are the
+ * one unauthenticated write path in the server.
+ */
+function demoIsLocked(workspace: Workspace): boolean {
+  return workspace.key === demoWorkspace.key && !crewPolicy.demoInteractive;
+}
+
+/** One error code for every gated action, so the HUD can answer any of them with the sign-in modal. */
+function sendSignInRequired(socket: WebSocket, action: string): void {
+  send(socket, {
+    kind: "error",
+    code: "SIGN_IN_REQUIRED",
+    message: `Sign in to ${action}. The demo city is read-only.`,
+  });
+}
+
 function sendWorld(socket: WebSocket, workspace: Workspace, cityId: CityId): void {
   const city = workspace.city(cityId);
   if (!city) {
@@ -181,6 +230,7 @@ function sendWorkspaceState(socket: WebSocket, workspace: Workspace, cityId: Cit
 
 app.get("/ws", { websocket: true }, (socket) => {
   clients.set(socket, { workspaceKey: demoWorkspace.key, cityId: "main" });
+  send(socket, { kind: "policy", policy: crewPolicy });
   sendWorkspaceState(socket, demoWorkspace, "main");
   socket.once("close", () => clients.delete(socket));
 
@@ -335,6 +385,45 @@ app.get("/ws", { websocket: true }, (socket) => {
         if (!requireCity(data.cityId)) {
           break;
         }
+        // The HUD opens a sign-in modal instead of sending this, but the
+        // socket is the real boundary -- nothing stops a client sending
+        // whatever it likes.
+        if (demoIsLocked(workspace)) {
+          sendSignInRequired(socket, "dispatch a crew");
+          break;
+        }
+        if (data.model && !crewPolicy.allowedModels.includes(data.model)) {
+          send(socket, {
+            kind: "error",
+            code: "MODEL_NOT_ALLOWED",
+            message: `The ${data.model} crew is not on duty on this server.`,
+          });
+          break;
+        }
+        if (data.effort && !crewPolicy.allowedEfforts.includes(data.effort)) {
+          send(socket, {
+            kind: "error",
+            code: "EFFORT_NOT_ALLOWED",
+            message: `Thinking level "${data.effort}" is not available on this server.`,
+          });
+          break;
+        }
+        // Reject up front rather than starting a run with a $0 ceiling, which
+        // would fail somewhere inside the SDK with a much worse message.
+        if (workspace.remainingBudgetUsd() <= 0) {
+          const spent = state.userId === undefined
+            ? undefined
+            : workspaces.userSpentUsd(state.userId);
+          send(socket, {
+            kind: "error",
+            code: "BUDGET_EXHAUSTED",
+            message:
+              spent !== undefined && workspaces.remainingUserBudget(state.userId!) <= 0
+                ? `The treasury is empty: you have spent $${spent.toFixed(2)} of your $${PER_USER_MAX_BUDGET_USD.toFixed(2)} allowance.`
+                : "The city treasury is empty. No further orders can be funded right now.",
+          });
+          break;
+        }
         workspace.prompt(data.cityId, data.prompt, {
           permissionMode: data.permissionMode,
           contextPaths: data.contextPaths,
@@ -351,6 +440,10 @@ app.get("/ws", { websocket: true }, (socket) => {
         break;
       }
       case "permit.resolve": {
+        if (demoIsLocked(workspace)) {
+          sendSignInRequired(socket, "stamp a permit");
+          break;
+        }
         const resolved = workspace.resolvePermit(data.toolCallId, data.decision);
         if (!resolved) {
           send(socket, {
@@ -364,6 +457,12 @@ app.get("/ws", { websocket: true }, (socket) => {
       }
       case "city.travel": {
         const cityId = data.cityId;
+        // `main` is already built and costs nothing to revisit; a PR or issue
+        // city is a git worktree plus a repo scan, built on demand.
+        if (cityId !== "main" && demoIsLocked(workspace)) {
+          sendSignInRequired(socket, "sail to a pull request city");
+          break;
+        }
         void workspace
           .ensureCity(cityId)
           .then((city) => {

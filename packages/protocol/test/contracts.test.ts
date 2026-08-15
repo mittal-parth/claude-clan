@@ -282,4 +282,37 @@ describe("protocol contracts", () => {
     });
     expect(status).toMatchObject({ phase: "cloning", percent: 40 });
   });
+
+  it("carries the crew policy the server enforces", () => {
+    const message = ServerMessageSchema.parse({
+      kind: "policy",
+      policy: {
+        allowedModels: ["sonnet", "haiku"],
+        allowedEfforts: ["low", "medium", "high"],
+        demoInteractive: false,
+      },
+    });
+
+    expect(message).toEqual({
+      kind: "policy",
+      policy: {
+        allowedModels: ["sonnet", "haiku"],
+        allowedEfforts: ["low", "medium", "high"],
+        demoInteractive: false,
+      },
+    });
+  });
+
+  it("rejects a policy naming a thinking level that does not exist", () => {
+    expect(() =>
+      ServerMessageSchema.parse({
+        kind: "policy",
+        policy: {
+          allowedModels: ["sonnet"],
+          allowedEfforts: ["ludicrous"],
+          demoInteractive: false,
+        },
+      }),
+    ).toThrow();
+  });
 });

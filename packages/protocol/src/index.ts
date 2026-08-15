@@ -80,6 +80,25 @@ export const EffortLevelSchema = z.enum([
   "max",
 ]);
 
+/**
+ * What this server permits a connection to dispatch. Sent once when the
+ * socket opens so the HUD can disable the crew and thinking levels a public
+ * deployment has switched off, rather than letting the mayor pick something
+ * the server will reject. The server enforces the same lists on
+ * session.prompt -- a raw socket can send whatever it likes, so the HUD is
+ * the courtesy and the server check is the control.
+ */
+export const CrewPolicySchema = z.object({
+  allowedModels: z.array(z.string().min(1)),
+  allowedEfforts: z.array(EffortLevelSchema),
+  /**
+   * Whether the shared demo city does anything beyond render. False means
+   * orders, permit stamps, and travel to PR/issue cities all require signing
+   * in first -- the demo's `main` city stays fully browsable either way.
+   */
+  demoInteractive: z.boolean(),
+});
+
 // "main" is the primary checkout; PR and issue cities are detached worktrees.
 export const CityIdSchema = z
   .string()
@@ -311,8 +330,13 @@ export const ServerMessageSchema = z.discriminatedUnion("kind", [
     percent: z.number().min(0).max(100).optional(),
     message: z.string().optional(),
   }),
+  z.object({
+    kind: z.literal("policy"),
+    policy: CrewPolicySchema,
+  }),
 ]);
 
+export type CrewPolicy = z.infer<typeof CrewPolicySchema>;
 export type EffortLevel = z.infer<typeof EffortLevelSchema>;
 export type Building = z.infer<typeof BuildingSchema>;
 export type ChangedFile = z.infer<typeof ChangedFileSchema>;

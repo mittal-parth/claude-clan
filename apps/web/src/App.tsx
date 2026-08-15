@@ -3,6 +3,7 @@ import {
   ServerMessageSchema,
   type Building,
   type CitySummary,
+  type CrewPolicy,
   type EffortLevel,
   type GameEvent,
   type Issue,
@@ -23,6 +24,7 @@ import {
   X,
 } from "lucide-react";
 import type { AuthUser } from "@/auth/gate";
+import { demoGatedAction, type DemoAction } from "@/auth/demo-gate";
 import { useAudio } from "@/components/audio-provider";
 import { Markdown } from "@/components/markdown";
 import { ConstructionTracker } from "@/lib/construction-tracker";
@@ -67,17 +69,26 @@ import CrewSelectDialog, {
   type CrewSelection,
 } from "./components/CrewSelectDialog";
 import IssueShopDialog from "@/components/IssueShopDialog";
+import SignInDialog from "@/components/SignInDialog";
 import ShareCityCard from "./components/ShareCityCard";
 import ShareCityModal from "./components/ShareCityModal";
 import ShutterFlash from "./components/ShutterFlash";
 import {
+  CREW_MEMBERS,
   DEFAULT_CREW_ID,
   DEFAULT_EFFORT,
+  EFFORT_LEVELS,
   crewSpriteUrl,
   effortLabel,
   findCrewByModel,
   getCrewMember,
 } from "./crew/catalog";
+
+const UNRESTRICTED_POLICY: CrewPolicy = {
+  allowedModels: CREW_MEMBERS.map((crew) => crew.model),
+  allowedEfforts: [...EFFORT_LEVELS],
+  demoInteractive: true,
+};
 
 type ConnectionState = "connecting" | "online" | "offline";
 
@@ -790,6 +801,11 @@ export default function App({
     crewId: DEFAULT_CREW_ID,
     effort: DEFAULT_EFFORT,
   });
+  // Everything is on duty until the server says otherwise; its policy message
+  // is the first thing it sends after the socket opens.
+  const [crewPolicy, setCrewPolicy] = useState<CrewPolicy>(UNRESTRICTED_POLICY);
+  /** The action a visitor reached for in the demo city; opens the sign-in modal. */
+  const [signInAction, setSignInAction] = useState<string>();
   const [crewDialogOpen, setCrewDialogOpen] = useState(false);
   const [hud, setHud] = useState(readHudState);
   const [fileChange, setFileChange] = useState<CanvasFileChange>();
@@ -885,6 +901,10 @@ export default function App({
     .reverse()
     .find((event) => event.type === "session.started");
   const selectedCrew = getCrewMember(crewSelection.crewId);
+  // In the demo city these controls stay live and answer with a sign-in
+  // prompt, rather than sitting greyed out: someone reaching for the crew is
+  // exactly who the account is for.
+  const demoLocked = activeRepoKey === "demo" && !crewPolicy.demoInteractive;
   const activeCrew =
     startedSession?.type === "session.started"
       ? (findCrewByModel(startedSession.model) ?? selectedCrew)
@@ -1040,7 +1060,33 @@ export default function App({
           return;
         }
 
+        if (decoded.data.kind === "policy") {
+          const policy = decoded.data.policy;
+          setCrewPolicy(policy);
+          // A selection made before the policy arrived (or restored from a
+          // server that allowed more) would otherwise sit in the HUD looking
+          // dispatchable and be rejected on submit.
+          setCrewSelection((current) => ({
+            crewId: policy.allowedModels.includes(
+              getCrewMember(current.crewId).model,
+            )
+              ? current.crewId
+              : DEFAULT_CREW_ID,
+            effort: policy.allowedEfforts.includes(current.effort)
+              ? current.effort
+              : DEFAULT_EFFORT,
+          }));
+          return;
+        }
+
         if (decoded.data.kind === "error") {
+          // Backstop: if any path reaches the server without the HUD having
+          // caught it, the refusal still surfaces as the sign-in prompt
+          // rather than vanishing silently.
+          if (decoded.data.code === "SIGN_IN_REQUIRED") {
+            setSignInAction((current) => current ?? "keep building");
+            return;
+          }
           if (
             decoded.data.code === "PERMIT_NOT_FOUND" &&
             decoded.data.toolCallId
@@ -1190,7 +1236,27 @@ export default function App({
     clearStoredEvents(activeCityId);
   }
 
+  /** Opens the sign-in modal and reports whether the action should stop here. */
+  function blockedByDemoGate(action: DemoAction): boolean {
+    const gated = demoGatedAction({ ...action, demoLocked });
+    if (!gated) {
+      return false;
+    }
+    setSignInAction(gated);
+    return true;
+  }
+
+  function resolvePermit(toolCallId: string, decision: "allow" | "deny"): void {
+    if (blockedByDemoGate({ action: "permit" })) {
+      return;
+    }
+    send({ type: "permit.resolve", toolCallId, decision });
+  }
+
   function travelTo(cityId: string): void {
+    if (blockedByDemoGate({ action: "travel", cityId })) {
+      return;
+    }
     setActiveCityId(cityId);
     setSelected(undefined);
     setDiff(undefined);
@@ -1201,6 +1267,9 @@ export default function App({
   }
 
   function requestShipTravel(cityId: string): void {
+    if (blockedByDemoGate({ action: "travel", cityId })) {
+      return;
+    }
     // Keep activeCityId on the departing city until the canvas has covered it
     // in clouds. This prevents a cached PR snapshot from replacing the ship
     // before its departure animation can be seen.
@@ -1225,6 +1294,12 @@ export default function App({
   }
 
   function takeIssueToFix(issue: Issue): void {
+    // Caught here rather than at the travel call below, so the prompt appears
+    // on the click instead of after the ship has already set sail.
+    if (blockedByDemoGate({ action: "issue" })) {
+      setIssueShopOpen(false);
+      return;
+    }
     setIssueShopOpen(false);
     setIssueBeingFixed(issue);
     setIssueTravelRequest({
@@ -1281,6 +1356,9 @@ export default function App({
     event.preventDefault();
     const nextPrompt = prompt.trim();
     if (!nextPrompt) {
+      return;
+    }
+    if (blockedByDemoGate({ action: "dispatch" })) {
       return;
     }
     send({
@@ -1648,6 +1726,13 @@ export default function App({
                 </div>
               }
             >
+              {demoLocked ? (
+                <p className="retro text-[8px] leading-relaxed text-muted-foreground">
+                  You're touring the demo city — dispatching a crew needs an
+                  account.
+                </p>
+              ) : null}
+
               {draggingBuilding ? (
                 <div
                   className="flex items-center gap-2 border px-2 py-1.5"
@@ -1932,13 +2017,7 @@ export default function App({
                   <HudButton
                     type="button"
                     size="sm"
-                    onClick={() =>
-                      send({
-                        type: "permit.resolve",
-                        toolCallId: pendingPermit.toolCallId,
-                        decision: "allow",
-                      })
-                    }
+                    onClick={() => resolvePermit(pendingPermit.toolCallId, "allow")}
                   >
                     Stamp
                   </HudButton>
@@ -1946,13 +2025,7 @@ export default function App({
                     type="button"
                     size="sm"
                     variant="danger"
-                    onClick={() =>
-                      send({
-                        type: "permit.resolve",
-                        toolCallId: pendingPermit.toolCallId,
-                        decision: "deny",
-                      })
-                    }
+                    onClick={() => resolvePermit(pendingPermit.toolCallId, "deny")}
                   >
                     Deny
                   </HudButton>
@@ -1993,7 +2066,17 @@ export default function App({
         open={crewDialogOpen}
         onOpenChange={setCrewDialogOpen}
         value={crewSelection}
+        policy={crewPolicy}
         onConfirm={setCrewSelection}
+      />
+
+      <SignInDialog
+        action={signInAction}
+        onOpenChange={(open) => {
+          if (!open) {
+            setSignInAction(undefined);
+          }
+        }}
       />
 
       <CommandDialog open={commandOpen} onOpenChange={setCommandOpen}>
