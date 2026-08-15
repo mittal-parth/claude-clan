@@ -83,7 +83,7 @@ export function readStoredActiveRepo(): StoredActiveRepo | undefined {
 }
 
 export function writeStoredActiveRepo(repoKey: string, userId?: number): void {
-  if (typeof localStorage === "undefined") {
+  if (typeof localStorage === "undefined" || repoKey.startsWith("upload:")) {
     return;
   }
   try {

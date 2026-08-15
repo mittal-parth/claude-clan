@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { access, rm } from "node:fs/promises";
 import { join } from "node:path";
 import type { CityId, GameEvent } from "@sudo-city/protocol";
@@ -69,6 +70,53 @@ export class WorkspaceManager {
       throw new Error("Demo workspace has not been opened yet");
     }
     return this.demoWorkspace;
+  }
+
+  async openUpload(uploadId: string, dir: string): Promise<Workspace> {
+    const key = `upload:${uploadId}`;
+    const existing = this.workspaces.get(key);
+    if (existing) {
+      existing.touch();
+      return existing;
+    }
+    const pending = this.pendingOpens.get(key);
+    if (pending) {
+      return pending;
+    }
+
+    const opening = (async () => {
+      const workspace = await this.buildWorkspace(key, dir, undefined);
+      this.workspaces.set(key, workspace);
+      return workspace;
+    })().finally(() => {
+      this.pendingOpens.delete(key);
+    });
+    this.pendingOpens.set(key, opening);
+    return opening;
+  }
+
+  async openLocal(path: string): Promise<Workspace> {
+    const hash = createHash("sha256").update(path).digest("hex").slice(0, 16);
+    const key = `local:${hash}`;
+    const existing = this.workspaces.get(key);
+    if (existing) {
+      existing.touch();
+      return existing;
+    }
+    const pending = this.pendingOpens.get(key);
+    if (pending) {
+      return pending;
+    }
+
+    const opening = (async () => {
+      const workspace = await this.buildWorkspace(key, path, undefined);
+      this.workspaces.set(key, workspace);
+      return workspace;
+    })().finally(() => {
+      this.pendingOpens.delete(key);
+    });
+    this.pendingOpens.set(key, opening);
+    return opening;
   }
 
   private repoCloneDir(userId: number, owner: string, name: string): string {
@@ -196,16 +244,22 @@ export class WorkspaceManager {
     }
   }
 
-  private async evict(key: string): Promise<void> {
+  async evict(key: string): Promise<void> {
     const workspace = this.workspaces.get(key);
     if (!workspace || key === DEMO_KEY) {
       return;
     }
     this.workspaces.delete(key);
     await workspace.dispose();
-    await rm(workspace.repoPath, { recursive: true, force: true }).catch((error: unknown) => {
-      this.log.warn({ error, key }, "Failed to remove an evicted workspace's clone");
-    });
+
+    // Local workspaces point directly at the user's real filesystem directory.
+    // We must NEVER rm -rf a local workspace directory during eviction or shutdown,
+    // as doing so would delete the user's actual project files.
+    if (!key.startsWith("local:")) {
+      await rm(workspace.repoPath, { recursive: true, force: true }).catch((error: unknown) => {
+        this.log.warn({ error, key }, "Failed to remove an evicted workspace's clone");
+      });
+    }
   }
 
   async disposeAll(): Promise<void> {

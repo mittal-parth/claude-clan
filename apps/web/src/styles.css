@@ -1355,3 +1355,38 @@
     animation: none;
   }
 }
+
+/* --- Temporary city banner & Drop overlay ---------------------------------- */
+
+.temporary-city-banner {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 45;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 1.4rem;
+  background: color-mix(in oklab, var(--primary) 20%, #081923);
+  border-bottom: 1px solid color-mix(in oklab, var(--primary) 60%, transparent);
+  color: var(--primary);
+  font-size: 8px;
+  letter-spacing: 0.16em;
+  font-weight: 700;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  pointer-events: none;
+}
+
+.window-drop-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(8, 25, 35, 0.88);
+  backdrop-filter: blur(4px);
+  padding: 1.5rem;
+}
+

@@ -79,3 +79,44 @@ export async function importRepo(fullName: string): Promise<{ workspaceKey: stri
   }
   return (await response.json()) as { workspaceKey: string };
 }
+
+export interface ServerConfig {
+  mode: "local" | "hosted";
+  maxUploadBytes: number;
+}
+
+export async function fetchConfig(): Promise<ServerConfig> {
+  const response = await authedFetch("/api/config");
+  if (!response.ok) {
+    return { mode: "hosted", maxUploadBytes: 150 * 1024 * 1024 };
+  }
+  return (await response.json()) as ServerConfig;
+}
+
+export async function localPickFolder(): Promise<
+  { path: string; name: string } | { unavailable: true }
+> {
+  const response = await authedFetch("/api/local/pick", { method: "POST" });
+  if (!response.ok) {
+    return { unavailable: true };
+  }
+  return (await response.json()) as
+    | { path: string; name: string }
+    | { unavailable: true };
+}
+
+export async function localOpenFolder(
+  path: string,
+): Promise<{ repoKey: string; name: string }> {
+  const response = await authedFetch("/api/local/open", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ path }),
+  });
+  if (!response.ok) {
+    const body = (await response.json().catch(() => ({}))) as { error?: string };
+    throw new Error(body.error ?? `Failed to open directory (${response.status})`);
+  }
+  return (await response.json()) as { repoKey: string; name: string };
+}
+

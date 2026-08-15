@@ -3,9 +3,13 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import cookie from "@fastify/cookie";
 import cors from "@fastify/cors";
+import multipart from "@fastify/multipart";
 import websocket from "@fastify/websocket";
 import {
   MayorCommandSchema,
+  UPLOAD_MAX_BYTES,
+  UPLOAD_MAX_FILE_BYTES,
+  UPLOAD_MAX_FILES,
   type CityId,
   type GameEvent,
   type RepoStatusPhase,
@@ -15,9 +19,19 @@ import Fastify from "fastify";
 import { WebSocket, type RawData } from "ws";
 import { buildAuthContext, resolveSession, type AuthContext } from "./auth-context.js";
 import { registerAuthRoutes } from "./routes/auth.js";
+import { registerLocalRoutes } from "./routes/local.js";
 import { registerRepoRoutes } from "./routes/repos.js";
+import { registerUploadRoutes } from "./routes/uploads.js";
+import { UploadStore } from "./upload-store.js";
 import { Workspace } from "./workspace.js";
 import { WorkspaceManager } from "./workspaces.js";
+
+export type DeployMode = "local" | "hosted";
+// Explicit rather than inferred: the local-only routes below hand out a native
+// file dialog and open arbitrary filesystem paths as cities. Deriving that from
+// "is WEB_ORIGIN https" would turn one misconfigured env var into a directory
+// -traversal hole on a public server, so it must be opted into by name.
+const mode: DeployMode = process.env.SUDO_CITY_MODE === "local" ? "local" : "hosted";
 
 const host = process.env.HOST ?? "127.0.0.1";
 const port = Number(process.env.PORT ?? 4100);
@@ -35,6 +49,12 @@ await app.register(cors, {
 });
 await app.register(cookie);
 await app.register(websocket);
+await app.register(multipart, {
+  limits: {
+    fileSize: UPLOAD_MAX_FILE_BYTES,
+    files: UPLOAD_MAX_FILES,
+  },
+});
 
 const demoRepoPath = process.env.SUDO_CITY_REPO ?? process.env.INIT_CWD ?? process.cwd();
 
@@ -155,6 +175,13 @@ const workspaces = new WorkspaceManager({
   },
 });
 
+const uploadStore = new UploadStore({ log: app.log });
+registerUploadRoutes(app, uploadStore, workspaces);
+
+if (mode === "local") {
+  registerLocalRoutes(app, workspaces);
+}
+
 const demoWorkspace = await workspaces.openDemo(demoRepoPath);
 
 if (authContext) {
@@ -163,7 +190,15 @@ if (authContext) {
 }
 
 app.get("/health", async () => ({ ok: true, service: "sudo-city" }));
+app.get("/api/config", async () => ({
+  mode,
+  maxUploadBytes: UPLOAD_MAX_BYTES,
+}));
+
 app.addHook("onClose", async () => {
+  await uploadStore.disposeAll(async (key) => {
+    await workspaces.evict(key);
+  });
   await workspaces.disposeAll();
   await authContext?.db.close();
 });
@@ -208,7 +243,22 @@ app.get("/ws", { websocket: true }, (socket) => {
   // and that path replies with the full state — so this costs nothing but the
   // round trip it should always have waited for.
   clients.set(socket, { cityId: "main" });
-  socket.once("close", () => clients.delete(socket));
+  socket.once("close", () => {
+    const state = clients.get(socket);
+    clients.delete(socket);
+    if (state?.workspaceKey?.startsWith("upload:")) {
+      const closingKey = state.workspaceKey;
+      const uploadId = closingKey.slice("upload:".length);
+      const hasOtherClients = [...clients.values()].some(
+        (c) => c.workspaceKey === closingKey,
+      );
+      if (!hasOtherClients) {
+        uploadStore.scheduleGraceDeletion(uploadId, async (key) => {
+          await workspaces.evict(key);
+        });
+      }
+    }
+  });
 
   function currentWorkspace(): Workspace | undefined {
     const state = clients.get(socket);
@@ -283,6 +333,29 @@ app.get("/ws", { websocket: true }, (socket) => {
       if (data.repoKey === "demo") {
         clients.set(socket, { workspaceKey: demoWorkspace.key, cityId: "main" });
         sendWorkspaceState(socket, demoWorkspace, "main");
+        return;
+      }
+      if (data.repoKey.startsWith("upload:")) {
+        const uploadId = data.repoKey.slice("upload:".length);
+        uploadStore.cancelGraceDeletion(uploadId);
+        uploadStore.touch(uploadId);
+        const existing = workspaces.get(data.repoKey);
+        if (!existing) {
+          send(socket, { kind: "error", code: "REPO_NOT_FOUND", message: "Upload session expired or not found." });
+          return;
+        }
+        clients.set(socket, { workspaceKey: existing.key, cityId: "main", userId: currentState.userId });
+        sendWorkspaceState(socket, existing, "main");
+        return;
+      }
+      if (data.repoKey.startsWith("local:")) {
+        const existing = workspaces.get(data.repoKey);
+        if (!existing) {
+          send(socket, { kind: "error", code: "REPO_NOT_FOUND", message: "Local workspace not found." });
+          return;
+        }
+        clients.set(socket, { workspaceKey: existing.key, cityId: "main", userId: currentState.userId });
+        sendWorkspaceState(socket, existing, "main");
         return;
       }
       if (currentState.userId === undefined) {

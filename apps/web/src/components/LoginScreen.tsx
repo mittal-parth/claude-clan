@@ -4,6 +4,7 @@ import { crewSpriteUrl, getCrewMember } from "@/crew/catalog";
 
 export interface LoginScreenProps {
   onSeeDemo: () => void;
+  onDropFolder?: () => void;
 }
 
 const GREETER = getCrewMember("opus");
@@ -13,10 +14,10 @@ const GREETER = getCrewMember("opus");
  *
  * Framed as an NPC dialogue box -- the Architect (the same "opus" crew
  * portrait used inside the game, via `crewSpriteUrl`) greets the mayor and
- * offers the two ways in as dialogue choices, rather than a generic form
+ * offers the dialogue choices, rather than a generic form
  * card dropped on top of the skyline.
  */
-export default function LoginScreen({ onSeeDemo }: LoginScreenProps) {
+export default function LoginScreen({ onSeeDemo, onDropFolder }: LoginScreenProps) {
   return (
     <div className="login-screen">
       <div className="login-city-overlay" aria-hidden="true" />
@@ -42,7 +43,7 @@ export default function LoginScreen({ onSeeDemo }: LoginScreenProps) {
             </p>
             <p className="login-screen__dialogue-text retro">
               Claude City turns your repository into a place an agent can
-              build in. Want to walk the demo, or connect your own repo?
+              build in. Want to walk the demo, connect GitHub, or drop in a folder?
             </p>
 
             <div className="login-screen__choices">
@@ -66,6 +67,19 @@ export default function LoginScreen({ onSeeDemo }: LoginScreenProps) {
                 </span>
                 See the demo city
               </button>
+
+              {onDropFolder && (
+                <button
+                  type="button"
+                  className="login-screen__choice"
+                  onClick={onDropFolder}
+                >
+                  <span className="login-screen__choice-cursor" aria-hidden="true">
+                    &gt;
+                  </span>
+                  Drop in a folder
+                </button>
+              )}
             </div>
 
             <p className="login-screen__dialogue-footnote retro">

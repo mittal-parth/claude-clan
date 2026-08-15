@@ -11,6 +11,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "ignore": "^7.0.6",
     "zod": "^4.4.3"
   },
   "devDependencies": {

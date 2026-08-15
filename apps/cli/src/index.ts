@@ -8,6 +8,7 @@ const url = "http://127.0.0.1:5173";
 const childEnvironment = {
   ...process.env,
   SUDO_CITY_REPO: repoPath,
+  SUDO_CITY_MODE: "local",
 };
 
 const server = spawn(

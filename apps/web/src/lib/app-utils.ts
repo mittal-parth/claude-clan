@@ -45,6 +45,14 @@ export function promptForIssue(issue: Issue): string {
 
 /** Basename of a repo path → title case words (claude-clan → Claude Clan). */
 export function titleFromRepoPath(repoPath: string): string {
+  if (repoPath.startsWith("upload:")) {
+    const raw = repoPath.slice("upload:".length);
+    return raw ? `Upload (${raw.slice(0, 6)})` : "Upload";
+  }
+  if (repoPath.startsWith("local:")) {
+    const raw = repoPath.slice("local:".length);
+    return raw ? `Local (${raw.slice(0, 6)})` : "Local";
+  }
   const base =
     repoPath
       .split(/[/\\]/)

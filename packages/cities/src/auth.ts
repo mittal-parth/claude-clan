@@ -24,6 +24,7 @@ export interface RepoRef {
   name: string;
   private: boolean;
   defaultBranch: string;
+  size?: number;
 }
 
 interface RawTokenResponse {
@@ -92,6 +93,7 @@ interface RawRepo {
   name: string;
   private: boolean;
   default_branch: string;
+  size?: number;
 }
 
 export function parseRepoListJson(json: unknown): RepoRef[] {
@@ -102,6 +104,7 @@ export function parseRepoListJson(json: unknown): RepoRef[] {
     name: row.name,
     private: row.private,
     defaultBranch: row.default_branch,
+    ...(row.size !== undefined ? { size: row.size } : {}),
   }));
 }
 

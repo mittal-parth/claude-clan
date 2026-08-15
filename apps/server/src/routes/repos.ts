@@ -1,10 +1,12 @@
 import { repoKeyFor } from "@sudo-city/cities";
-import type { RepoSummary } from "@sudo-city/protocol";
+import { UPLOAD_MAX_BYTES, type RepoSummary } from "@sudo-city/protocol";
 import type { FastifyReply, FastifyRequest, FastifyInstance } from "fastify";
 import type { AuthContext } from "../auth-context.js";
 import { sessionToken, resolveSession } from "../auth-context.js";
 import type { DbSession } from "../db.js";
 import type { WorkspaceManager } from "../workspaces.js";
+
+const MAX_REPO_SIZE_KB = UPLOAD_MAX_BYTES / 1024;
 
 async function requireSession(
   request: FastifyRequest,
@@ -55,6 +57,7 @@ export function registerRepoRoutes(
         private: repo.private,
         defaultBranch: repo.defaultBranch,
         imported: imported.has(key),
+        ...(repo.size !== undefined ? { sizeKb: repo.size } : {}),
       };
     });
     return { repos: summaries };
@@ -74,6 +77,21 @@ export function registerRepoRoutes(
       }
       const [owner, name] = fullName.split("/") as [string, string];
       const repoKey = repoKeyFor(fullName);
+
+      // Enforce the 150 MB size cap before starting clone
+      try {
+        const repos = await auth.githubAuth.accessibleRepos(session.tokens.accessToken);
+        const matched = repos.find((r) => repoKeyFor(r.fullName) === repoKey);
+        if (matched?.size !== undefined && matched.size > MAX_REPO_SIZE_KB) {
+          await reply.code(413).send({
+            error: "Sorry, we only support repos up to 150 MB.",
+          });
+          return;
+        }
+      } catch {
+        // If listing fails, fall through to attempt openUserRepo which will handle errors
+      }
+
       try {
         const workspace = await workspaces.openUserRepo({
           userId: session.userId,

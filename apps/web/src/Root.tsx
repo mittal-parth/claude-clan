@@ -1,7 +1,7 @@
 import type { RepoSummary } from "@sudo-city/protocol";
 import { useCallback, useEffect, useRef, useState } from "react";
 import App from "./App";
-import { fetchRepos, fetchSession, importRepo, logout } from "@/auth/api";
+import { fetchConfig, fetchRepos, fetchSession, importRepo, logout, type ServerConfig } from "@/auth/api";
 import {
   clearStoredActiveRepo,
   gateFor,
@@ -13,6 +13,8 @@ import {
 import LoginScreen from "@/components/LoginScreen";
 import RepoPicker from "@/components/RepoPicker";
 import type { CanvasAirportTravel } from "@/components/GameCanvas";
+import DropSurface from "@/upload/DropSurface";
+import { useUnloadGuard } from "@/upload/use-unload-guard";
 
 const DEMO_REPO_KEY = "demo";
 type DemoTransition = "idle" | "loading" | "revealing";
@@ -21,6 +23,10 @@ type DemoTransition = "idle" | "loading" | "revealing";
 export default function Root() {
   const [session, setSession] = useState<AuthSession>({ authenticated: false });
   const [sessionChecked, setSessionChecked] = useState(false);
+  const [config, setConfig] = useState<ServerConfig>({
+    mode: "hosted",
+    maxUploadBytes: 150 * 1024 * 1024,
+  });
   const [activeRepoKey, setActiveRepoKey] = useState<string>();
   const [repos, setRepos] = useState<RepoSummary[]>([]);
   const [reposLoading, setReposLoading] = useState(false);
@@ -31,6 +37,10 @@ export default function Root() {
   const [airportArrival, setAirportArrival] = useState<CanvasAirportTravel>();
   const [repoConnectionGeneration, setRepoConnectionGeneration] = useState(0);
   const [demoTransition, setDemoTransition] = useState<DemoTransition>("idle");
+
+  const [dropSurfaceOpen, setDropSurfaceOpen] = useState(false);
+  const [isWindowDragActive, setIsWindowDragActive] = useState(false);
+  const dragCounterRef = useRef(0);
 
   const activeRepoRef = useRef(activeRepoKey);
   const airportTravelRef = useRef(airportTravel);
@@ -44,6 +54,17 @@ export default function Root() {
   airportTravelRef.current = airportTravel;
   airportArrivalRef.current = airportArrival;
   importingRef.current = importing;
+
+  const isUploadCityActive = activeRepoKey?.startsWith("upload:") ?? false;
+  const activeUploadId = isUploadCityActive
+    ? activeRepoKey!.slice("upload:".length)
+    : undefined;
+
+  const { confirmExit } = useUnloadGuard({
+    activeUploadId,
+    isUploadCityActive,
+    isUploadInFlight: false,
+  });
 
   function restoreActiveRepoForSession(
     nextSession: AuthSession,
@@ -73,27 +94,34 @@ export default function Root() {
 
   useEffect(() => {
     let cancelled = false;
-    fetchSession()
-      .then((result) => {
-        if (!cancelled) {
-          const nextSession: AuthSession =
-            result.authenticated && result.user
-              ? { authenticated: true, user: result.user }
-              : { authenticated: false };
-          setSession(nextSession);
-          restoreActiveRepoForSession(nextSession);
-        }
-      })
-      .catch(() => {
-        if (!cancelled) {
-          const nextSession: AuthSession = { authenticated: false };
-          setSession(nextSession);
-          restoreActiveRepoForSession(nextSession, false);
-        }
-      })
-      .finally(() => {
-        if (!cancelled) setSessionChecked(true);
-      });
+    Promise.all([
+      fetchSession()
+        .then((result) => {
+          if (!cancelled) {
+            const nextSession: AuthSession =
+              result.authenticated && result.user
+                ? { authenticated: true, user: result.user }
+                : { authenticated: false };
+            setSession(nextSession);
+            restoreActiveRepoForSession(nextSession);
+          }
+        })
+        .catch(() => {
+          if (!cancelled) {
+            const nextSession: AuthSession = { authenticated: false };
+            setSession(nextSession);
+            restoreActiveRepoForSession(nextSession, false);
+          }
+        }),
+      fetchConfig()
+        .then((cfg) => {
+          if (!cancelled) setConfig(cfg);
+        })
+        .catch(() => {}),
+    ]).finally(() => {
+      if (!cancelled) setSessionChecked(true);
+    });
+
     return () => {
       cancelled = true;
     };
@@ -101,6 +129,50 @@ export default function Root() {
     // to re-key this on, so it runs once on mount. handleLogout updates
     // `session` locally instead of relying on a re-run here.
   }, []);
+
+  const gate = gateFor(session, activeRepoKey);
+
+  // Whole-window drag and drop handler on login stage
+  useEffect(() => {
+    if (gate !== "login") return;
+
+    const handleDragEnter = (e: DragEvent) => {
+      e.preventDefault();
+      dragCounterRef.current += 1;
+      if (dragCounterRef.current === 1) {
+        setIsWindowDragActive(true);
+      }
+    };
+
+    const handleDragLeave = (e: DragEvent) => {
+      e.preventDefault();
+      dragCounterRef.current = Math.max(0, dragCounterRef.current - 1);
+      if (dragCounterRef.current === 0) {
+        setIsWindowDragActive(false);
+      }
+    };
+
+    const handleDragOver = (e: DragEvent) => {
+      e.preventDefault();
+    };
+
+    const handleDrop = (e: DragEvent) => {
+      e.preventDefault();
+      dragCounterRef.current = 0;
+    };
+
+    window.addEventListener("dragenter", handleDragEnter);
+    window.addEventListener("dragleave", handleDragLeave);
+    window.addEventListener("dragover", handleDragOver);
+    window.addEventListener("drop", handleDrop);
+
+    return () => {
+      window.removeEventListener("dragenter", handleDragEnter);
+      window.removeEventListener("dragleave", handleDragLeave);
+      window.removeEventListener("dragover", handleDragOver);
+      window.removeEventListener("drop", handleDrop);
+    };
+  }, [gate]);
 
   const loadRepos = useCallback(() => {
     if (!session.authenticated || repoLoadInFlightRef.current !== undefined) return;
@@ -132,7 +204,7 @@ export default function Root() {
     if (!activeRepoKey) return;
     if (activeRepoKey === DEMO_REPO_KEY) {
       writeStoredActiveRepo(DEMO_REPO_KEY);
-    } else if (session.authenticated) {
+    } else if (session.authenticated && !activeRepoKey.startsWith("upload:")) {
       writeStoredActiveRepo(activeRepoKey, session.user.id);
     }
   }, [activeRepoKey, session]);
@@ -157,6 +229,7 @@ export default function Root() {
   }
 
   function handleSignIn(): void {
+    if (!confirmExit("signing in")) return;
     clearStoredActiveRepo();
     setDemoTransition("idle");
     setActiveRepoKey(undefined);
@@ -164,6 +237,9 @@ export default function Root() {
 
   function beginAirportJourney(destinationKey: string): void {
     const sourceKey = activeRepoRef.current;
+    if (sourceKey && destinationKey !== sourceKey && !confirmExit("switching destinations")) {
+      return;
+    }
     if (!sourceKey) {
       activeRepoRef.current = destinationKey;
       setActiveRepoKey(destinationKey);
@@ -186,6 +262,19 @@ export default function Root() {
     airportTravelRef.current = travel;
     setAirportOpen(false);
     setAirportTravel(travel);
+  }
+
+  function handleDropOrOpenFolder(repoKey: string): void {
+    setDropSurfaceOpen(false);
+    setIsWindowDragActive(false);
+    dragCounterRef.current = 0;
+
+    if (gate === "login" || demoTransition !== "idle") {
+      setDemoTransition("loading");
+      setActiveRepoKey(repoKey);
+    } else {
+      beginAirportJourney(repoKey);
+    }
   }
 
   function handleImportOrSelect(repo: RepoSummary): void {
@@ -228,6 +317,7 @@ export default function Root() {
   }
 
   function handleLogout(): void {
+    if (!confirmExit("logging out")) return;
     authEpochRef.current += 1;
     importRequestRef.current += 1;
     repoLoadRequestRef.current += 1;
@@ -249,27 +339,49 @@ export default function Root() {
 
   if (!sessionChecked) return null;
 
-  const gate = gateFor(session, activeRepoKey);
   if (gate === "repos") {
     return (
-      <RepoPicker
-        repos={repos}
-        loading={reposLoading}
-        error={reposError}
-        importing={importing}
-        onImportOrSelect={handleImportOrSelect}
-        onSeeDemo={() => setActiveRepoKey(DEMO_REPO_KEY)}
-        onRefresh={loadRepos}
-      />
+      <>
+        <RepoPicker
+          repos={repos}
+          loading={reposLoading}
+          error={reposError}
+          importing={importing}
+          onImportOrSelect={handleImportOrSelect}
+          onSeeDemo={() => setActiveRepoKey(DEMO_REPO_KEY)}
+          onRefresh={loadRepos}
+          serverMode={config.mode}
+          onDropOrOpenFolder={handleDropOrOpenFolder}
+        />
+        {(dropSurfaceOpen || isWindowDragActive) && (
+          <div className="window-drop-overlay">
+            <DropSurface
+              serverMode={config.mode}
+              onSelectRepoKey={handleDropOrOpenFolder}
+              onClose={() => {
+                setDropSurfaceOpen(false);
+                setIsWindowDragActive(false);
+                dragCounterRef.current = 0;
+              }}
+            />
+          </div>
+        )}
+      </>
     );
   }
 
   const demoIsTransitioning =
-    activeRepoKey === DEMO_REPO_KEY && demoTransition !== "idle";
+    activeRepoKey !== undefined && demoTransition !== "idle";
   const showLogin = gate === "login" || demoIsTransitioning;
 
   return (
     <div className="root-stage">
+      {isUploadCityActive && (
+        <div className="temporary-city-banner retro">
+          TEMPORARY CITY · CLOSING OR RELOADING DELETES THIS UPLOAD
+        </div>
+      )}
+
       {gate === "login" || gate === "city" ? (
         <App
           activeRepoKey={gate === "login" ? DEMO_REPO_KEY : activeRepoKey!}
@@ -317,9 +429,26 @@ export default function Root() {
               : ""
           }`}
         >
-          <LoginScreen onSeeDemo={startDemo} />
+          <LoginScreen
+            onSeeDemo={startDemo}
+            onDropFolder={() => setDropSurfaceOpen(true)}
+          />
         </div>
       ) : null}
+
+      {(dropSurfaceOpen || isWindowDragActive) && (
+        <div className="window-drop-overlay">
+          <DropSurface
+            serverMode={config.mode}
+            onSelectRepoKey={handleDropOrOpenFolder}
+            onClose={() => {
+              setDropSurfaceOpen(false);
+              setIsWindowDragActive(false);
+              dragCounterRef.current = 0;
+            }}
+          />
+        </div>
+      )}
 
       {gate === "city" ? (
         session.authenticated ? (
@@ -332,6 +461,8 @@ export default function Root() {
             onSeeDemo={() => beginAirportJourney(DEMO_REPO_KEY)}
             onRefresh={loadRepos}
             activeRepoKey={activeRepoKey}
+            serverMode={config.mode}
+            onDropOrOpenFolder={handleDropOrOpenFolder}
             dialog={{ open: airportOpen, onOpenChange: setAirportOpen }}
           />
         ) : (
@@ -342,6 +473,8 @@ export default function Root() {
             onSeeDemo={() => setAirportOpen(false)}
             onRefresh={() => undefined}
             activeRepoKey={activeRepoKey}
+            serverMode={config.mode}
+            onDropOrOpenFolder={handleDropOrOpenFolder}
             authenticationRequired
             onSignIn={() => {
               setAirportOpen(false);

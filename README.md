@@ -120,6 +120,8 @@ WebSocket at `ws://127.0.0.1:4100/ws` (override with `VITE_WS_URL`).
 | --- | --- | --- |
 | `HOST` / `PORT` | `127.0.0.1` / `4100` | Server bind address. |
 | `SUDO_CITY_REPO` | current working directory | Repository to turn into the demo city. |
+| `SUDO_CITY_MODE` | `hosted` | Deployment mode: `local` (native OS dialog & local files) or `hosted` (in-browser upload & temporary sandbox). |
+| `SUDO_CITY_UPLOAD_ROOT` | `<tmpdir>/sudocity-uploads` | Where temporary uploads are stored in hosted mode. |
 | `SUDO_CITY_MAX_BUDGET_USD` | `1` | Spend ceiling shared across every open city/workspace. |
 | `SUDO_CITY_CLONE_ROOT` | `<tmpdir>/sudocity` | Where per-user repo clones are cached. |
 | `ANTHROPIC_API_KEY` | — | Falls back to a local Claude Code login if unset. |

@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 export * from "./lattice";
+export * from "./upload";
 import { BLOCK, nearestLatticeSafeCentre } from "./lattice";
 
 export const PlotSchema = z.object({
@@ -136,6 +137,7 @@ export const RepoSummarySchema = z.object({
   private: z.boolean(),
   defaultBranch: z.string().min(1),
   imported: z.boolean(),
+  sizeKb: z.number().int().nonnegative().optional(),
 });
 
 export const RepoStatusPhaseSchema = z.enum([
@@ -143,6 +145,7 @@ export const RepoStatusPhaseSchema = z.enum([
   "scanning",
   "ready",
   "failed",
+  "uploading",
 ]);
 
 export const FileChangeKindSchema = z.enum(["added", "modified", "deleted"]);

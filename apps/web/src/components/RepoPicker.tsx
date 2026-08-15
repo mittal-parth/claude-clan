@@ -17,15 +17,10 @@ import { useEffect, useMemo, useState } from "react";
 
 import { githubInstallUrl } from "@/auth/api";
 import HudButton from "@/components/hud/HudButton";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import "@/components/ui/8bit/styles/retro.css";
 import { cn } from "@/lib/utils";
+import DropSurface from "@/upload/DropSurface";
 
 export interface RepoPickerProps {
   repos: RepoSummary[];
@@ -40,6 +35,8 @@ export interface RepoPickerProps {
   activeRepoKey?: string;
   authenticationRequired?: boolean;
   onSignIn?: () => void;
+  serverMode?: "local" | "hosted";
+  onDropOrOpenFolder?: (repoKey: string) => void;
   /** Full-page after login vs. the in-world airport departures board. */
   dialog?: { open: boolean; onOpenChange: (open: boolean) => void };
 }
@@ -81,7 +78,8 @@ function RepoRow({
 }) {
   const busy = busySince !== undefined;
   const elapsed = useElapsedSeconds(busySince);
-  const disabled = busy || active || blocked;
+  const isOversize = repo.sizeKb !== undefined && repo.sizeKb > 150 * 1024;
+  const disabled = busy || active || blocked || isOversize;
 
   if (!airport) {
     return (
@@ -98,10 +96,22 @@ function RepoRow({
           <p className="retro truncate text-[10px] text-primary">{repo.fullName}</p>
           <p className="retro text-[8px] text-muted-foreground">
             {repo.private ? "private" : "public"} · {repo.defaultBranch}
+            {repo.sizeKb !== undefined ? ` · ${(repo.sizeKb / 1024).toFixed(1)} MB` : ""}
           </p>
         </div>
-        <span className="retro shrink-0 text-[9px] text-primary">
-          {busy ? `importing… ${elapsed}s` : repo.imported ? "OPEN" : "IMPORT"}
+        <span
+          className={cn(
+            "retro shrink-0 text-[9px]",
+            isOversize ? "text-red-400" : "text-primary",
+          )}
+        >
+          {busy
+            ? `importing… ${elapsed}s`
+            : isOversize
+              ? "TOO LARGE / 150MB MAX"
+              : repo.imported
+                ? "OPEN"
+                : "IMPORT"}
         </span>
       </button>
     );
@@ -137,7 +147,13 @@ function RepoRow({
             {repo.defaultBranch}
           </span>
           <span aria-hidden="true">•</span>
-          <span>{repo.imported ? "city mapped" : "survey required"}</span>
+          <span>
+            {isOversize
+              ? `oversize (${(repo.sizeKb! / 1024).toFixed(1)} MB)`
+              : repo.imported
+                ? "city mapped"
+                : "survey required"}
+          </span>
         </span>
       </span>
       <span className="flex min-w-[7.2rem] items-center justify-end gap-2">
@@ -153,6 +169,10 @@ function RepoRow({
             <MapPin className="size-3.5 text-emerald-300" aria-hidden="true" />
             <span className="retro text-[8px] text-emerald-200">YOU ARE HERE</span>
           </>
+        ) : isOversize ? (
+          <span className="retro text-[8px] leading-4 text-red-300">
+            TOO LARGE<br />150MB MAX
+          </span>
         ) : (
           <>
             {repo.imported ? (
@@ -299,7 +319,7 @@ export default function RepoPicker(props: RepoPickerProps) {
                 <DialogDescription className="max-w-xl text-xs leading-5 text-sky-100/55">
                   {props.authenticationRequired
                     ? "Repository flights are available after GitHub sign-in. The demo city remains open behind this departures board."
-                    : "Select a repository city. Unmapped destinations are imported before boarding; departure begins automatically when ground control clears the flight."}
+                    : "Select a repository city (up to 150 MB). Unmapped destinations are imported before boarding; departure begins automatically when ground control clears the flight."}
                 </DialogDescription>
               </DialogHeader>
               <span className="hidden items-center gap-2 border border-emerald-300/20 bg-emerald-300/10 px-2.5 py-2 sm:flex">
@@ -346,7 +366,27 @@ export default function RepoPicker(props: RepoPickerProps) {
               </HudButton>
             </div>
           ) : (
-            <RepoPickerBody {...props} airport />
+            <div className="flex flex-col max-h-[60vh] overflow-y-auto">
+              <RepoPickerBody {...props} airport />
+              {props.onDropOrOpenFolder && (
+                <div className="border-t border-white/10 p-4 sm:p-5 bg-black/20">
+                  <div className="flex items-center gap-2 mb-2">
+                    <span className="airport-terminal-code retro text-[7px]">CARGO</span>
+                    <span className="retro text-[8px] tracking-[0.2em] text-sky-100/70">
+                      CHARTER FLIGHT · LOCAL CARGO
+                    </span>
+                  </div>
+                  <DropSurface
+                    serverMode={props.serverMode ?? "hosted"}
+                    onSelectRepoKey={(key) => {
+                      props.dialog?.onOpenChange(false);
+                      props.onDropOrOpenFolder?.(key);
+                    }}
+                    embedded
+                  />
+                </div>
+              )}
+            </div>
           )}
           <div className="airport-runway-bar" aria-hidden="true">
             <span /><span /><span /><span /><span /><span /><span />
@@ -363,7 +403,7 @@ export default function RepoPicker(props: RepoPickerProps) {
       <div className="relative z-10 w-full max-w-lg border-4 border-foreground bg-card p-0 shadow-none sm:rounded-none dark:border-ring">
         <div className="border-b-4 border-foreground bg-primary/10 px-5 py-4 dark:border-ring">
           <p className="retro text-sm text-primary">Choose a repository</p>
-          <p className="retro mt-1 text-[9px] text-muted-foreground">Every repository you granted this App access to.</p>
+          <p className="retro mt-1 text-[9px] text-muted-foreground">Every repository you granted this App access to (up to 150 MB).</p>
         </div>
         <RepoPickerBody {...props} airport={false} />
       </div>
