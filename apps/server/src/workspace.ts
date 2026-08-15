@@ -1,9 +1,13 @@
+import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { relative, resolve, sep } from "node:path";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { dirname, relative, resolve, sep } from "node:path";
 import { join } from "node:path";
+import { promisify } from "node:util";
 import {
   AgentSessionManager,
   type AgentEvent,
+  type SandboxSettings,
 } from "@sudo-city/agent";
 import {
   GitHubApiClient,
@@ -35,6 +39,8 @@ import { scanRepository } from "@sudo-city/worldgen";
 import type { FastifyBaseLogger } from "fastify";
 
 const MAX_CONTEXT_FILES = 20;
+const WORLD_STORE_DIR = ".sudocity/";
+const execFileAsync = promisify(execFile);
 
 type EventInput<Event extends GameEvent = GameEvent> = Event extends GameEvent
   ? Omit<Event, "id" | "cityId" | "sessionId" | "sequence" | "timestamp">
@@ -214,6 +220,10 @@ export interface WorkspaceOptions {
   log: FastifyBaseLogger;
   /** Rationed from a ledger the WorkspaceManager sums across every open workspace, not just this one -- see index.ts. */
   remainingBudget: () => number;
+  /** Called with the dollar cost of each finished run, for the durable per-user ledger. */
+  onSpend?: (amountUsd: number) => void;
+  /** OS-level confinement for this workspace's crews; undefined runs them unsandboxed. */
+  sandbox?: SandboxSettings;
   onEvent: (cityId: CityId, event: GameEvent) => void;
   onCitiesChanged: () => void;
   onIssuesChanged: () => void;
@@ -234,6 +244,8 @@ export class Workspace {
   private readonly githubClient: GitHubClient;
   private readonly githubToken: string | undefined;
   private readonly remainingBudget: () => number;
+  private readonly sandbox: WorkspaceOptions["sandbox"];
+  private readonly onSpend: WorkspaceOptions["onSpend"];
   private readonly onEvent: WorkspaceOptions["onEvent"];
   private readonly onCitiesChanged: WorkspaceOptions["onCitiesChanged"];
   private readonly onIssuesChanged: WorkspaceOptions["onIssuesChanged"];
@@ -246,6 +258,8 @@ export class Workspace {
     this.log = options.log;
     this.githubToken = options.githubToken;
     this.remainingBudget = options.remainingBudget;
+    this.sandbox = options.sandbox;
+    this.onSpend = options.onSpend;
     this.onEvent = options.onEvent;
     this.onCitiesChanged = options.onCitiesChanged;
     this.onIssuesChanged = options.onIssuesChanged;
@@ -255,6 +269,7 @@ export class Workspace {
 
   static async open(options: WorkspaceOptions): Promise<Workspace> {
     const workspace = new Workspace(options);
+    await workspace.hideWorldStoreFromGit();
     const snapshot = await workspace.generateWorld("main", workspace.repoPath);
     workspace.registry.add({
       id: "main",
@@ -263,6 +278,7 @@ export class Workspace {
         cwd: workspace.repoPath,
         emit: (event) => workspace.emitAgentEvent("main", event),
         maxBudgetUsd: workspace.remainingBudget(),
+        sandbox: workspace.sandbox,
       }),
       sessionId: `local-${randomUUID()}`,
       sequence: 0,
@@ -279,6 +295,60 @@ export class Workspace {
 
   spentUsd(): number {
     return this.registry.list().reduce((total, city) => total + city.spentUsd, 0);
+  }
+
+  /** What a new order here could spend: the tighter of the shared ceiling and this owner's cap. */
+  remainingBudgetUsd(): number {
+    return this.remainingBudget();
+  }
+
+  /**
+   * `.sudocity/world.db` lives inside the checkout, so without this every
+   * user's repo reports as dirty and the agent sees the world store as
+   * something it could commit. Written to .git/info/exclude rather than
+   * .gitignore because that file belongs to the user's repository, not to us.
+   */
+  private async hideWorldStoreFromGit(): Promise<void> {
+    const excludePath = join(this.repoPath, ".git", "info", "exclude");
+    try {
+      const existing = await readFile(excludePath, "utf8").catch(() => "");
+      if (existing.split("\n").includes(WORLD_STORE_DIR)) {
+        return;
+      }
+      await mkdir(dirname(excludePath), { recursive: true });
+      await writeFile(
+        excludePath,
+        `${existing}${existing.endsWith("\n") || !existing ? "" : "\n"}${WORLD_STORE_DIR}\n`,
+      );
+    } catch (error) {
+      this.log.warn(
+        { error, repoPath: this.repoPath },
+        "Could not hide .sudocity from git; this workspace will always look dirty",
+      );
+    }
+  }
+
+  /**
+   * Whether evicting this workspace would destroy work. Uncommitted edits only
+   * exist in the clone, and eviction deletes the clone.
+   */
+  async hasUncommittedChanges(): Promise<boolean> {
+    try {
+      const { stdout } = await execFileAsync("git", ["status", "--porcelain"], {
+        cwd: this.repoPath,
+        maxBuffer: 8 * 1024 * 1024,
+        timeout: 15_000,
+      });
+      return stdout.trim().length > 0;
+    } catch (error) {
+      // A missing or broken checkout has no work to protect, and treating it
+      // as dirty would make it unevictable and wedge the cap.
+      this.log.warn(
+        { error, repoPath: this.repoPath },
+        "Could not read git status; treating the workspace as safe to evict",
+      );
+      return false;
+    }
   }
 
   hasRunningAgent(): boolean {
@@ -404,7 +474,12 @@ export class Workspace {
       return;
     }
     if (event.type === "session.usage") {
-      city.spentUsd = event.costUsd;
+      // One usage event per dispatch, carrying that run's total -- so this
+      // accumulates across orders. Assigning here (as it used to) threw away
+      // every previous run's cost, which made both the shared ceiling and the
+      // per-user cap read far lower than what had actually been spent.
+      city.spentUsd += event.costUsd;
+      this.onSpend?.(event.costUsd);
     }
     this.onEvent(cityId, this.createEvent(city, event));
   }
@@ -459,7 +534,7 @@ export class Workspace {
   }
 
   private async buildPrCity(cityId: CityId, pr: PullRequestRef): Promise<City> {
-    const worktree = await ensureWorktree(this.repoPath, pr);
+    const worktree = await ensureWorktree(this.repoPath, pr, this.githubToken);
     const snapshot = await this.generateWorld(cityId, worktree);
     const overlay = await this.computeOverlay(cityId, pr).catch((error: unknown) => {
       this.log.warn(
@@ -472,6 +547,7 @@ export class Workspace {
       cwd: worktree,
       emit: (event) => this.emitAgentEvent(cityId, event),
       maxBudgetUsd: this.remainingBudget(),
+      sandbox: this.sandbox,
       disallowedTools: REVIEW_DISALLOWED_TOOLS,
       systemPromptAppend: reviewSystemPrompt(pr, overlay),
     });
@@ -494,6 +570,7 @@ export class Workspace {
       cwd: worktree,
       emit: (event) => this.emitAgentEvent(cityId, event),
       maxBudgetUsd: this.remainingBudget(),
+      sandbox: this.sandbox,
       systemPromptAppend: [
         `You are fixing GitHub issue #${issue.number}, "${issue.title}".`,
         "This city is a writable detached worktree based on main. Implement and verify the fix here; do not change the primary checkout.",
