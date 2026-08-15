@@ -1,6 +1,7 @@
 import { GitHubAuth, needsRefresh } from "@sudo-city/cities";
 import type { FastifyRequest } from "fastify";
 import { Database, type DbSession } from "./db.js";
+import { TokenCipher } from "./token-cipher.js";
 
 export interface AuthContext {
   db: Database;
@@ -15,7 +16,13 @@ export interface AuthContext {
 export async function buildAuthContext(): Promise<AuthContext> {
   const clientId = requireEnv("GITHUB_CLIENT_ID");
   const clientSecret = requireEnv("GITHUB_CLIENT_SECRET");
-  const db = new Database(requireEnv("DATABASE_URL"));
+  // Its own secret rather than a second use of SESSION_SECRET: that one only
+  // signs a CSRF parameter, while this one is the difference between a leaked
+  // database dump being noise and being every user's GitHub credentials.
+  const db = new Database(
+    requireEnv("DATABASE_URL"),
+    new TokenCipher(requireEnv("TOKEN_ENCRYPTION_KEY")),
+  );
   await db.migrate();
   return {
     db,
