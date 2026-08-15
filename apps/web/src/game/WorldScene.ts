@@ -36,7 +36,9 @@ import { WorldHarbourManager } from "./world/entities/facilities/WorldHarbourMan
 import { WorldNavyManager } from "./world/entities/facilities/WorldNavyManager";
 import { WorldAirportManager } from "./world/entities/facilities/WorldAirportManager";
 import { WorldIssueShopManager } from "./world/entities/facilities/WorldIssueShopManager";
+import { WorldBillboardManager } from "./world/entities/facilities/WorldBillboardManager";
 import { WorldTransitionManager } from "./world/effects/WorldTransitionManager";
+import type { BillboardRepo, BillboardTarget } from "./layouts/billboards";
 
 export { OPEN_WATER };
 export { variantFor };
@@ -68,6 +70,10 @@ export class WorldScene extends Phaser.Scene {
     this,
     () => this.currentCityId,
     () => this.snapshot,
+  );
+  public billboardManager = new WorldBillboardManager(
+    this,
+    () => this.travelTransitionActive,
   );
   public transitionManager = new WorldTransitionManager(this);
 
@@ -160,6 +166,21 @@ export class WorldScene extends Phaser.Scene {
 
   setHarbourSignClickListener(listener?: () => void): void {
     this.harbourManager.setHarbourSignClickListener(listener);
+  }
+
+  setBillboardClickListener(listener?: (target: BillboardTarget) => void): void {
+    if (listener) {
+      this.billboardManager.setBillboardClickListener(listener);
+    }
+  }
+
+  setRepoIdentity(repo?: BillboardRepo): void {
+    this.billboardManager.setRepoIdentity(
+      repo,
+      this.snapshot,
+      this.currentCityId,
+      this.currentWorldKey,
+    );
   }
 
   setTravelTransitionActive(active: boolean): void {
@@ -364,6 +385,11 @@ export class WorldScene extends Phaser.Scene {
     this.harbourManager.layoutHarbour(snapshot, this.currentCityId);
     this.issueShopManager.layoutIssueShop();
     this.navyManager.layoutNavyHarbour(snapshot, this.currentCityId);
+    this.billboardManager.layoutBillboards(
+      snapshot,
+      this.currentCityId,
+      this.currentWorldKey,
+    );
     this.airportManager.layoutAirport(
       snapshot,
       this.terrainManager.terrain?.roads ?? [],
@@ -391,6 +417,7 @@ export class WorldScene extends Phaser.Scene {
     this.terrainManager.terrain = undefined;
     this.navyManager.clearNavyHarbour();
     this.issueShopManager.clear();
+    this.billboardManager.clearBillboards();
     this.airportManager.clearAirport();
     this.harbourManager.clearHarbour();
 
