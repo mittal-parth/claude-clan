@@ -273,6 +273,11 @@ export default function Root() {
       {gate === "login" || gate === "city" ? (
         <App
           activeRepoKey={gate === "login" ? DEMO_REPO_KEY : activeRepoKey!}
+          activeRepo={
+            gate === "login"
+              ? undefined
+              : repos.find((repo) => repo.key === activeRepoKey)
+          }
           user={session.authenticated ? session.user : undefined}
           repoConnectionGeneration={repoConnectionGeneration}
           loginBackground={gate === "login"}

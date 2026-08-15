@@ -1,3 +1,5 @@
+import { useMemo } from "react";
+import { type RepoSummary } from "@sudo-city/protocol";
 import { cn } from "@/lib/utils";
 import { type AuthUser } from "@/auth/gate";
 import { GameCanvas, type CanvasAirportTravel } from "@/components/GameCanvas";
@@ -6,10 +8,13 @@ import { useGameState } from "@/hooks/use-game-state";
 import { AppHud } from "@/components/hud/AppHud";
 import { AppDialogs } from "@/components/hud/AppDialogs";
 import { crewSpriteUrl } from "@/crew/catalog";
+import type { BillboardRepo, BillboardTarget } from "@/game/layouts/billboards";
 
 export interface AppProps {
   /** "demo", or an owner/name repo key the signed-in user imported. */
   activeRepoKey: string;
+  /** The imported repo behind activeRepoKey; absent in demo mode. */
+  activeRepo?: RepoSummary;
   /** Presence (not the value) drives whether the WS authenticates itself via a ticket; absent in demo mode. */
   user?: AuthUser;
   repoConnectionGeneration: number;
@@ -32,6 +37,7 @@ export interface AppProps {
 export default function App(props: AppProps) {
   const {
     activeRepoKey,
+    activeRepo,
     loginBackground = false,
     initialReveal = false,
     airportTravel,
@@ -46,6 +52,28 @@ export default function App(props: AppProps) {
 
   const { sfxEnabled, toggleSfx } = useAudio();
   const state = useGameState(props);
+
+  /**
+   * What the airport billboard should say. Memoised because a fresh object
+   * every render would churn the scene setter, and split out of activeRepo so
+   * the demo city still gets a named board — just one that goes nowhere,
+   * since there is no GitHub repository behind it.
+   */
+  const billboardRepo = useMemo<BillboardRepo>(() => {
+    if (activeRepo) {
+      return {
+        owner: activeRepo.owner,
+        name: activeRepo.name,
+        url: `https://github.com/${activeRepo.fullName}`,
+      };
+    }
+    const [owner, name] = activeRepoKey.split("/");
+    return { owner: name ? (owner ?? "") : "", name: name ?? owner ?? "" };
+  }, [activeRepo, activeRepoKey]);
+
+  function openBillboardTarget(target: BillboardTarget): void {
+    window.open(target.url, "_blank", "noopener,noreferrer");
+  }
 
   const startedSession = state.events
     .slice()
@@ -120,6 +148,7 @@ export default function App(props: AppProps) {
         travelRequest={state.navyTravelRequest ?? state.issueTravelRequest}
         airportTravel={airportTravel}
         airportArrival={airportArrival}
+        repo={billboardRepo}
         onTravelRequest={state.requestShipTravel}
         onTravelComplete={state.completeShipTravel}
         onTravelTransitionChange={state.setShipTransitioning}
@@ -134,6 +163,7 @@ export default function App(props: AppProps) {
           state.setDiff(undefined);
           state.setIssueShopOpen(true);
         }}
+        onBillboardClick={openBillboardTarget}
         onHarbourShipClick={state.handleHarbourShipClick}
         onNavyShipClick={state.handleNavyShipClick}
         onShipHover={state.setShipHover}
