@@ -1,4 +1,4 @@
-.env
+.env*
 .DS_Store
 # Per-user repo clones, when SUDO_CITY_CLONE_ROOT points inside the checkout.
 # The default is <tmpdir>/sudocity, but a local override lands here.
@@ -11,3 +11,7 @@ playwright-report/
 test-results/
 .gstack/
 supabase/.temp/
+
+# Dev-only harnesses for eyeballing baked props. Handy locally, not shipped.
+apps/web/navy-preview.html
+apps/web/src/dev/

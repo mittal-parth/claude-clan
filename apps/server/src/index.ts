@@ -84,7 +84,13 @@ function send(socket: WebSocket, message: ServerMessage): void {
 }
 
 interface ClientState {
-  workspaceKey: string;
+  /**
+   * Undefined until the client's repo.select lands. Every broadcast matches on
+   * this, so a socket that has not chosen yet receives nothing — it must never
+   * be shown another workspace's world, however briefly. See the connect
+   * handler for what that cost.
+   */
+  workspaceKey?: string;
   cityId: CityId;
   userId?: number;
   githubToken?: string;
@@ -224,19 +230,34 @@ function sendOverlay(socket: WebSocket, workspace: Workspace, cityId: CityId): v
 function sendWorkspaceState(socket: WebSocket, workspace: Workspace, cityId: CityId): void {
   send(socket, { kind: "cities", cities: workspace.summaries() });
   send(socket, { kind: "issues", issues: workspace.listIssues() });
+  send(socket, { kind: "viewer", login: workspace.viewerLogin() });
   sendWorld(socket, workspace, cityId);
   sendOverlay(socket, workspace, cityId);
 }
 
 app.get("/ws", { websocket: true }, (socket) => {
-  clients.set(socket, { workspaceKey: demoWorkspace.key, cityId: "main" });
+  // The socket starts pointed at the demo workspace so currentWorkspace()
+  // always resolves, but nothing is pushed until the client says which repo
+  // it wants. Sending the demo's world here unprompted meant every
+  // reconnection rendered the demo island first: switching repositories tears
+  // the socket down and opens a new one, so the client would draw the demo
+  // city, stamp that snapshot with the repo key it was travelling to, and
+  // only then receive the real world. The airport cutscene flew its landing
+  // into that phantom island and put the aeroplane down in open water.
+  //
+  // Every client sends repo.select on open (the demo included, as "demo"),
+  // and that path replies with the full state — so this costs nothing but the
+  // round trip it should always have waited for.
+  clients.set(socket, { cityId: "main" });
+  // Connection-level rather than workspace-level, so unlike the world state
+  // below it is sent on open: the HUD has to know which crews and thinking
+  // levels this deployment allows before the mayor picks either.
   send(socket, { kind: "policy", policy: crewPolicy });
-  sendWorkspaceState(socket, demoWorkspace, "main");
   socket.once("close", () => clients.delete(socket));
 
   function currentWorkspace(): Workspace | undefined {
     const state = clients.get(socket);
-    return state ? workspaces.get(state.workspaceKey) : undefined;
+    return state?.workspaceKey ? workspaces.get(state.workspaceKey) : undefined;
   }
 
   // The client sends session.auth immediately followed by repo.select over
