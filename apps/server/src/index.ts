@@ -73,9 +73,11 @@ const cloneRoot = resolve(
   process.env.SUDO_CITY_CLONE_ROOT?.trim() || join(tmpdir(), "sudocity"),
 );
 const crewPolicy = buildCrewPolicy();
-const sandbox = buildSandboxSettings();
+// Per workspace, not per process: each crew's allowRead is its own clone.
+const sandboxFor = (repoPath: string) =>
+  buildSandboxSettings({ repoPath, cloneRoot });
 app.log.info(
-  { crewPolicy, sandbox: sandbox ?? "disabled" },
+  { crewPolicy, sandbox: sandboxFor(cloneRoot) ?? "disabled" },
   "Crew policy for this deployment",
 );
 
@@ -123,7 +125,7 @@ const workspaces = new WorkspaceManager({
   cloneRoot,
   globalMaxBudgetUsd: GLOBAL_MAX_BUDGET_USD,
   perUserMaxBudgetUsd: PER_USER_MAX_BUDGET_USD,
-  sandbox,
+  sandboxFor,
   spendStore: authContext
     ? {
         spentUsd: (userId) => authContext!.db.userSpentUsd(userId),

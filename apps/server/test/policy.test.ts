@@ -48,13 +48,49 @@ describe("buildCrewPolicy", () => {
   });
 });
 
+const WORKSPACE = {
+  repoPath: "/var/lib/sudocity/clones/7/octocat/hello-world",
+  cloneRoot: "/var/lib/sudocity/clones",
+};
+
 describe("buildSandboxSettings", () => {
   it("leaves crews unsandboxed locally, where the checkout is your own", () => {
-    expect(buildSandboxSettings({})).toBeUndefined();
+    expect(buildSandboxSettings(WORKSPACE, {})).toBeUndefined();
+  });
+
+  it("hides every other mayor's clone while keeping this one readable", () => {
+    // Clones are siblings under one root, and everything outside the
+    // workspace is read-only but still readable. Verified on a real host:
+    // denyRead makes a neighbour's tree vanish, and allowRead wins for the
+    // crew's own, including .git.
+    const sandbox = buildSandboxSettings(WORKSPACE, {
+      SUDO_CITY_PUBLIC_DEPLOYMENT: "1",
+    });
+
+    expect(sandbox?.filesystem?.denyRead).toEqual([WORKSPACE.cloneRoot]);
+    expect(sandbox?.filesystem?.allowRead).toEqual([WORKSPACE.repoPath]);
+  });
+
+  it("unsets the server's secrets for sandboxed commands", () => {
+    const denied = buildSandboxSettings(WORKSPACE, {
+      SUDO_CITY_PUBLIC_DEPLOYMENT: "1",
+    })?.credentials?.envVars;
+
+    // Without this a crew can printenv its way to the database, every
+    // session token's encryption key, and the shared Anthropic key.
+    expect(denied?.map((entry) => entry.name)).toEqual([
+      "ANTHROPIC_API_KEY",
+      "DATABASE_URL",
+      "TOKEN_ENCRYPTION_KEY",
+      "SESSION_SECRET",
+      "GITHUB_CLIENT_SECRET",
+      "GITHUB_TOKEN",
+    ]);
+    expect(denied?.every((entry) => entry.mode === "deny")).toBe(true);
   });
 
   it("sandboxes and fails closed on a public deployment", () => {
-    const sandbox = buildSandboxSettings({ SUDO_CITY_PUBLIC_DEPLOYMENT: "1" });
+    const sandbox = buildSandboxSettings(WORKSPACE, { SUDO_CITY_PUBLIC_DEPLOYMENT: "1" });
 
     expect(sandbox?.enabled).toBe(true);
     // The SDK's own default warns and runs unsandboxed when the platform
@@ -67,12 +103,12 @@ describe("buildSandboxSettings", () => {
     // A wrong allowlist breaks every crew that installs a dependency or runs
     // a test suite, so this is opt-in rather than guessed at.
     expect(
-      buildSandboxSettings({ SUDO_CITY_PUBLIC_DEPLOYMENT: "1" }).network,
+      buildSandboxSettings(WORKSPACE, { SUDO_CITY_PUBLIC_DEPLOYMENT: "1" }).network,
     ).toBeUndefined();
   });
 
   it("denies everything outside the allowlist once one is set", () => {
-    const sandbox = buildSandboxSettings({
+    const sandbox = buildSandboxSettings(WORKSPACE, {
       SUDO_CITY_PUBLIC_DEPLOYMENT: "1",
       SUDO_CITY_SANDBOX_ALLOWED_DOMAINS: "github.com, api.github.com ,,registry.npmjs.org",
     });
@@ -87,7 +123,7 @@ describe("buildSandboxSettings", () => {
 
   it("ignores an allowlist when the deployment is not public", () => {
     expect(
-      buildSandboxSettings({ SUDO_CITY_SANDBOX_ALLOWED_DOMAINS: "github.com" }),
+      buildSandboxSettings(WORKSPACE, { SUDO_CITY_SANDBOX_ALLOWED_DOMAINS: "github.com" }),
     ).toBeUndefined();
   });
 });

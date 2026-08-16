@@ -54,6 +54,7 @@ export function isPublicDeployment(
  * deterministic denial of everything else.
  */
 export function buildSandboxSettings(
+  workspace: { repoPath: string; cloneRoot: string },
   env: NodeJS.ProcessEnv = process.env,
 ): SandboxSettings | undefined {
   if (!isPublicDeployment(env)) {
@@ -67,11 +68,37 @@ export function buildSandboxSettings(
   return {
     enabled: true,
     failIfUnavailable: true,
+    filesystem: {
+      // Everything outside the workspace is already read-only, so a crew
+      // cannot tamper with a neighbour's checkout. It could still *read* one:
+      // clones are siblings under one root. Denying the root and re-allowing
+      // this workspace closes that -- allowRead takes precedence over
+      // denyRead, so the crew keeps full access to its own tree (including
+      // .git, which git needs) while its neighbours cease to exist.
+      denyRead: [workspace.cloneRoot],
+      allowRead: [workspace.repoPath],
+    },
+    credentials: {
+      // Unset for sandboxed commands. Without this a crew can printenv its
+      // way to the database, every session token's encryption key, and the
+      // shared Anthropic key. The SDK's own API calls run outside the
+      // sandbox, so denying ANTHROPIC_API_KEY here costs nothing.
+      envVars: SECRET_ENV_VARS.map((name) => ({ name, mode: "deny" as const })),
+    },
     ...(allowedDomains.length > 0
       ? { network: { allowedDomains, strictAllowlist: true } }
       : {}),
   };
 }
+
+const SECRET_ENV_VARS = [
+  "ANTHROPIC_API_KEY",
+  "DATABASE_URL",
+  "TOKEN_ENCRYPTION_KEY",
+  "SESSION_SECRET",
+  "GITHUB_CLIENT_SECRET",
+  "GITHUB_TOKEN",
+] as const;
 
 export function buildCrewPolicy(
   env: NodeJS.ProcessEnv = process.env,

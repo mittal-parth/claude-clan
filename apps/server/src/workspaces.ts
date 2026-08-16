@@ -44,7 +44,7 @@ export class WorkspaceManager {
   private readonly cloneRoot: string;
   private readonly globalMaxBudgetUsd: number;
   private readonly perUserMaxBudgetUsd: number;
-  private readonly sandbox: SandboxSettings | undefined;
+  private readonly sandboxFor: ((repoPath: string) => SandboxSettings | undefined) | undefined;
   private readonly spendStore: UserSpendStore | undefined;
   /** Lifetime spend per signed-in user, read through from spendStore on first open and written back after every run. */
   private readonly userSpend = new Map<number, number>();
@@ -57,14 +57,14 @@ export class WorkspaceManager {
     globalMaxBudgetUsd: number;
     perUserMaxBudgetUsd: number;
     spendStore?: UserSpendStore;
-    sandbox?: SandboxSettings;
+    sandboxFor?: (repoPath: string) => SandboxSettings | undefined;
     sink: WorkspaceEventSink;
   }) {
     this.log = options.log;
     this.cloneRoot = options.cloneRoot;
     this.globalMaxBudgetUsd = options.globalMaxBudgetUsd;
     this.perUserMaxBudgetUsd = options.perUserMaxBudgetUsd;
-    this.sandbox = options.sandbox;
+    this.sandboxFor = options.sandboxFor;
     this.spendStore = options.spendStore;
     this.sink = options.sink;
   }
@@ -232,7 +232,7 @@ export class WorkspaceManager {
       repoPath,
       githubToken,
       log: this.log,
-      sandbox: this.sandbox,
+      sandbox: this.sandboxFor?.(repoPath),
       remainingBudget: () => this.remainingBudgetFor(userId),
       onSpend:
         userId === undefined
