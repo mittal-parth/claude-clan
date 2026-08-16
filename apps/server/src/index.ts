@@ -76,8 +76,18 @@ const crewPolicy = buildCrewPolicy();
 // Per workspace, not per process: each crew's allowRead is its own clone.
 const sandboxFor = (repoPath: string) =>
   buildSandboxSettings({ repoPath, cloneRoot });
+// Deliberately not the settings object itself: those are per workspace, and
+// logging a specimen built from the clone root printed allowRead == denyRead,
+// which reads as "the restriction is a no-op" when the real per-workspace
+// values are correct. A security control's log must not describe something
+// other than what runs.
 app.log.info(
-  { crewPolicy, sandbox: sandboxFor(cloneRoot) ?? "disabled" },
+  {
+    crewPolicy,
+    sandbox: sandboxFor(cloneRoot)
+      ? { enabled: true, scope: "per workspace", deniedOutside: cloneRoot }
+      : "disabled",
+  },
   "Crew policy for this deployment",
 );
 
