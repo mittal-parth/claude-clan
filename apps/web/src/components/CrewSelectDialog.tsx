@@ -1,4 +1,4 @@
-import type { EffortLevel } from "@sudo-city/protocol";
+import type { CrewPolicy, EffortLevel } from "@sudo-city/protocol";
 import { useEffect, useState } from "react";
 
 import HudButton from "@/components/hud/HudButton";
@@ -32,6 +32,8 @@ export interface CrewSelectDialogProps {
   onOpenChange: (open: boolean) => void;
   value: CrewSelection;
   onConfirm: (selection: CrewSelection) => void;
+  /** What this server will actually accept; anything else renders disabled. */
+  policy: CrewPolicy;
 }
 
 export default function CrewSelectDialog({
@@ -39,6 +41,7 @@ export default function CrewSelectDialog({
   onOpenChange,
   value,
   onConfirm,
+  policy,
 }: CrewSelectDialogProps) {
   const [draftCrewId, setDraftCrewId] = useState(value.crewId);
   const [draftEffort, setDraftEffort] = useState(value.effort);
@@ -75,6 +78,7 @@ export default function CrewSelectDialog({
           <div className="grid gap-3 sm:grid-cols-2">
             {CREW_MEMBERS.map((crew) => {
               const selected = crew.id === draftCrewId;
+              const available = policy.allowedModels.includes(crew.model);
               const sprite = crewSpriteUrl(
                 crew.id,
                 selected ? draftEffort : "high",
@@ -85,12 +89,18 @@ export default function CrewSelectDialog({
                   key={crew.id}
                   type="button"
                   aria-pressed={selected}
+                  disabled={!available}
+                  title={
+                    available ? undefined : "Not on duty on this server."
+                  }
                   onClick={() => setDraftCrewId(crew.id)}
                   className={cn(
                     "group flex flex-col border-4 bg-background text-left transition-colors",
                     selected
                       ? "border-primary bg-primary/5"
                       : "border-foreground hover:border-primary/60 dark:border-ring",
+                    !available &&
+                      "cursor-not-allowed opacity-45 grayscale hover:border-foreground dark:hover:border-ring",
                   )}
                 >
                   <div className="flex items-end justify-center border-b-4 border-foreground bg-muted/40 px-3 py-3 dark:border-ring">
@@ -108,6 +118,11 @@ export default function CrewSelectDialog({
                     <p className="retro text-[8px] leading-relaxed text-foreground/80">
                       {crew.description}
                     </p>
+                    {available ? null : (
+                      <p className="retro text-[8px] text-muted-foreground">
+                        Off duty on this server
+                      </p>
+                    )}
                   </div>
                 </button>
               );
@@ -139,19 +154,31 @@ export default function CrewSelectDialog({
                 role="group"
                 aria-label="Thinking effort"
               >
-                {EFFORT_LEVELS.map((effort) => (
-                  <HudButton
-                    key={effort}
-                    type="button"
-                    size="sm"
-                    variant={draftEffort === effort ? "primary" : "outline"}
-                    aria-pressed={draftEffort === effort}
-                    onClick={() => setDraftEffort(effort)}
-                    className="retro text-[8px]"
-                  >
-                    {effortLabel(effort)}
-                  </HudButton>
-                ))}
+                {EFFORT_LEVELS.map((effort) => {
+                  const available = policy.allowedEfforts.includes(effort);
+                  return (
+                    <HudButton
+                      key={effort}
+                      type="button"
+                      size="sm"
+                      variant={draftEffort === effort ? "primary" : "outline"}
+                      aria-pressed={draftEffort === effort}
+                      disabled={!available}
+                      title={
+                        available
+                          ? undefined
+                          : "Not available on this server."
+                      }
+                      onClick={() => setDraftEffort(effort)}
+                      className={cn(
+                        "retro text-[8px]",
+                        !available && "cursor-not-allowed opacity-45",
+                      )}
+                    >
+                      {effortLabel(effort)}
+                    </HudButton>
+                  );
+                })}
               </div>
               <p className="retro text-[8px] leading-relaxed text-muted-foreground">
                 {effortDescription(draftEffort)}

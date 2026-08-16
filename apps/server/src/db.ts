@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { Pool } from "pg";
 import type { GitHubTokens } from "@sudo-city/cities";
+import { TokenCipher } from "./token-cipher.js";
 
 export interface DbUser {
   id: number;
@@ -38,6 +39,16 @@ CREATE TABLE IF NOT EXISTS sessions (
 
 CREATE INDEX IF NOT EXISTS sessions_user_id_idx ON sessions(user_id);
 
+-- Lifetime Anthropic spend per user, in dollars. NUMERIC rather than a float
+-- because this is money and it is compared against a hard cap; the running
+-- total is also the only spend record that survives a workspace eviction or a
+-- server restart, both of which drop the in-process ledger.
+CREATE TABLE IF NOT EXISTS user_spend (
+  user_id BIGINT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  spent_usd NUMERIC(12, 6) NOT NULL DEFAULT 0,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS imported_repos (
   user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   repo_key TEXT NOT NULL,
@@ -59,11 +70,20 @@ CREATE TABLE IF NOT EXISTS imported_repos (
  */
 export class Database {
   private readonly pool: Pool;
+  private readonly cipher: TokenCipher;
 
-  constructor(connectionString: string) {
+  constructor(connectionString: string, cipher: TokenCipher) {
     this.pool = new Pool({ connectionString });
+    this.cipher = cipher;
   }
 
+  /**
+   * Schema only, and deliberately non-destructive: it never rewrites existing
+   * rows. Sessions predating encryption are simply unreadable now (see
+   * getSession) and their owners sign in again -- cheaper and safer than a
+   * migration that a test suite pointed at the same database could re-run
+   * with the wrong key.
+   */
   async migrate(): Promise<void> {
     await this.pool.query(SCHEMA);
   }
@@ -91,8 +111,8 @@ export class Database {
       [
         id,
         user.id,
-        tokens.accessToken,
-        tokens.refreshToken ?? null,
+        this.cipher.encrypt(tokens.accessToken),
+        tokens.refreshToken ? this.cipher.encrypt(tokens.refreshToken) : null,
         tokens.expiresAt,
         tokens.refreshTokenExpiresAt ?? null,
       ],
@@ -120,14 +140,27 @@ export class Database {
     if (!row) {
       return undefined;
     }
+    let accessToken: string;
+    let refreshToken: string | undefined;
+    try {
+      accessToken = this.cipher.decrypt(row.access_token);
+      refreshToken = row.refresh_token
+        ? this.cipher.decrypt(row.refresh_token)
+        : undefined;
+    } catch {
+      // Written before encryption, or under a different TOKEN_ENCRYPTION_KEY.
+      // Indistinguishable from a forged row, so it is not a session: the
+      // caller reports an invalid session and the user signs in again.
+      return undefined;
+    }
     return {
       id: row.id,
       userId: Number(row.user_id),
       login: row.login,
       avatarUrl: row.avatar_url,
       tokens: {
-        accessToken: row.access_token,
-        refreshToken: row.refresh_token ?? undefined,
+        accessToken,
+        refreshToken,
         expiresAt: row.expires_at.toISOString(),
         refreshTokenExpiresAt: row.refresh_token_expires_at?.toISOString(),
       },
@@ -141,8 +174,8 @@ export class Database {
        WHERE id = $1`,
       [
         id,
-        tokens.accessToken,
-        tokens.refreshToken ?? null,
+        this.cipher.encrypt(tokens.accessToken),
+        tokens.refreshToken ? this.cipher.encrypt(tokens.refreshToken) : null,
         tokens.expiresAt,
         tokens.refreshTokenExpiresAt ?? null,
       ],
@@ -151,6 +184,33 @@ export class Database {
 
   async revokeSession(id: string): Promise<void> {
     await this.pool.query(`UPDATE sessions SET revoked_at = now() WHERE id = $1`, [id]);
+  }
+
+  /** Lifetime spend for this user, or 0 if they have never dispatched a crew. */
+  async userSpentUsd(userId: number): Promise<number> {
+    const result = await this.pool.query<{ spent_usd: string }>(
+      `SELECT spent_usd FROM user_spend WHERE user_id = $1`,
+      [userId],
+    );
+    // pg returns NUMERIC as a string to avoid float precision loss.
+    return Number(result.rows[0]?.spent_usd ?? 0);
+  }
+
+  /**
+   * Adds to the user's running total and returns the new one. The increment
+   * happens in SQL rather than read-modify-write, so two instances billing the
+   * same user concurrently can't lose one of the two runs.
+   */
+  async addUserSpend(userId: number, amountUsd: number): Promise<number> {
+    const result = await this.pool.query<{ spent_usd: string }>(
+      `INSERT INTO user_spend (user_id, spent_usd)
+       VALUES ($1, $2)
+       ON CONFLICT (user_id) DO UPDATE
+         SET spent_usd = user_spend.spent_usd + $2, updated_at = now()
+       RETURNING spent_usd`,
+      [userId, amountUsd],
+    );
+    return Number(result.rows[0]?.spent_usd ?? 0);
   }
 
   async markRepoImported(options: {

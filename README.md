@@ -121,6 +121,8 @@ WebSocket at `ws://127.0.0.1:4100/ws` (override with `VITE_WS_URL`).
 | `HOST` / `PORT` | `127.0.0.1` / `4100` | Server bind address. |
 | `SUDO_CITY_REPO` | current working directory | Repository to turn into the demo city. |
 | `SUDO_CITY_MAX_BUDGET_USD` | `1` | Spend ceiling shared across every open city/workspace. |
+| `SUDO_CITY_USER_MAX_BUDGET_USD` | `10` | Lifetime spend allowed per signed-in user, tracked in Postgres. |
+| `SUDO_CITY_PUBLIC_DEPLOYMENT` | unset | Set on a public server: disables the Opus crew, the `xhigh`/`max` thinking levels, and orders in the demo city. |
 | `SUDO_CITY_CLONE_ROOT` | `<tmpdir>/sudocity` | Where per-user repo clones are cached. |
 | `ANTHROPIC_API_KEY` | — | Falls back to a local Claude Code login if unset. |
 | `VITE_WS_URL` | `ws://127.0.0.1:4100/ws` | WebSocket the web app connects to. |

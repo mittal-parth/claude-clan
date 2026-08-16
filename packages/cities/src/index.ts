@@ -485,16 +485,39 @@ async function headShaOf(worktreePath: string): Promise<string | undefined> {
 async function fetchPullRequestHead(
   repoPath: string,
   pr: PullRequestRef,
+  githubToken?: string,
 ): Promise<string> {
   const localRef = `refs/sudo-city/${cityIdFor(pr)}`;
+  // The clone's `origin` deliberately carries no credentials -- a token in
+  // .git/config is readable by anything with the file, which on a shared box
+  // means every other user's agent. So private repos get the authenticated
+  // URL passed here, for this one invocation, instead of stored.
+  const slug = githubToken
+    ? parseGitHubRemote(await originUrl(repoPath))
+    : undefined;
+  const remote =
+    slug && githubToken ? authenticatedRemote(slug, githubToken) : "origin";
   await execFileAsync(
     "git",
-    ["fetch", "origin", `pull/${pr.number}/head:${localRef}`],
-    { cwd: repoPath },
+    ["fetch", remote, `pull/${pr.number}/head:${localRef}`],
+    { cwd: repoPath, env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } },
   ).catch(() => {
     // Handled by the raw-sha fallback below.
   });
   return (await refExists(repoPath, localRef)) ? localRef : pr.headSha;
+}
+
+async function originUrl(repoPath: string): Promise<string> {
+  return await execFileAsync("git", ["remote", "get-url", "origin"], {
+    cwd: repoPath,
+  })
+    .then(({ stdout }) => stdout.trim())
+    .catch(() => "");
+}
+
+/** `owner/name` plus a token, built per invocation and never written to disk. */
+export function authenticatedRemote(fullName: string, token: string): string {
+  return `https://x-access-token:${token}@github.com/${fullName}.git`;
 }
 
 /**
@@ -508,6 +531,7 @@ async function fetchPullRequestHead(
 export async function ensureWorktree(
   repoPath: string,
   pr: PullRequestRef,
+  githubToken?: string,
 ): Promise<string> {
   const cityId = cityIdFor(pr);
   const path = worktreePath(repoPath, cityId);
@@ -516,7 +540,7 @@ export async function ensureWorktree(
     if ((await headShaOf(path)) === pr.headSha) {
       return path;
     }
-    const treeish = await fetchPullRequestHead(repoPath, pr);
+    const treeish = await fetchPullRequestHead(repoPath, pr, githubToken);
     await execFileAsync("git", ["checkout", "--detach", treeish], {
       cwd: path,
     });
@@ -533,7 +557,7 @@ export async function ensureWorktree(
     },
   );
 
-  const treeish = await fetchPullRequestHead(repoPath, pr);
+  const treeish = await fetchPullRequestHead(repoPath, pr, githubToken);
   await mkdir(dirname(path), { recursive: true });
   await execFileAsync("git", ["worktree", "add", "--detach", path, treeish], {
     cwd: repoPath,
