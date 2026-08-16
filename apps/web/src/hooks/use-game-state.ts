@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useMemo, FormEvent } from "react";
 import {
   type Building,
   type CitySummary,
+  type CrewPolicy,
   type GameEvent,
   type Issue,
   type MayorCommand,
@@ -41,8 +42,22 @@ import {
   type HudPanelId,
   toggleHudPanel,
 } from "@/components/hud/hud-state";
-import { DEFAULT_CREW_ID, DEFAULT_EFFORT, getCrewMember } from "@/crew/catalog";
+import {
+  CREW_MEMBERS,
+  DEFAULT_CREW_ID,
+  DEFAULT_EFFORT,
+  EFFORT_LEVELS,
+  getCrewMember,
+} from "@/crew/catalog";
 import { type CrewSelection } from "@/components/CrewSelectDialog";
+import { demoGatedAction, type DemoAction } from "@/auth/demo-gate";
+
+/** Everything on duty until the server's policy message says otherwise. */
+const UNRESTRICTED_POLICY: CrewPolicy = {
+  allowedModels: CREW_MEMBERS.map((crew) => crew.model),
+  allowedEfforts: [...EFFORT_LEVELS],
+  demoInteractive: true,
+};
 
 export interface GameStateProps {
   activeRepoKey: string;
@@ -111,6 +126,9 @@ export function useGameState({
     effort: DEFAULT_EFFORT,
   });
   const [crewDialogOpen, setCrewDialogOpen] = useState(false);
+  const [crewPolicy, setCrewPolicy] = useState<CrewPolicy>(UNRESTRICTED_POLICY);
+  /** The action a visitor reached for in the demo city; opens the sign-in modal. */
+  const [signInAction, setSignInAction] = useState<string>();
   const [hud, setHud] = useState(readHudState);
   const [fileChange, setFileChange] = useState<CanvasFileChange>();
   const [buildingPaths, setBuildingPaths] = useState<string[]>([]);
@@ -149,6 +167,10 @@ export function useGameState({
     }
   };
 
+  // In the demo city these controls stay live and answer with a sign-in
+  // prompt rather than sitting greyed out: someone reaching for the crew is
+  // exactly who the account is for.
+  const demoLocked = activeRepoKey === "demo" && !crewPolicy.demoInteractive;
   const events = eventsByCity[activeCityId] ?? [];
   const world =
     worldRepoKey === activeRepoKey ? worldByCity[activeCityId] : undefined;
@@ -311,7 +333,31 @@ export function useGameState({
           return;
         }
 
+        if (decoded.data.kind === "policy") {
+          const policy = decoded.data.policy;
+          setCrewPolicy(policy);
+          // A selection made before the policy arrived would otherwise sit in
+          // the HUD looking dispatchable and be rejected on submit.
+          setCrewSelection((current) => ({
+            crewId: policy.allowedModels.includes(
+              getCrewMember(current.crewId).model,
+            )
+              ? current.crewId
+              : DEFAULT_CREW_ID,
+            effort: policy.allowedEfforts.includes(current.effort)
+              ? current.effort
+              : DEFAULT_EFFORT,
+          }));
+          return;
+        }
+
         if (decoded.data.kind === "error") {
+          // Backstop: if any path reaches the server without the HUD having
+          // caught it, the refusal still surfaces as the sign-in prompt.
+          if (decoded.data.code === "SIGN_IN_REQUIRED") {
+            setSignInAction((current) => current ?? "keep building");
+            return;
+          }
           if (
             decoded.data.code === "PERMIT_NOT_FOUND" &&
             decoded.data.toolCallId
@@ -451,7 +497,27 @@ export function useGameState({
     clearStoredEvents(activeCityId);
   }
 
+  /** Opens the sign-in modal and reports whether the action should stop here. */
+  function blockedByDemoGate(action: DemoAction): boolean {
+    const gated = demoGatedAction({ ...action, demoLocked });
+    if (!gated) {
+      return false;
+    }
+    setSignInAction(gated);
+    return true;
+  }
+
+  function resolvePermit(toolCallId: string, decision: "allow" | "deny"): void {
+    if (blockedByDemoGate({ action: "permit" })) {
+      return;
+    }
+    send({ type: "permit.resolve", toolCallId, decision });
+  }
+
   function travelTo(cityId: string): void {
+    if (blockedByDemoGate({ action: "travel", cityId })) {
+      return;
+    }
     setActiveCityId(cityId);
     setSelected(undefined);
     setDiff(undefined);
@@ -464,6 +530,9 @@ export function useGameState({
   }
 
   function requestShipTravel(cityId: string): void {
+    if (blockedByDemoGate({ action: "travel", cityId })) {
+      return;
+    }
     setShipTravelTargetId(cityId);
     setSelected(undefined);
     setDiff(undefined);
@@ -484,6 +553,11 @@ export function useGameState({
 
   function takeIssueToFix(issue: Issue): void {
     setIssueShopOpen(false);
+    // Caught on the click rather than at dispatch, so the prompt appears
+    // before the order is drafted into the console.
+    if (blockedByDemoGate({ action: "issue" })) {
+      return;
+    }
     setPrompt(promptForIssue(issue));
   }
 
@@ -625,6 +699,9 @@ export function useGameState({
     if (!nextPrompt) {
       return;
     }
+    if (blockedByDemoGate({ action: "dispatch" })) {
+      return;
+    }
     send({
       type: "session.prompt",
       cityId: activeCityId,
@@ -746,5 +823,10 @@ export function useGameState({
     handleBuildingDrop,
     removeContextPath,
     submitPrompt,
+    resolvePermit,
+    crewPolicy,
+    demoLocked,
+    signInAction,
+    setSignInAction,
   };
 }
