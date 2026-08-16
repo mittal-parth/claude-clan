@@ -2,6 +2,7 @@ import IssueShopDialog from "../IssueShopDialog";
 import PrShopDialog from "../PrShopDialog";
 import WorktreeShopDialog from "../WorktreeShopDialog";
 import CrewSelectDialog from "@/components/CrewSelectDialog";
+import SignInDialog from "@/components/SignInDialog";
 import {
   CommandDialog,
   CommandInput,
@@ -90,7 +91,17 @@ export function AppDialogs({ state, activeRepoKey }: AppDialogsProps) {
         open={crewDialogOpen}
         onOpenChange={setCrewDialogOpen}
         value={crewSelection}
+        policy={state.crewPolicy}
         onConfirm={setCrewSelection}
+      />
+
+      <SignInDialog
+        action={state.signInAction}
+        onOpenChange={(open) => {
+          if (!open) {
+            state.setSignInAction(undefined);
+          }
+        }}
       />
 
       <CommandDialog open={commandOpen} onOpenChange={setCommandOpen}>

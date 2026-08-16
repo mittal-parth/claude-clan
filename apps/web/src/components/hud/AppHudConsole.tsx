@@ -38,6 +38,7 @@ export function AppHudConsole({
     setCommandOpen,
     send,
     clearTransmissions,
+    resolvePermit,
   } = state;
 
   const activeCity = cities.find((city) => city.id === activeCityId);
@@ -232,13 +233,7 @@ export function AppHudConsole({
               <HudButton
                 type="button"
                 size="sm"
-                onClick={() =>
-                  send({
-                    type: "permit.resolve",
-                    toolCallId: pendingPermit.toolCallId,
-                    decision: "allow",
-                  })
-                }
+                onClick={() => resolvePermit(pendingPermit.toolCallId, "allow")}
               >
                 Stamp
               </HudButton>
@@ -246,13 +241,7 @@ export function AppHudConsole({
                 type="button"
                 size="sm"
                 variant="danger"
-                onClick={() =>
-                  send({
-                    type: "permit.resolve",
-                    toolCallId: pendingPermit.toolCallId,
-                    decision: "deny",
-                  })
-                }
+                onClick={() => resolvePermit(pendingPermit.toolCallId, "deny")}
               >
                 Deny
               </HudButton>

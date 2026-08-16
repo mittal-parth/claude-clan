@@ -30,6 +30,7 @@ export function AppHudOrder({ state }: AppHudOrderProps) {
     setCrewDialogOpen,
     orderPermissionMode,
     setOrderPermissionMode,
+    demoLocked,
   } = state;
 
   const draggingPalette = paletteFor(draggingBuilding?.language ?? "unknown");
@@ -98,6 +99,12 @@ export function AppHudOrder({ state }: AppHudOrderProps) {
           </div>
         }
       >
+        {demoLocked ? (
+          <p className="retro text-[8px] leading-relaxed text-muted-foreground">
+            You're touring the demo city — dispatching a crew needs an account.
+          </p>
+        ) : null}
+
         {draggingBuilding ? (
           <div
             className="flex items-center gap-2 border px-2 py-1.5"
