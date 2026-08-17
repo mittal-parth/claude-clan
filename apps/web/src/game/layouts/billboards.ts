@@ -110,16 +110,15 @@ export const AD_BILLBOARD_COUNT = SPONSORS.length;
 /**
  * The repository's own billboard at the airport.
  *
- * Sits directly behind the airport terminal, turned 90 degrees anticlockwise
- * ("right" facing, along the constant-x plane) to face southeast toward the
- * arrival plaza and town.
+ * Sits directly behind the airport terminal, facing the screen directly
+ * (which is 45 degrees relative to the grid) like the other billboards.
  */
 export function repoBillboardSlot(cityHeight: number): BillboardSlot {
   const safeHeight = Math.max(1, Math.round(cityHeight));
   return {
-    x: -1.8,
-    y: safeHeight - 6.5,
-    facing: "right",
+    x: -3.2,
+    y: safeHeight - 7.5,
+    facing: "screen",
     size: "large",
   };
 }

@@ -204,8 +204,14 @@ export class WorldBillboardManager {
    */
   private ensureRepoPanel(slot: BillboardSlot, currentWorldKey?: string): void {
     const repo = this.repoIdentity;
-    const owner = repo?.owner ?? "";
-    const name = repo?.name ?? currentWorldKey ?? "";
+    let owner = repo?.owner ?? "";
+    let name = repo?.name ?? currentWorldKey ?? "";
+
+    if (owner === "" && name === "demo") {
+      owner = "DEMO";
+      name = "claude city";
+    }
+
     if (!name) {
       return;
     }
@@ -220,10 +226,11 @@ export class WorldBillboardManager {
     const avatarKey = `repo-avatar:${owner}`;
     // GitHub serves an owner's avatar at /<login>.png, and the CDN it redirects
     // to allows cross-origin reads, so the canvas stays untainted.
-    const avatar = owner
+    const fetchAvatar = owner && owner.toLowerCase() !== "demo";
+    const avatar = fetchAvatar
       ? this.loadImageTexture(
           avatarKey,
-          `https://github.com/${encodeURIComponent(owner)}.png?size=200`,
+          `https://avatars.githubusercontent.com/${encodeURIComponent(owner)}?size=200`,
           "anonymous",
         )
       : Promise.resolve(false);
@@ -255,24 +262,22 @@ export class WorldBillboardManager {
           // centres and takes the whole board rather than hugging one edge and
           // leaving the sign looking half-printed.
           const pad = Math.round(area.height * 0.12);
-          const portrait = hasAvatar ? area.height - pad * 2 : 0;
-          const textLeft = hasAvatar ? pad * 2 + portrait : pad;
-          const textWidth = area.width - textLeft - pad;
+          const portrait = hasAvatar ? area.height * 0.35 : 0;
+          const ownerLeft = hasAvatar ? pad * 1.5 + portrait : pad;
+          const ownerWidth = area.width - ownerLeft - pad;
 
           if (hasAvatar) {
             const source = drawableSource(this.scene.textures.get(avatarKey));
             const image = source
               ? downscaleForPanel(source, portrait, portrait)
               : undefined;
+            
+            const centerX = pad + portrait / 2;
+            const centerY = pad + portrait / 2;
+
             context.save();
             context.beginPath();
-            context.arc(
-              pad + portrait / 2,
-              area.height / 2,
-              portrait / 2,
-              0,
-              Math.PI * 2,
-            );
+            context.arc(centerX, centerY, portrait / 2, 0, Math.PI * 2);
             context.clip();
             if (image) {
               context.drawImage(image, pad, pad, portrait, portrait);
@@ -280,40 +285,31 @@ export class WorldBillboardManager {
             context.restore();
 
             context.beginPath();
-            context.arc(
-              pad + portrait / 2,
-              area.height / 2,
-              portrait / 2,
-              0,
-              Math.PI * 2,
-            );
+            context.arc(centerX, centerY, portrait / 2, 0, Math.PI * 2);
             context.strokeStyle = "#2b3a4f";
             context.lineWidth = Math.max(1, Math.round(area.height * 0.02));
             context.stroke();
           }
 
           context.textBaseline = "alphabetic";
-          context.textAlign = hasAvatar ? "left" : "center";
-          const textAnchor = hasAvatar ? textLeft : area.width / 2;
 
           if (owner) {
+            context.textAlign = hasAvatar ? "left" : "center";
+            const ownerAnchor = hasAvatar ? ownerLeft : area.width / 2;
             context.fillStyle = "#8fa3bf";
             context.font = `400 ${Math.round(area.height * 0.15)}px ${font}`;
-            fitText(context, owner, textWidth);
-            context.fillText(owner, textAnchor, area.height * 0.42);
+            fitText(context, owner, hasAvatar ? ownerWidth : area.width - pad * 2);
+            const ownerY = hasAvatar ? pad + portrait * 0.7 : area.height * 0.42;
+            context.fillText(owner, ownerAnchor, ownerY);
           }
 
+          context.textAlign = "center";
           context.fillStyle = "#ffd166";
-          // With no owner line above it the name carries the board alone, so
-          // it is set larger.
-          const nameScale = owner ? 0.24 : 0.36;
+          const nameScale = owner ? 0.28 : 0.36;
           context.font = `700 ${Math.round(area.height * nameScale)}px ${font}`;
-          fitText(context, name, textWidth);
-          context.fillText(
-            name,
-            textAnchor,
-            owner ? area.height * 0.72 : area.height * 0.62,
-          );
+          fitText(context, name, area.width - pad * 2);
+          const nameY = owner ? area.height * 0.82 : area.height * 0.62;
+          context.fillText(name, area.width / 2, nameY);
         },
       );
       this.attachBillboardPanel("repo", key);

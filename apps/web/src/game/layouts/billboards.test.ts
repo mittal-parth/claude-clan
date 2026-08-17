@@ -50,13 +50,13 @@ describe("SPONSORS", () => {
 });
 
 describe("repoBillboardSlot", () => {
-  it("stands behind the airport terminal, turned 90 deg anticlockwise to face right", () => {
+  it("stands behind the airport terminal, facing the screen", () => {
     for (const size of CITY_SIZES) {
       const slot = repoBillboardSlot(size);
       const airport = createAirportLayout(size, size);
 
-      // Sits behind the terminal along the constant-x plane, facing right.
-      expect(slot.facing).toBe("right");
+      // Sits behind the terminal along the constant-x plane, facing the screen.
+      expect(slot.facing).toBe("screen");
       expect(slot.size).toBe("large");
       expect(slot.y).toBeLessThan(airport.runwayStart.y);
     }
