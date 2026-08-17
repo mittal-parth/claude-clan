@@ -46,7 +46,7 @@ export function registerAuthRoutes(app: FastifyInstance, auth: AuthContext): voi
         );
         await reply.redirect(`${auth.webOrigin}/#session=${sessionId}`);
       } catch (error) {
-        app.log.error({ error }, "GitHub login callback failed");
+        app.log.error({ err: error }, "GitHub login callback failed");
         await reply.redirect(`${auth.webOrigin}/#session-error=1`);
       }
     },
@@ -86,7 +86,7 @@ export function registerAuthRoutes(app: FastifyInstance, auth: AuthContext): voi
           },
           body: JSON.stringify({ access_token: session.tokens.accessToken }),
         }).catch((error: unknown) => {
-          app.log.warn({ error }, "Failed to revoke GitHub token on logout");
+          app.log.warn({ err: error }, "Failed to revoke GitHub token on logout");
         });
       }
     }

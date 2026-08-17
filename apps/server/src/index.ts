@@ -51,7 +51,7 @@ try {
   authContext = await buildAuthContext();
 } catch (error) {
   app.log.warn(
-    { error },
+    { err: error },
     "GitHub App env vars are not fully configured; login is disabled and only the demo city is available",
   );
 }
@@ -282,7 +282,7 @@ app.get("/ws", { websocket: true }, (socket) => {
 
   socket.on("message", (payload: RawData) => {
     queue = queue.then(() => handleMessage(payload)).catch((error: unknown) => {
-      app.log.error({ error }, "Unhandled error in the WS message queue");
+      app.log.error({ err: error }, "Unhandled error in the WS message queue");
     });
   });
 
@@ -405,7 +405,7 @@ app.get("/ws", { websocket: true }, (socket) => {
           break;
         }
         void workspace.rescanWorld(data.cityId).catch((error: unknown) => {
-          app.log.error({ error }, "World rescan failed");
+          app.log.error({ err: error }, "World rescan failed");
           send(socket, {
             kind: "error",
             code: "WORLD_SCAN_FAILED",
@@ -508,7 +508,7 @@ app.get("/ws", { websocket: true }, (socket) => {
             sendOverlay(socket, workspace, city.id);
           })
           .catch((error: unknown) => {
-            app.log.error({ error, cityId }, "Failed to travel to city");
+            app.log.error({ err: error, cityId }, "Failed to travel to city");
             send(socket, {
               kind: "error",
               code: "CITY_NOT_FOUND",
@@ -519,7 +519,7 @@ app.get("/ws", { websocket: true }, (socket) => {
       }
       case "city.refresh":
         void workspace.refreshRoster().catch((error: unknown) => {
-          app.log.error({ error }, "Failed to refresh the city roster");
+          app.log.error({ err: error }, "Failed to refresh the city roster");
           send(socket, { kind: "error", code: "CITY_NOT_FOUND", message: "Failed to refresh open pull requests." });
         });
         break;
@@ -534,7 +534,7 @@ app.get("/ws", { websocket: true }, (socket) => {
             send(socket, { kind: "diff", cityId: data.cityId, path: data.path, patch });
           })
           .catch((error: unknown) => {
-            app.log.error({ error, cityId: data.cityId, path: data.path }, "Failed to compute file diff");
+            app.log.error({ err: error, cityId: data.cityId, path: data.path }, "Failed to compute file diff");
             send(socket, { kind: "error", code: "CITY_NOT_FOUND", message: "Failed to compute that diff." });
           });
         break;
@@ -545,7 +545,7 @@ app.get("/ws", { websocket: true }, (socket) => {
       }
     }
     } catch (error) {
-      app.log.error({ error, command: data.type }, "Unhandled error processing a mayor command");
+      app.log.error({ err: error, command: data.type }, "Unhandled error processing a mayor command");
       send(socket, { kind: "error", code: "INTERNAL_ERROR", message: "That command failed unexpectedly." });
     }
   }
