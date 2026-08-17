@@ -19,6 +19,8 @@ import { bakeNavyMissile, bakeNavyTank, bakeNavyGun, bakeNavyFuelTank } from "./
 import { bakeNavyHelipad, bakeNavyHelicopter, NAVY_ROTOR_KEYS, bakeNavyRotor } from "./navy/aircraft";
 import { bakeCrane, bakeHook, bakeCable } from "./crane";
 import { bakeScaffold, bakeDiffScaffold } from "./scaffold";
+import { bakeBillboard } from "./billboards";
+import { BILLBOARD_SIZES, BILLBOARD_FACINGS } from "../layouts/billboards";
 
 /**
  * Bakes every terrain tile, prop and effect sprite. Call once, in create().
@@ -121,6 +123,9 @@ export function bakeTerrainTextures(scene: Phaser.Scene): void {
   bakeCable(baker);
   bakeScaffold(baker);
   bakeDiffScaffold(baker);
+  BILLBOARD_SIZES.forEach((size) =>
+    BILLBOARD_FACINGS.forEach((facing) => bakeBillboard(baker, size, facing)),
+  );
 
   baker.destroy();
 }

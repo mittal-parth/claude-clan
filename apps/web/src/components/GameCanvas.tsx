@@ -7,6 +7,7 @@ import type {
 } from "@sudo-city/protocol";
 import Phaser from "phaser";
 import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
+import type { BillboardRepo, BillboardTarget } from "../game/layouts/billboards";
 import {
   WorldScene,
   type FileChange,
@@ -77,6 +78,8 @@ interface GameCanvasProps {
   airportTravel?: CanvasAirportTravel;
   /** Opens the cloud cover onto the first world from the newly selected repo. */
   airportArrival?: CanvasAirportTravel;
+  /** Names the repository on the airport billboard; absent in demo mode. */
+  repo?: BillboardRepo;
   /** Public URL of the portrait to stand on every construction site. */
   crewSprite?: string;
   /** Files the crew is working on; each gets a construction site. */
@@ -91,6 +94,7 @@ interface GameCanvasProps {
   onAirportTravelCovered?: (travel: CanvasAirportTravel) => void;
   onAirportArrivalComplete?: (travel: CanvasAirportTravel) => void;
   onIssueShopClick?: () => void;
+  onBillboardClick?: (target: BillboardTarget) => void;
   /** Clicking the harbour's container ship: take an issue, or sail home. */
   onHarbourShipClick?: () => void;
   onNavyShipClick?: () => void;
@@ -126,6 +130,7 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
       travelRequest,
       airportTravel,
       airportArrival,
+      repo,
       crewSprite,
       buildingPaths,
       onTravelRequest,
@@ -134,6 +139,7 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
       onAirportTravelCovered,
       onAirportArrivalComplete,
       onIssueShopClick,
+      onBillboardClick,
       onHarbourShipClick,
       onNavyShipClick,
       onAirportClick,
@@ -159,6 +165,7 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
     const airportTravelCoveredRef = useRef(onAirportTravelCovered);
     const airportArrivalCompleteRef = useRef(onAirportArrivalComplete);
     const issueShopClickRef = useRef(onIssueShopClick);
+    const billboardClickRef = useRef(onBillboardClick);
     const harbourShipClickRef = useRef(onHarbourShipClick);
     const navyShipClickRef = useRef(onNavyShipClick);
     const cityIdRef = useRef(cityId);
@@ -200,6 +207,7 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
     airportTravelCoveredRef.current = onAirportTravelCovered;
     airportArrivalCompleteRef.current = onAirportArrivalComplete;
     issueShopClickRef.current = onIssueShopClick;
+    billboardClickRef.current = onBillboardClick;
     harbourShipClickRef.current = onHarbourShipClick;
     navyShipClickRef.current = onNavyShipClick;
     cityIdRef.current = cityId;
@@ -404,6 +412,9 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
         (airportHoverRef.current ?? shipHoverRef.current)?.(info),
       );
       scene.setCapitolClickListener(() => issueShopClickRef.current?.());
+      scene.setBillboardClickListener((target) =>
+        billboardClickRef.current?.(target),
+      );
       scene.setHarbourShipHoverListener((info) =>
         (airportHoverRef.current ?? shipHoverRef.current)?.(info),
       );
@@ -633,6 +644,10 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
     useEffect(() => {
       sceneRef.current?.setCrewSprite(crewSprite);
     }, [crewSprite]);
+
+    useEffect(() => {
+      sceneRef.current?.setRepoIdentity(repo);
+    }, [repo]);
 
     // Joined rather than passed by identity: the parent rebuilds this array on
     // every event, and only a change in membership should disturb the sites.
