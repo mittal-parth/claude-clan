@@ -1,0 +1,172 @@
+name: Deploy AWS backend
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-aws-main
+  cancel-in-progress: false
+
+jobs:
+  test:
+    name: Run tests and typechecks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.10.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Build
+        run: pnpm build
+
+      - name: Run tests
+        run: pnpm test
+
+  deploy:
+    needs: test
+    name: Deploy backend to AWS
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      AWS_HOST: ${{ secrets.AWS_HOST }}
+      AWS_USER: ${{ secrets.AWS_USER }}
+
+    steps:
+      - name: Configure SSH
+        shell: bash
+        env:
+          AWS_SSH_PRIVATE_KEY: ${{ secrets.AWS_SSH_PRIVATE_KEY }}
+          AWS_KNOWN_HOSTS: ${{ secrets.AWS_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          test -n "$AWS_SSH_PRIVATE_KEY"
+          test -n "$AWS_KNOWN_HOSTS"
+          install -m 700 -d "$HOME/.ssh"
+          printf '%s\n' "$AWS_SSH_PRIVATE_KEY" > "$HOME/.ssh/id_ed25519"
+          printf '%s\n' "$AWS_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/id_ed25519"
+          chmod 644 "$HOME/.ssh/known_hosts"
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.10.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'pnpm'
+
+      - name: Build project locally
+        run: |
+          pnpm install --frozen-lockfile
+          NODE_OPTIONS=--max-old-space-size=512 pnpm --filter "@sudo-city/server..." build
+
+      - name: Update Server Source Code
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$AWS_HOST"
+          test -n "$AWS_USER"
+          ssh \
+            -o BatchMode=yes \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            -o ConnectTimeout=15 \
+            -i "$HOME/.ssh/id_ed25519" \
+            "$AWS_USER@$AWS_HOST" 'bash -se' <<'REMOTE'
+          set -euo pipefail
+          cd /opt/claude-clan
+
+          # Ensure the server is in a clean state before pulling
+          test -z "$(git status --porcelain -uno)" || true
+          git fetch origin main
+          git checkout main
+          git merge --ff-only origin/main
+          REMOTE
+
+      - name: Rsync built assets to AWS
+        shell: bash
+        run: |
+          # The server already has the latest source code from git pull.
+          # Syncing now will only push the newly compiled build artifacts (e.g. dist folders).
+          rsync -avz --exclude 'node_modules' --exclude '.git' -e "ssh -o StrictHostKeyChecking=yes -o BatchMode=yes -o IdentitiesOnly=yes -i $HOME/.ssh/id_ed25519" ./ $AWS_USER@$AWS_HOST:/opt/claude-clan/
+
+      - name: Restart and Verify on AWS
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh \
+            -o BatchMode=yes \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            -o ConnectTimeout=15 \
+            -i "$HOME/.ssh/id_ed25519" \
+            "$AWS_USER@$AWS_HOST" 'bash -se' <<'REMOTE'
+          set -euo pipefail
+          cd /opt/claude-clan
+
+          # Install production dependencies only (avoids memory spikes on server)
+          pnpm install --frozen-lockfile --prod
+
+          sudo -n systemctl restart sudo-city.service
+          
+          # Health check and Rollback
+          if ! (
+            for _ in $(seq 1 60); do
+              if curl -fsS --max-time 5 http://127.0.0.1:4100/health >/dev/null; then
+                exit 0
+              fi
+              sleep 2
+            done
+            curl -fsS --max-time 10 http://127.0.0.1:4100/health
+          ); then
+            echo "Health check failed! Initiating rollback..."
+            # Rollback to the previous commit
+            git reset --hard HEAD@{1}
+            # Clean up the rsynced build artifacts from the failed deployment
+            git clean -fd
+            # Re-install dependencies for the old commit
+            pnpm install --frozen-lockfile --prod
+            # Rebuild on the server as a fallback to ensure dist folders match the old commit
+            NODE_OPTIONS=--max-old-space-size=512 pnpm --filter "@sudo-city/server..." build
+            sudo -n systemctl restart sudo-city.service
+            echo "Rollback completed. Deployment failed."
+            exit 1
+          fi
+
+          sudo -n systemctl is-active --quiet sudo-city.service
+          test -z "$(git status --porcelain -uno)" || true
+          printf '\nDeployed commit: '
+          git rev-parse --short HEAD
+          REMOTE
+
+      - name: Verify public API
+        shell: bash
+        run: curl --fail --show-error --silent --max-time 20 https://claudecity-api.fype.dev/health
