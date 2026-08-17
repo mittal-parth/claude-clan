@@ -94,8 +94,9 @@ jobs:
           # Install all dependencies (including devDependencies like tsx which are required to run)
           CI=true pnpm install --frozen-lockfile
 
-          # NOTE: We deliberately DO NOT run pnpm build here to save memory. 
-          # The app runs via tsx, so building is unnecessary in production.
+          # We run the build step here (with constrained memory) because it ensures 
+          # any workspace dependencies are properly initialized and tsx's cache is primed.
+          NODE_OPTIONS=--max-old-space-size=512 pnpm --filter "@sudo-city/server..." build
 
           sudo -n systemctl restart sudo-city.service
           
@@ -112,9 +113,9 @@ jobs:
             echo "Health check failed! Initiating rollback..."
             # Rollback to the previous commit
             git reset --hard HEAD@{1}
-            git clean -fd
             # Re-install dependencies for the old commit
             CI=true pnpm install --frozen-lockfile
+            NODE_OPTIONS=--max-old-space-size=512 pnpm --filter "@sudo-city/server..." build
             sudo -n systemctl restart sudo-city.service
             echo "Rollback completed. Deployment failed."
             exit 1
