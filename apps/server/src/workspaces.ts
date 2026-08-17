@@ -117,7 +117,7 @@ export class WorkspaceManager {
       })
       .catch((error: unknown) => {
         this.log.error(
-          { error, userId, amountUsd },
+          { err: error, userId, amountUsd },
           "Failed to persist a user's spend; their cap is now enforced from memory only until the next reload",
         );
       });
@@ -310,7 +310,7 @@ export class WorkspaceManager {
     this.workspaces.delete(key);
     await workspace.dispose();
     await rm(workspace.repoPath, { recursive: true, force: true }).catch((error: unknown) => {
-      this.log.warn({ error, key }, "Failed to remove an evicted workspace's clone");
+      this.log.warn({ err: error, key }, "Failed to remove an evicted workspace's clone");
     });
   }
 

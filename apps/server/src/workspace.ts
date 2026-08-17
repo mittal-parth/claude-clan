@@ -363,7 +363,7 @@ export class Workspace {
       );
     } catch (error) {
       this.log.warn(
-        { error, repoPath: this.repoPath },
+        { err: error, repoPath: this.repoPath },
         "Could not hide .sudocity from git; this workspace will always look dirty",
       );
     }
@@ -385,7 +385,7 @@ export class Workspace {
       // A missing or broken checkout has no work to protect, and treating it
       // as dirty would make it unevictable and wedge the cap.
       this.log.warn(
-        { error, repoPath: this.repoPath },
+        { err: error, repoPath: this.repoPath },
         "Could not read git status; treating the workspace as safe to evict",
       );
       return false;
@@ -490,7 +490,7 @@ export class Workspace {
       this.store.saveSnapshot(city, layout.snapshot);
       return layout.snapshot;
     } catch (error) {
-      this.log.warn({ error, city }, "Repository scan failed; using preview world");
+      this.log.warn({ err: error, city }, "Repository scan failed; using preview world");
       return this.fallbackWorld(city, cwd);
     }
   }
@@ -549,7 +549,7 @@ export class Workspace {
       ]);
     } catch (error) {
       this.log.warn(
-        { error, workspace: this.key },
+        { err: error, workspace: this.key },
         "Failed to list GitHub work; only the main city is available",
       );
     }
@@ -608,7 +608,7 @@ export class Workspace {
     }
 
     await pruneWorktrees(this.repoPath, keep).catch((error: unknown) => {
-      this.log.warn({ error, workspace: this.key }, "Failed to prune stale PR worktrees");
+      this.log.warn({ err: error, workspace: this.key }, "Failed to prune stale PR worktrees");
     });
 
     this.onCitiesChanged();
@@ -620,7 +620,7 @@ export class Workspace {
     const snapshot = await this.generateWorld(cityId, worktree);
     const overlay = await this.computeOverlay(cityId, pr).catch((error: unknown) => {
       this.log.warn(
-        { error, cityId, workspace: this.key },
+        { err: error, cityId, workspace: this.key },
         "Failed to compute the PR diff overlay; markers will be unavailable",
       );
       return undefined;
@@ -690,7 +690,7 @@ export class Workspace {
       this.onCitiesChanged();
       return city;
     } catch (error) {
-      this.log.error({ error, cityId, workspace: this.key }, "Failed to build PR city");
+      this.log.error({ err: error, cityId, workspace: this.key }, "Failed to build PR city");
       this.onCitiesChanged();
       return undefined;
     }
