@@ -1,7 +1,7 @@
 {
   "rewrites": [
-    { "source": "/api/:path*", "destination": "https://claudecity-api.fype.dev/api/:path*" },
-    { "source": "/auth/:path*", "destination": "https://claudecity-api.fype.dev/auth/:path*" },
-    { "source": "/health", "destination": "https://claudecity-api.fype.dev/health" }
+    { "source": "/api/:path*", "destination": "https://cc-aws.ahmedfahim.dev/api/:path*" },
+    { "source": "/auth/:path*", "destination": "https://cc-aws.ahmedfahim.dev/auth/:path*" },
+    { "source": "/health", "destination": "https://cc-aws.ahmedfahim.dev/health" }
   ]
 }
