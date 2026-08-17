@@ -1,0 +1,7 @@
+{
+  "rewrites": [
+    { "source": "/api/:path*", "destination": "https://cc-aws.ahmedfahim.dev/api/:path*" },
+    { "source": "/auth/:path*", "destination": "https://cc-aws.ahmedfahim.dev/auth/:path*" },
+    { "source": "/health", "destination": "https://cc-aws.ahmedfahim.dev/health" }
+  ]
+}
