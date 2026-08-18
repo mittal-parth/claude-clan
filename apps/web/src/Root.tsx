@@ -200,7 +200,7 @@ export default function Root() {
     }
     if (!session.authenticated) return;
 
-    if (maxRepoSizeMb !== undefined && repo.size / 1024 > maxRepoSizeMb) {
+    if (maxRepoSizeMb !== undefined && repo.size !== undefined && repo.size / 1024 > maxRepoSizeMb) {
       setReposError(`sorry we currently only allow importing under ${maxRepoSizeMb} mb repos`);
       return;
     }
