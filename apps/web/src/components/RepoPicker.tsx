@@ -32,7 +32,8 @@ export interface RepoPickerProps {
   loading: boolean;
   error?: string;
   /** repoKey currently cloning, if any, and when the import started. */
-  importing?: { repoKey: string; startedAt: number };
+  importing?: { repoKey: string; startedAt: number; message?: string };
+  maxRepoSizeMb?: number;
   onImportOrSelect: (repo: RepoSummary) => void;
   onSeeDemo: () => void;
   onRefresh: () => void;
@@ -67,6 +68,7 @@ function destinationCode(repo: RepoSummary): string {
 function RepoRow({
   repo,
   busySince,
+  busyMessage,
   active,
   blocked,
   airport,
@@ -74,6 +76,7 @@ function RepoRow({
 }: {
   repo: RepoSummary;
   busySince?: number;
+  busyMessage?: string;
   active?: boolean;
   blocked?: boolean;
   airport: boolean;
@@ -98,10 +101,11 @@ function RepoRow({
           <p className="retro truncate text-[10px] text-primary">{repo.fullName}</p>
           <p className="retro text-[8px] text-muted-foreground">
             {repo.private ? "private" : "public"} · {repo.defaultBranch}
+            {repo.size !== undefined ? ` · ${(repo.size / 1024).toFixed(1)} MB` : ""}
           </p>
         </div>
-        <span className="retro shrink-0 text-[9px] text-primary">
-          {busy ? `importing… ${elapsed}s` : repo.imported ? "OPEN" : "IMPORT"}
+        <span className="retro shrink-0 text-right text-[9px] text-primary">
+          {busy ? (busyMessage ? busyMessage : `importing… ${elapsed}s`) : repo.imported ? "OPEN" : "IMPORT"}
         </span>
       </button>
     );
@@ -137,17 +141,26 @@ function RepoRow({
             {repo.defaultBranch}
           </span>
           <span aria-hidden="true">•</span>
-          <span>{repo.imported ? "city mapped" : "survey required"}</span>
+          <span>
+            {repo.imported
+              ? "city mapped"
+              : repo.size !== undefined
+                ? `${(repo.size / 1024).toFixed(1)} MB`
+                : "survey required"}
+          </span>
         </span>
       </span>
       <span className="flex min-w-[7.2rem] items-center justify-end gap-2">
         {busy ? (
-          <>
-            <Clock className="size-3.5 animate-pulse text-amber-300" aria-hidden="true" />
-            <span className="retro text-[8px] leading-4 text-amber-200">
-              IMPORTING<br />{elapsed}s
+          <div className="flex flex-col items-end gap-1">
+            <div className="flex items-center gap-1.5 text-amber-300">
+              <Clock className="size-3.5 animate-pulse" aria-hidden="true" />
+              <span className="retro text-[8px] leading-none">IMPORTING</span>
+            </div>
+            <span className="retro text-right text-[8px] text-amber-200/80">
+              {busyMessage ? busyMessage : `${elapsed}s`}
             </span>
-          </>
+          </div>
         ) : active ? (
           <>
             <MapPin className="size-3.5 text-emerald-300" aria-hidden="true" />
@@ -247,6 +260,7 @@ function RepoPickerBody({
               key={repo.key}
               repo={repo}
               busySince={importing?.repoKey === repo.key ? importing.startedAt : undefined}
+              busyMessage={importing?.repoKey === repo.key ? importing.message : undefined}
               active={repo.key === activeRepoKey}
               blocked={anotherImportIsActive && importing?.repoKey !== repo.key}
               airport={airport}
@@ -357,10 +371,10 @@ export default function RepoPicker(props: RepoPickerProps) {
   }
 
   return (
-    <div className="hud-root relative flex min-h-screen items-center justify-center bg-background px-4">
-      <div className="hud-scanline pointer-events-none absolute inset-0" />
-      <div className="hud-vignette pointer-events-none absolute inset-0" />
-      <div className="relative z-10 w-full max-w-lg border-4 border-foreground bg-card p-0 shadow-none sm:rounded-none dark:border-ring">
+    <div className="login-screen">
+      <div className="login-city-overlay" aria-hidden="true" />
+      <div className="hud-scanline pointer-events-none absolute inset-0 z-[1]" />
+      <div className="relative z-10 w-full max-w-lg border-4 border-foreground bg-card p-0 shadow-2xl sm:rounded-none dark:border-ring">
         <div className="border-b-4 border-foreground bg-primary/10 px-5 py-4 dark:border-ring">
           <p className="retro text-sm text-primary">Choose a repository</p>
           <p className="retro mt-1 text-[9px] text-muted-foreground">Every repository you granted this App access to.</p>

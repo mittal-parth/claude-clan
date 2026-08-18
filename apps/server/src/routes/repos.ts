@@ -24,6 +24,8 @@ async function requireSession(
   return session;
 }
 
+import { PassThrough } from "node:stream";
+
 export function registerRepoRoutes(
   app: FastifyInstance,
   auth: AuthContext,
@@ -54,10 +56,14 @@ export function registerRepoRoutes(
         name: repo.name,
         private: repo.private,
         defaultBranch: repo.defaultBranch,
+        size: repo.size,
         imported: imported.has(key),
       };
     });
-    return { repos: summaries };
+    
+    const envMax = process.env.MAX_REPO_SIZE_MB;
+    const maxRepoSizeMb = envMax ? parseInt(envMax, 10) : undefined;
+    return { repos: summaries, maxRepoSizeMb };
   });
 
   app.post<{ Body: { fullName?: string } }>(
@@ -74,6 +80,10 @@ export function registerRepoRoutes(
       }
       const [owner, name] = fullName.split("/") as [string, string];
       const repoKey = repoKeyFor(fullName);
+      
+      const stream = new PassThrough();
+      void reply.header("Content-Type", "application/x-ndjson").send(stream);
+
       try {
         const workspace = await workspaces.openUserRepo({
           userId: session.userId,
@@ -81,8 +91,10 @@ export function registerRepoRoutes(
           name,
           repoKey,
           githubToken: session.tokens.accessToken,
-          onProgress: (message) =>
-            broadcastRepoStatus(session.userId, repoKey, "cloning", message),
+          onProgress: (message) => {
+            broadcastRepoStatus(session.userId, repoKey, "cloning", message);
+            stream.write(JSON.stringify({ phase: "cloning", message }) + "\n");
+          },
         });
         await auth.db.markRepoImported({
           userId: session.userId,
@@ -92,17 +104,13 @@ export function registerRepoRoutes(
           clonePath: workspace.repoPath,
         });
         broadcastRepoStatus(session.userId, repoKey, "ready");
-        return { workspaceKey: workspace.key };
+        stream.write(JSON.stringify({ phase: "ready", workspaceKey: workspace.key }) + "\n");
+        stream.end();
       } catch (error) {
-        broadcastRepoStatus(
-          session.userId,
-          repoKey,
-          "failed",
-          error instanceof Error ? error.message : "Import failed",
-        );
-        await reply.code(502).send({
-          error: error instanceof Error ? error.message : "Import failed",
-        });
+        const errorMessage = error instanceof Error ? error.message : "Import failed";
+        broadcastRepoStatus(session.userId, repoKey, "failed", errorMessage);
+        stream.write(JSON.stringify({ error: errorMessage }) + "\n");
+        stream.end();
       }
     },
   );

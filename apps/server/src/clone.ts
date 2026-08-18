@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { mkdir, rm } from "node:fs/promises";
 import { dirname } from "node:path";
 import { promisify } from "node:util";
@@ -29,33 +29,67 @@ export async function cloneRepo(options: CloneOptions): Promise<void> {
 
   options.onProgress?.("cloning");
   try {
-    await execFileAsync(
-      "git",
-      ["clone", "--depth=50", "--single-branch", remote, options.destination],
-      {
-        maxBuffer: 16 * 1024 * 1024,
-        // A shallow clone still pulls the full working tree at each of the
-        // last 50 commits, not just deltas -- for an unusually large repo
-        // (a multi-gigabyte monorepo, say) that's a real multi-minute
-        // transfer, not a hang. 60s was too eager to kill a slow-but-honest
-        // clone; 5 minutes is the ceiling before this is treated as failed.
-        timeout: 5 * 60_000,
-        env: {
-          ...process.env,
-          // The token is already embedded in the remote URL -- if it's
-          // rejected (expired, wrong scope), git must fail fast with an
-          // error rather than falling through to an interactive credential
-          // prompt (or, on macOS, a Keychain GUI prompt via osxkeychain)
-          // that nothing on a headless server can ever answer, hanging the
-          // request forever.
-          GIT_TERMINAL_PROMPT: "0",
-          GIT_ASKPASS: "",
-          GIT_CONFIG_COUNT: "1",
-          GIT_CONFIG_KEY_0: "credential.helper",
-          GIT_CONFIG_VALUE_0: "",
-        },
-      },
-    );
+    await new Promise<void>((resolve, reject) => {
+      const child = spawn(
+        "git",
+        ["clone", "--progress", "--depth=50", "--single-branch", remote, options.destination],
+        {
+          env: {
+            ...process.env,
+            GIT_TERMINAL_PROMPT: "0",
+            GIT_ASKPASS: "",
+            GIT_CONFIG_COUNT: "1",
+            GIT_CONFIG_KEY_0: "credential.helper",
+            GIT_CONFIG_VALUE_0: "",
+          },
+        }
+      );
+
+      let timeoutId: NodeJS.Timeout | undefined;
+      const timeoutMs = 5 * 60_000;
+      
+      const clearTimer = () => {
+        if (timeoutId) clearTimeout(timeoutId);
+      };
+
+      timeoutId = setTimeout(() => {
+        child.kill();
+        const err = new Error("killed");
+        (err as any).killed = true;
+        reject(err);
+      }, timeoutMs);
+
+      let errorOutput = "";
+      child.stderr.on("data", (chunk: Buffer) => {
+        const text = chunk.toString();
+        errorOutput += text;
+        if (errorOutput.length > 16384) {
+          errorOutput = errorOutput.slice(-16384);
+        }
+        const lines = text.split(/[\r\n]+/);
+        for (const line of lines) {
+          const match = line.match(/(?:Receiving objects|Resolving deltas):\s+(\d+)%\s+\((\d+\/\d+)\)(?:.*\|\s+([\d.]+\s+[a-zA-Z]+\/s))?/);
+          if (match) {
+            const percent = match[1];
+            const size = match[2];
+            const speed = match[3];
+            const formatted = `${size} • ${percent}%` + (speed ? ` • ${speed}` : "");
+            options.onProgress?.(formatted);
+          }
+        }
+      });
+
+      child.on("error", (err: Error) => {
+        clearTimer();
+        reject(err);
+      });
+
+      child.on("close", (code: number) => {
+        clearTimer();
+        if (code === 0) resolve();
+        else reject(new Error(`git clone exited with code ${code}: ${errorOutput}`));
+      });
+    });
   } catch (error) {
     // A timeout kill leaves Node's error with no useful stderr tail (the
     // process was cut off mid-transfer), so it needs its own message rather

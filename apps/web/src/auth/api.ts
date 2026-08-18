@@ -58,16 +58,16 @@ export async function fetchWsTicket(): Promise<string | undefined> {
   return body.ticket;
 }
 
-export async function fetchRepos(): Promise<RepoSummary[]> {
+export async function fetchRepos(): Promise<{ repos: RepoSummary[], maxRepoSizeMb?: number }> {
   const response = await authedFetch("/api/repos");
   if (!response.ok) {
     throw new Error(`Failed to list repositories (${response.status})`);
   }
-  const body = (await response.json()) as { repos: RepoSummary[] };
-  return body.repos;
+  const body = (await response.json()) as { repos: RepoSummary[], maxRepoSizeMb?: number };
+  return body;
 }
 
-export async function importRepo(fullName: string): Promise<{ workspaceKey: string }> {
+export async function importRepo(fullName: string, onProgress?: (msg: string) => void): Promise<{ workspaceKey: string }> {
   const response = await authedFetch("/api/repos/import", {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -77,5 +77,44 @@ export async function importRepo(fullName: string): Promise<{ workspaceKey: stri
     const body = (await response.json().catch(() => ({}))) as { error?: string };
     throw new Error(body.error ?? `Failed to import ${fullName} (${response.status})`);
   }
-  return (await response.json()) as { workspaceKey: string };
+  
+  const reader = response.body?.getReader();
+  if (!reader) {
+    throw new Error("No response body to read");
+  }
+
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let workspaceKey = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() ?? "";
+    
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      try {
+        const data = JSON.parse(line);
+        if (data.error) throw new Error(data.error);
+        if (data.phase === "cloning" && onProgress && data.message) {
+          onProgress(data.message);
+        } else if (data.phase === "ready" && data.workspaceKey) {
+          workspaceKey = data.workspaceKey;
+        }
+      } catch (err) {
+        if (err instanceof Error && err.message !== "Unexpected end of JSON input") {
+          throw err;
+        }
+      }
+    }
+  }
+  
+  if (!workspaceKey) {
+    throw new Error("Import failed: no workspace key returned");
+  }
+  return { workspaceKey };
 }
