@@ -1,8 +1,5 @@
 import posthog from "posthog-js";
 
-const POSTHOG_KEY = import.meta.env.VITE_POSTHOG_KEY;
-const POSTHOG_HOST = import.meta.env.VITE_POSTHOG_HOST ?? "https://us.i.posthog.com";
-
 let initialized = false;
 
 /**
@@ -12,10 +9,13 @@ let initialized = false;
 export function initAnalytics(): void {
   if (initialized) return;
 
-  if (POSTHOG_KEY) {
+  const key = import.meta.env.VITE_POSTHOG_KEY;
+  const host = import.meta.env.VITE_POSTHOG_HOST ?? "https://us.i.posthog.com";
+
+  if (key) {
     try {
-      posthog.init(POSTHOG_KEY, {
-        api_host: POSTHOG_HOST,
+      posthog.init(key, {
+        api_host: host,
         capture_pageview: false,
         autocapture: false,
         persistence: "localStorage",
@@ -25,6 +25,11 @@ export function initAnalytics(): void {
       console.warn("Failed to initialize PostHog analytics:", err);
     }
   }
+}
+
+/** Reset initialized state for test suites. */
+export function _resetAnalyticsForTesting(): void {
+  initialized = false;
 }
 
 /** Returns whether PostHog analytics is actively initialized. */
@@ -64,7 +69,7 @@ export function trackEvent(eventName: string, properties?: Record<string, unknow
 
 /** Track page/gate transitions. */
 export function trackPageView(page: "login" | "repo_picker" | "city", properties?: Record<string, unknown>): void {
-  trackEvent("page_viewed", { page, ...properties });
+  trackEvent("page_viewed", { ...properties, page });
 }
 
 /** Track mayor order dispatch actions. */
@@ -72,6 +77,8 @@ export function trackMayorOrderDispatched(properties: {
   promptLength?: number;
   effort?: string;
   model?: string;
+  permissionMode?: string;
+  contextPathCount?: number;
   repoKey?: string;
   cityId?: string;
 }): void {
@@ -85,7 +92,7 @@ export function trackMayorOrderHalted(properties?: { repoKey?: string; cityId?: 
 
 /** Track permit decisions (ALLOW or DENY). */
 export function trackPermitDecision(properties: {
-  decision: "allow" | "deny";
+  decision: "allow" | "allow-always" | "deny";
   toolCallId?: string;
   repoKey?: string;
   cityId?: string;
@@ -118,8 +125,22 @@ export function trackCitySnapshotTaken(properties: { repoKey?: string; cityId?: 
   trackEvent("city_snapshot_taken", properties);
 }
 
+export type SharePlatform =
+  | "twitter"
+  | "linkedin"
+  | "instagram_post"
+  | "instagram_story"
+  | "reddit"
+  | "copy"
+  | "copy_caption"
+  | "download";
+
 /** Track when a user shares their city snapshot to social media. */
-export function trackCityShared(properties: { platform: "twitter" | "linkedin" | "copy" | "download"; repoKey?: string; cityId?: string }): void {
+export function trackCityShared(properties: {
+  platform: SharePlatform;
+  repoKey?: string;
+  cityId?: string;
+}): void {
   trackEvent("city_shared", properties);
 }
 
@@ -168,12 +189,50 @@ export function trackIssueShopOpened(): void {
   trackEvent("issue_shop_opened");
 }
 
+/** Track when the harbour worktree shop is opened. */
+export function trackWorktreeShopOpened(): void {
+  trackEvent("worktree_shop_opened");
+}
+
+/** Track when the navy PR shop is opened. */
+export function trackPrShopOpened(): void {
+  trackEvent("pr_shop_opened");
+}
+
 /** Track when the user hits refresh on the repo list. */
 export function trackRepoListRefreshed(): void {
   trackEvent("repo_list_refreshed");
 }
 
+export type FastTravelVia = "command_palette" | "ship";
+
 /** Track when the user initiates fast travel to a different city. */
-export function trackFastTravelInitiated(properties: { destinationCityId: string }): void {
+export function trackFastTravelInitiated(properties: {
+  destinationCityId: string;
+  via?: FastTravelVia;
+}): void {
   trackEvent("fast_travel_initiated", properties);
+}
+
+/**
+ * Track a click on a world billboard. Kind is the board's job (repo identity
+ * vs a sponsor), not the artwork — the airport board is `repo` even when the
+ * demo city has no GitHub URL behind it, and those clicks never reach here.
+ */
+export function trackBillboardClicked(properties: {
+  kind: "repo" | "ad";
+  url: string;
+  sponsorId?: string;
+}): void {
+  trackEvent("billboard_clicked", properties);
+}
+
+/** Track when a demo-city action is blocked and the sign-in prompt opens. */
+export function trackDemoSignInPrompted(properties: { action: string }): void {
+  trackEvent("demo_sign_in_prompted", properties);
+}
+
+/** Track when the airport repo picker opens from inside a city. */
+export function trackAirportOpened(properties?: { repoKey?: string }): void {
+  trackEvent("airport_opened", properties);
 }

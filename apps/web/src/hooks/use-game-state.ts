@@ -60,6 +60,9 @@ import {
   trackCityConnectionFailed,
   trackCommandPaletteOpened,
   trackFastTravelInitiated,
+  trackWorktreeShopOpened,
+  trackPrShopOpened,
+  trackDemoSignInPrompted,
 } from "@/lib/analytics";
 
 /** Everything on duty until the server's policy message says otherwise. */
@@ -184,9 +187,43 @@ export function useGameState({
   // prompt rather than sitting greyed out: someone reaching for the crew is
   // exactly who the account is for.
   const demoLocked = activeRepoKey === "demo" && !crewPolicy.demoInteractive;
+  const activeRepoKeyRef = useRef(activeRepoKey);
+  activeRepoKeyRef.current = activeRepoKey;
+  const activeCityIdRef = useRef(activeCityId);
+  activeCityIdRef.current = activeCityId;
+
   const sendCommand = useCallback((command: MayorCommand): void => {
     if (socketRef.current?.readyState === WebSocket.OPEN) {
       socketRef.current.send(JSON.stringify(command));
+    }
+    if (command.type === "session.open") {
+      trackMayorOrderDispatched({
+        promptLength: command.prompt.length,
+        effort: command.effort,
+        model: command.model,
+        permissionMode: command.permissionMode,
+        contextPathCount: command.contextPaths?.length,
+        repoKey: activeRepoKeyRef.current,
+        cityId: command.cityId,
+      });
+    } else if (command.type === "session.send") {
+      trackMayorOrderDispatched({
+        promptLength: command.prompt.length,
+        contextPathCount: command.contextPaths?.length,
+        repoKey: activeRepoKeyRef.current,
+        cityId: activeCityIdRef.current,
+      });
+    } else if (command.type === "session.interrupt") {
+      trackMayorOrderHalted({ repoKey: activeRepoKeyRef.current, cityId: activeCityIdRef.current });
+    } else if (command.type === "permit.resolve") {
+      trackPermitDecision({
+        decision: command.decision,
+        toolCallId: command.toolCallId,
+        repoKey: activeRepoKeyRef.current,
+        cityId: activeCityIdRef.current,
+      });
+    } else if (command.type === "repo.select") {
+      trackRepoSelected({ repoKey: command.repoKey });
     }
   }, []);
   const sessions = useSessions({
@@ -247,6 +284,7 @@ export function useGameState({
     setWorldRepoKey(undefined);
     setOverlayByCity({});
     setActiveCityId("main");
+    activeCityIdRef.current = "main";
     setSelected(undefined);
     setDiff(undefined);
     setFileChange(undefined);
@@ -300,7 +338,7 @@ export function useGameState({
         attempt = 0;
         setReconnectAttempt(0);
         setConnection("online");
-        trackCityConnected({ repoKey: activeRepoKey, cityId: activeCityId });
+        trackCityConnected({ repoKey: activeRepoKey, cityId: activeCityIdRef.current });
 
         function sendRepoSelect(): void {
           if (torndown || socket !== ws) return;
@@ -356,11 +394,11 @@ export function useGameState({
           RECONNECT_BASE_DELAY_MS * 2 ** (attempt - 1),
           RECONNECT_MAX_DELAY_MS,
         );
-        trackCityConnectionFailed({ repoKey: activeRepoKey, cityId: activeCityId, error: "Connection closed" });
+        trackCityConnectionFailed({ repoKey: activeRepoKey, cityId: activeCityIdRef.current, error: "Connection closed" });
         reconnectTimer = setTimeout(connect, delay);
       });
       ws.addEventListener("error", () => {
-        trackCityConnectionFailed({ repoKey: activeRepoKey, cityId: activeCityId, error: "WebSocket error" });
+        trackCityConnectionFailed({ repoKey: activeRepoKey, cityId: activeCityIdRef.current, error: "WebSocket error" });
         ws.close();
       });
       ws.addEventListener("message", (message) => {
@@ -509,29 +547,7 @@ export function useGameState({
   }
 
   function send(command: MayorCommand): void {
-    if (socketRef.current?.readyState === WebSocket.OPEN) {
-      socketRef.current.send(JSON.stringify(command));
-    }
-    if (command.type === "session.prompt") {
-      trackMayorOrderDispatched({
-        promptLength: command.prompt.length,
-        effort: command.effort,
-        model: command.model,
-        repoKey: activeRepoKey,
-        cityId: command.cityId,
-      });
-    } else if (command.type === "session.interrupt") {
-      trackMayorOrderHalted({ repoKey: activeRepoKey, cityId: command.cityId });
-    } else if (command.type === "permit.resolve") {
-      trackPermitDecision({
-        decision: command.decision,
-        toolCallId: command.toolCallId,
-        repoKey: activeRepoKey,
-        cityId: activeCityId,
-      });
-    } else if (command.type === "repo.select") {
-      trackRepoSelected({ repoKey: command.repoKey });
-    }
+    sendCommand(command);
   }
 
   /** Opens the sign-in modal and reports whether the action should stop here. */
@@ -540,6 +556,7 @@ export function useGameState({
     if (!gated) {
       return false;
     }
+    trackDemoSignInPrompted({ action: gated });
     setSignInAction(gated);
     return true;
   }
@@ -548,7 +565,7 @@ export function useGameState({
     if (blockedByDemoGate({ action: "travel", cityId })) {
       return;
     }
-    trackFastTravelInitiated({ destinationCityId: cityId });
+    trackFastTravelInitiated({ destinationCityId: cityId, via: "command_palette" });
     setActiveCityId(cityId);
     setSelected(undefined);
     setDiff(undefined);
@@ -572,6 +589,7 @@ export function useGameState({
     if (blockedByDemoGate({ action: "travel", cityId })) {
       return;
     }
+    trackFastTravelInitiated({ destinationCityId: cityId, via: "ship" });
     setShipTravelTargetId(cityId);
     setSelected(undefined);
     setDiff(undefined);
@@ -630,6 +648,7 @@ export function useGameState({
     setSelected(undefined);
     setDiff(undefined);
     if (activeCityId === "main") {
+      trackWorktreeShopOpened();
       setWorktreeShopOpen(true);
       return;
     }
@@ -646,6 +665,7 @@ export function useGameState({
     setSelected(undefined);
     setDiff(undefined);
     if (activeCityId === "main") {
+      trackPrShopOpened();
       setPrShopOpen(true);
       return;
     }

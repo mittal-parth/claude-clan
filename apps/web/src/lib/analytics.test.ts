@@ -13,6 +13,14 @@ import {
   trackRepoSelected,
   trackRepoImported,
   trackBuildingInspected,
+  trackBillboardClicked,
+  trackWorktreeShopOpened,
+  trackPrShopOpened,
+  trackDemoSignInPrompted,
+  trackAirportOpened,
+  trackCityShared,
+  trackFastTravelInitiated,
+  _resetAnalyticsForTesting,
 } from "./analytics.js";
 
 vi.mock("posthog-js", () => ({
@@ -25,11 +33,18 @@ vi.mock("posthog-js", () => ({
 }));
 
 describe("analytics helper", () => {
+  const originalKey = import.meta.env.VITE_POSTHOG_KEY;
+  const originalHost = import.meta.env.VITE_POSTHOG_HOST;
+
   beforeEach(() => {
     vi.clearAllMocks();
+    _resetAnalyticsForTesting();
+    delete import.meta.env.VITE_POSTHOG_KEY;
+    delete import.meta.env.VITE_POSTHOG_HOST;
   });
 
   it("safely no-ops tracking when uninitialized", () => {
+    initAnalytics();
     expect(isAnalyticsInitialized()).toBe(false);
 
     identifyUser(123, { login: "test" });
@@ -40,24 +55,109 @@ describe("analytics helper", () => {
 
     resetUser();
     expect(posthog.reset).not.toHaveBeenCalled();
+
+    trackPageView("login");
+    expect(posthog.capture).not.toHaveBeenCalled();
   });
 
-  it("calls PostHog methods when initialized", () => {
-    // Force initialize state by calling init (if key mock was present) or directly test methods
-    // We test tracking helper functions once initialized
+  it("initializes and delegates to PostHog when VITE_POSTHOG_KEY is set", () => {
+    import.meta.env.VITE_POSTHOG_KEY = "phc_test_key";
+    import.meta.env.VITE_POSTHOG_HOST = "https://custom.posthog.com";
+
     initAnalytics();
+    expect(isAnalyticsInitialized()).toBe(true);
+    expect(posthog.init).toHaveBeenCalledWith(
+      "phc_test_key",
+      expect.objectContaining({
+        api_host: "https://custom.posthog.com",
+        capture_pageview: false,
+        autocapture: false,
+      }),
+    );
 
-    // If POSTHOG_KEY is not defined in test env, initAnalytics won't set initialized to true.
-    // Let's verify tracking methods when posthog capture is invoked directly.
-    trackPageView("login");
+    // Identify and reset
+    identifyUser(456, { login: "octocat" });
+    expect(posthog.identify).toHaveBeenCalledWith("456", { login: "octocat" });
+
+    resetUser();
+    expect(posthog.reset).toHaveBeenCalled();
+
+    // Pageview tracking with canonical page protection
+    trackPageView("login", { repoKey: "demo" });
+    expect(posthog.capture).toHaveBeenCalledWith("page_viewed", {
+      repoKey: "demo",
+      page: "login",
+    });
+
+    // Caller page property cannot overwrite canonical page
+    trackPageView("city", { page: "spoofed", foo: "bar" } as Record<string, unknown>);
+    expect(posthog.capture).toHaveBeenCalledWith("page_viewed", {
+      page: "city",
+      foo: "bar",
+    });
+
+    // Domain events
     trackMayorOrderDispatched({ promptLength: 42, effort: "high" });
-    trackMayorOrderHalted();
-    trackPermitDecision({ decision: "allow", toolCallId: "permit-1" });
-    trackRepoSelected({ repoKey: "octocat/repo" });
-    trackRepoImported({ fullName: "octocat/repo" });
-    trackBuildingInspected({ path: "src/main.ts", lines: 100 });
+    expect(posthog.capture).toHaveBeenCalledWith("mayor_order_dispatched", {
+      promptLength: 42,
+      effort: "high",
+    });
 
-    // When uninitialized, posthog capture should not be called
-    expect(posthog.capture).not.toHaveBeenCalled();
+    trackMayorOrderHalted({ repoKey: "demo", cityId: "main" });
+    expect(posthog.capture).toHaveBeenCalledWith("mayor_order_halted", {
+      repoKey: "demo",
+      cityId: "main",
+    });
+
+    trackPermitDecision({ decision: "allow-always", toolCallId: "permit-1" });
+    expect(posthog.capture).toHaveBeenCalledWith("permit_decided", {
+      decision: "allow-always",
+      toolCallId: "permit-1",
+    });
+
+    trackRepoSelected({ repoKey: "octocat/repo" });
+    expect(posthog.capture).toHaveBeenCalledWith("repo_selected", { repoKey: "octocat/repo" });
+
+    trackRepoImported({ fullName: "octocat/repo" });
+    expect(posthog.capture).toHaveBeenCalledWith("repo_imported", { fullName: "octocat/repo" });
+
+    trackBuildingInspected({ path: "src/main.ts", lines: 100 });
+    expect(posthog.capture).toHaveBeenCalledWith("building_inspected", {
+      path: "src/main.ts",
+      lines: 100,
+    });
+
+    trackBillboardClicked({ kind: "ad", url: "https://pushtoprod.art", sponsorId: "pushtoprod" });
+    expect(posthog.capture).toHaveBeenCalledWith("billboard_clicked", {
+      kind: "ad",
+      url: "https://pushtoprod.art",
+      sponsorId: "pushtoprod",
+    });
+
+    trackWorktreeShopOpened();
+    expect(posthog.capture).toHaveBeenCalledWith("worktree_shop_opened", undefined);
+
+    trackPrShopOpened();
+    expect(posthog.capture).toHaveBeenCalledWith("pr_shop_opened", undefined);
+
+    trackDemoSignInPrompted({ action: "dispatch a crew" });
+    expect(posthog.capture).toHaveBeenCalledWith("demo_sign_in_prompted", {
+      action: "dispatch a crew",
+    });
+
+    trackAirportOpened({ repoKey: "octocat/repo" });
+    expect(posthog.capture).toHaveBeenCalledWith("airport_opened", { repoKey: "octocat/repo" });
+
+    trackCityShared({ platform: "instagram_post", repoKey: "octocat/repo" });
+    expect(posthog.capture).toHaveBeenCalledWith("city_shared", {
+      platform: "instagram_post",
+      repoKey: "octocat/repo",
+    });
+
+    trackFastTravelInitiated({ destinationCityId: "pr-1", via: "ship" });
+    expect(posthog.capture).toHaveBeenCalledWith("fast_travel_initiated", {
+      destinationCityId: "pr-1",
+      via: "ship",
+    });
   });
 });

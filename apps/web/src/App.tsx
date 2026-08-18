@@ -10,7 +10,7 @@ import { AppHud } from "@/components/hud/AppHud";
 import { AppDialogs } from "@/components/hud/AppDialogs";
 import { crewSpriteUrl, findCrewByModel, getCrewMember } from "@/crew/catalog";
 import type { BillboardRepo, BillboardTarget } from "@/game/layouts/billboards";
-import { trackIssueShopOpened } from "@/lib/analytics";
+import { trackBillboardClicked, trackIssueShopOpened } from "@/lib/analytics";
 
 export interface AppProps {
   /** "demo", or an owner/name repo key the signed-in user imported. */
@@ -75,6 +75,22 @@ export default function App(props: AppProps) {
   }, [activeRepo, activeRepoKey]);
 
   function openBillboardTarget(target: BillboardTarget): void {
+    switch (target.kind) {
+      case "ad":
+        trackBillboardClicked({
+          kind: "ad",
+          url: target.url,
+          sponsorId: target.sponsorId,
+        });
+        break;
+      case "repo":
+        trackBillboardClicked({ kind: "repo", url: target.url });
+        break;
+      default: {
+        const exhaustive: never = target;
+        return exhaustive;
+      }
+    }
     window.open(target.url, "_blank", "noopener,noreferrer");
   }
 
