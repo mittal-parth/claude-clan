@@ -436,20 +436,25 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
       });
       sceneRef.current = scene;
       const game = new Phaser.Game({
-        type: Phaser.AUTO,
+        type: Phaser.WEBGL,
         parent: host,
         backgroundColor: "#2e9fe0",
         scene,
+        autoFocus: true, // Bonus: Ensures rendering completely pauses on tab switch/minimize
         scale: {
           mode: Phaser.Scale.RESIZE,
           width: "100%",
           height: "100%",
         },
+        fps: {
+          target: 30,
+        },
         render: {
           antialias: false,
           pixelArt: true,
           roundPixels: true,
-          preserveDrawingBuffer: true,
+          clearBeforeRender: false,
+          powerPreference: "low-power",
         },
       });
       gameRef.current = game;
@@ -557,6 +562,15 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
 
     useEffect(() => {
       sceneRef.current?.setOverlay(overlay);
+      
+      // Adaptive Rendering: Throttle to 5 FPS when an HTML overlay obscures the canvas
+      if (gameRef.current) {
+        if (overlay) {
+          gameRef.current.loop.targetFps = 5;
+        } else {
+          gameRef.current.loop.targetFps = 30; // Resume normal capped framerate
+        }
+      }
     }, [overlay]);
 
     useEffect(() => {

@@ -1,5 +1,6 @@
 import { createIsoProjection } from "../../math/iso";
 import { TILE_WIDTH, TILE_HEIGHT } from "../../textures/core";
+import { isLowEndDevice } from "../../../lib/hardware";
 
 export {
   HIGHLIGHT_KEY,
@@ -43,7 +44,7 @@ export const FOCUS_DURATION_MS = 450;
 export const CONSTRUCTION_LEGIBLE_ZOOM = 0.75;
 export const CLICK_SLOP = 5;
 export const CAMERA_YIELD_MS = 8_000;
-export const PROP_BUDGET = 2_000;
+export const PROP_BUDGET = isLowEndDevice() ? 500 : 2_000;
 export const SHORE_BAND = 3;
 export const OPEN_WATER = 0x2e9fe0;
 export const WHITEOUT_HOLD_MS = 500;
