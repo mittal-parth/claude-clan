@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 import { HudButton } from "@/components/hud/HudButton";
 import "@/components/ui/8bit/styles/retro.css";
+import { trackCityShared } from "@/lib/analytics";
 
 export interface ShareCityModalProps {
   isOpen: boolean;
@@ -54,6 +55,7 @@ export function ShareCityModal({
   const handleCopyCaption = async () => {
     try {
       await navigator.clipboard.writeText(caption);
+      trackCityShared({ platform: "copy_caption", repoKey: activeRepoKey });
       setCopiedCaption(true);
       showToast("Caption copied to clipboard");
       setTimeout(() => setCopiedCaption(false), 2000);
@@ -71,6 +73,7 @@ export function ShareCityModal({
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+    trackCityShared({ platform: "download", repoKey: activeRepoKey });
     showToast("City map image downloaded");
   };
 
@@ -83,6 +86,7 @@ export function ShareCityModal({
         new ClipboardItem({ [blob.type || "image/png"]: blob }),
       ]);
       setCopiedImage(true);
+      trackCityShared({ platform: "copy", repoKey: activeRepoKey });
       showToast("Map image copied to clipboard");
       setTimeout(() => setCopiedImage(false), 2000);
     } catch {
@@ -144,19 +148,23 @@ export function ShareCityModal({
 
   const shareToX = () => {
     const text = encodeURIComponent(caption);
+    trackCityShared({ platform: "twitter", repoKey: activeRepoKey });
     shareToPlatform(`https://twitter.com/intent/tweet?text=${text}`, "𝕏");
   };
 
   const shareToInstaPost = () => {
+    trackCityShared({ platform: "instagram_post", repoKey: activeRepoKey });
     shareToPlatform(null, "Instagram Post");
   };
 
   const shareToInstaStory = () => {
+    trackCityShared({ platform: "instagram_story", repoKey: activeRepoKey });
     shareToPlatform(null, "Instagram Story");
   };
 
   const shareToLinkedin = () => {
     const url = encodeURIComponent("https://playclaude.vercel.app");
+    trackCityShared({ platform: "linkedin", repoKey: activeRepoKey });
     shareToPlatform(
       `https://www.linkedin.com/sharing/share-offsite/?url=${url}`,
       "LinkedIn"
@@ -168,6 +176,7 @@ export function ShareCityModal({
       `Check out my 3D repo city ${repoDisplayName} on PlayClaude!`
     );
     const url = encodeURIComponent("https://playclaude.vercel.app");
+    trackCityShared({ platform: "reddit", repoKey: activeRepoKey });
     shareToPlatform(
       `https://www.reddit.com/submit?title=${title}&url=${url}`,
       "Reddit"

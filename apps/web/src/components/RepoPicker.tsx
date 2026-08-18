@@ -16,6 +16,7 @@ import {
 import { useEffect, useMemo, useState } from "react";
 
 import { githubInstallUrl } from "@/auth/api";
+import { trackRepoListRefreshed } from "@/lib/analytics";
 import HudButton from "@/components/hud/HudButton";
 import {
   Dialog,
@@ -266,7 +267,7 @@ function RepoPickerBody({
           manage shared repositories
         </a>
         <div className="flex gap-2">
-          <HudButton type="button" variant="outline" size="sm" onClick={onRefresh} disabled={anotherImportIsActive}>
+          <HudButton type="button" variant="outline" size="sm" onClick={() => { trackRepoListRefreshed(); onRefresh(); }} disabled={anotherImportIsActive}>
             <RefreshCw className="mr-1 size-3" aria-hidden="true" /> refresh
           </HudButton>
           <HudButton type="button" variant="ghost" size="sm" onClick={onSeeDemo} disabled={anotherImportIsActive || activeRepoKey === "demo"}>

@@ -1,4 +1,5 @@
 import { githubStartUrl } from "@/auth/api";
+import { trackLoginStarted, trackDemoStarted } from "@/lib/analytics";
 import "@/components/ui/8bit/styles/retro.css";
 import { crewSpriteUrl, getCrewMember } from "@/crew/catalog";
 
@@ -49,6 +50,7 @@ export default function LoginScreen({ onSeeDemo }: LoginScreenProps) {
               <a
                 href={githubStartUrl()}
                 className="login-screen__choice login-screen__choice--primary"
+                onClick={() => trackLoginStarted()}
               >
                 <span className="login-screen__choice-cursor" aria-hidden="true">
                   &gt;
@@ -59,7 +61,10 @@ export default function LoginScreen({ onSeeDemo }: LoginScreenProps) {
               <button
                 type="button"
                 className="login-screen__choice"
-                onClick={onSeeDemo}
+                onClick={() => {
+                  trackDemoStarted();
+                  onSeeDemo();
+                }}
               >
                 <span className="login-screen__choice-cursor" aria-hidden="true">
                   &gt;

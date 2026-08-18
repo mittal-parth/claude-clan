@@ -52,6 +52,22 @@ import {
 } from "@/crew/catalog";
 import { type CrewSelection } from "@/components/CrewSelectDialog";
 import { demoGatedAction, type DemoAction } from "@/auth/demo-gate";
+import {
+  trackBuildingInspected,
+  trackMayorOrderDispatched,
+  trackMayorOrderHalted,
+  trackPermitDecision,
+  trackRepoSelected,
+  trackIssueTaken,
+  trackCitySnapshotTaken,
+  trackCityConnected,
+  trackCityConnectionFailed,
+  trackCommandPaletteOpened,
+  trackFastTravelInitiated,
+  trackWorktreeShopOpened,
+  trackPrShopOpened,
+  trackDemoSignInPrompted,
+} from "@/lib/analytics";
 
 /** Everything on duty until the server's policy message says otherwise. */
 const UNRESTRICTED_POLICY: CrewPolicy = {
@@ -154,6 +170,7 @@ export function useGameState({
     if (isCapturingSnapshot || !canvasRef.current) return;
     setIsCapturingSnapshot(true);
     setIsFlashingShutter(true);
+    trackCitySnapshotTaken({ repoKey: activeRepoKey, cityId: activeCityId });
 
     try {
       const url = await canvasRef.current.captureScreenshot();
@@ -279,6 +296,7 @@ export function useGameState({
         attempt = 0;
         setReconnectAttempt(0);
         setConnection("online");
+        trackCityConnected({ repoKey: activeRepoKey, cityId: activeCityId });
 
         function sendRepoSelect(): void {
           if (torndown || socket !== ws) return;
@@ -334,9 +352,13 @@ export function useGameState({
           RECONNECT_BASE_DELAY_MS * 2 ** (attempt - 1),
           RECONNECT_MAX_DELAY_MS,
         );
+        trackCityConnectionFailed({ repoKey: activeRepoKey, cityId: activeCityId, error: "Connection closed" });
         reconnectTimer = setTimeout(connect, delay);
       });
-      ws.addEventListener("error", () => ws.close());
+      ws.addEventListener("error", () => {
+        trackCityConnectionFailed({ repoKey: activeRepoKey, cityId: activeCityId, error: "WebSocket error" });
+        ws.close();
+      });
       ws.addEventListener("message", (message) => {
         if (torndown || socket !== ws) return;
         const decoded = ServerMessageSchema.safeParse(
@@ -500,7 +522,10 @@ export function useGameState({
     const onKeyDown = (event: KeyboardEvent): void => {
       if (event.key === "k" && (event.metaKey || event.ctrlKey)) {
         event.preventDefault();
-        setCommandOpen((open) => !open);
+        setCommandOpen((open) => {
+          if (!open) trackCommandPaletteOpened();
+          return !open;
+        });
       }
     };
     document.addEventListener("keydown", onKeyDown);
@@ -514,6 +539,28 @@ export function useGameState({
   function send(command: MayorCommand): void {
     if (socketRef.current?.readyState === WebSocket.OPEN) {
       socketRef.current.send(JSON.stringify(command));
+    }
+    if (command.type === "session.prompt") {
+      trackMayorOrderDispatched({
+        promptLength: command.prompt.length,
+        effort: command.effort,
+        model: command.model,
+        permissionMode: command.permissionMode,
+        contextPathCount: command.contextPaths?.length,
+        repoKey: activeRepoKey,
+        cityId: command.cityId,
+      });
+    } else if (command.type === "session.interrupt") {
+      trackMayorOrderHalted({ repoKey: activeRepoKey, cityId: command.cityId });
+    } else if (command.type === "permit.resolve") {
+      trackPermitDecision({
+        decision: command.decision,
+        toolCallId: command.toolCallId,
+        repoKey: activeRepoKey,
+        cityId: activeCityId,
+      });
+    } else if (command.type === "repo.select") {
+      trackRepoSelected({ repoKey: command.repoKey });
     }
   }
 
@@ -531,6 +578,7 @@ export function useGameState({
     if (!gated) {
       return false;
     }
+    trackDemoSignInPrompted({ action: gated });
     setSignInAction(gated);
     return true;
   }
@@ -546,6 +594,7 @@ export function useGameState({
     if (blockedByDemoGate({ action: "travel", cityId })) {
       return;
     }
+    trackFastTravelInitiated({ destinationCityId: cityId, via: "command_palette" });
     setActiveCityId(cityId);
     setSelected(undefined);
     setDiff(undefined);
@@ -561,6 +610,7 @@ export function useGameState({
     if (blockedByDemoGate({ action: "travel", cityId })) {
       return;
     }
+    trackFastTravelInitiated({ destinationCityId: cityId, via: "ship" });
     setShipTravelTargetId(cityId);
     setSelected(undefined);
     setDiff(undefined);
@@ -580,6 +630,11 @@ export function useGameState({
   }
 
   function takeIssueToFix(issue: Issue): void {
+    trackIssueTaken({
+      issueNumber: issue.number,
+      repoKey: activeRepoKey,
+      cityId: activeCityId,
+    });
     setIssueShopOpen(false);
     // Caught on the click rather than at dispatch, so the prompt appears
     // before the order is drafted into the console.
@@ -618,6 +673,7 @@ export function useGameState({
     setSelected(undefined);
     setDiff(undefined);
     if (activeCityId === "main") {
+      trackWorktreeShopOpened();
       setWorktreeShopOpen(true);
       return;
     }
@@ -634,6 +690,7 @@ export function useGameState({
     setSelected(undefined);
     setDiff(undefined);
     if (activeCityId === "main") {
+      trackPrShopOpened();
       setPrShopOpen(true);
       return;
     }
@@ -680,6 +737,13 @@ export function useGameState({
   function selectBuilding(building?: Building): void {
     setSelected(building);
     setDiff(undefined);
+    if (building) {
+      trackBuildingInspected({
+        path: building.path,
+        fileType: building.language,
+        lines: building.loc,
+      });
+    }
     const change = building
       ? overlay?.files.find((file) => file.path === building.path)
       : undefined;
