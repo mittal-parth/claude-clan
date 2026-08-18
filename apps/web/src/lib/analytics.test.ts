@@ -13,6 +13,13 @@ import {
   trackRepoSelected,
   trackRepoImported,
   trackBuildingInspected,
+  trackBillboardClicked,
+  trackWorktreeShopOpened,
+  trackPrShopOpened,
+  trackDemoSignInPrompted,
+  trackAirportOpened,
+  trackCityShared,
+  trackFastTravelInitiated,
 } from "./analytics.js";
 
 vi.mock("posthog-js", () => ({
@@ -56,6 +63,13 @@ describe("analytics helper", () => {
     trackRepoSelected({ repoKey: "octocat/repo" });
     trackRepoImported({ fullName: "octocat/repo" });
     trackBuildingInspected({ path: "src/main.ts", lines: 100 });
+    trackBillboardClicked({ kind: "ad", url: "https://pushtoprod.art", sponsorId: "pushtoprod" });
+    trackWorktreeShopOpened();
+    trackPrShopOpened();
+    trackDemoSignInPrompted({ action: "dispatch a crew" });
+    trackAirportOpened({ repoKey: "octocat/repo" });
+    trackCityShared({ platform: "instagram_post", repoKey: "octocat/repo" });
+    trackFastTravelInitiated({ destinationCityId: "pr-1", via: "ship" });
 
     // When uninitialized, posthog capture should not be called
     expect(posthog.capture).not.toHaveBeenCalled();

@@ -72,6 +72,8 @@ export function trackMayorOrderDispatched(properties: {
   promptLength?: number;
   effort?: string;
   model?: string;
+  permissionMode?: string;
+  contextPathCount?: number;
   repoKey?: string;
   cityId?: string;
 }): void {
@@ -118,8 +120,22 @@ export function trackCitySnapshotTaken(properties: { repoKey?: string; cityId?: 
   trackEvent("city_snapshot_taken", properties);
 }
 
+export type SharePlatform =
+  | "twitter"
+  | "linkedin"
+  | "instagram_post"
+  | "instagram_story"
+  | "reddit"
+  | "copy"
+  | "copy_caption"
+  | "download";
+
 /** Track when a user shares their city snapshot to social media. */
-export function trackCityShared(properties: { platform: "twitter" | "linkedin" | "copy" | "download"; repoKey?: string; cityId?: string }): void {
+export function trackCityShared(properties: {
+  platform: SharePlatform;
+  repoKey?: string;
+  cityId?: string;
+}): void {
   trackEvent("city_shared", properties);
 }
 
@@ -168,12 +184,50 @@ export function trackIssueShopOpened(): void {
   trackEvent("issue_shop_opened");
 }
 
+/** Track when the harbour worktree shop is opened. */
+export function trackWorktreeShopOpened(): void {
+  trackEvent("worktree_shop_opened");
+}
+
+/** Track when the navy PR shop is opened. */
+export function trackPrShopOpened(): void {
+  trackEvent("pr_shop_opened");
+}
+
 /** Track when the user hits refresh on the repo list. */
 export function trackRepoListRefreshed(): void {
   trackEvent("repo_list_refreshed");
 }
 
+export type FastTravelVia = "command_palette" | "ship";
+
 /** Track when the user initiates fast travel to a different city. */
-export function trackFastTravelInitiated(properties: { destinationCityId: string }): void {
+export function trackFastTravelInitiated(properties: {
+  destinationCityId: string;
+  via?: FastTravelVia;
+}): void {
   trackEvent("fast_travel_initiated", properties);
+}
+
+/**
+ * Track a click on a world billboard. Kind is the board's job (repo identity
+ * vs a sponsor), not the artwork — the airport board is `repo` even when the
+ * demo city has no GitHub URL behind it, and those clicks never reach here.
+ */
+export function trackBillboardClicked(properties: {
+  kind: "repo" | "ad";
+  url: string;
+  sponsorId?: string;
+}): void {
+  trackEvent("billboard_clicked", properties);
+}
+
+/** Track when a demo-city action is blocked and the sign-in prompt opens. */
+export function trackDemoSignInPrompted(properties: { action: string }): void {
+  trackEvent("demo_sign_in_prompted", properties);
+}
+
+/** Track when the airport repo picker opens from inside a city. */
+export function trackAirportOpened(properties?: { repoKey?: string }): void {
+  trackEvent("airport_opened", properties);
 }

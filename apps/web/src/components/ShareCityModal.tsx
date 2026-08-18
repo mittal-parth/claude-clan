@@ -55,6 +55,7 @@ export function ShareCityModal({
   const handleCopyCaption = async () => {
     try {
       await navigator.clipboard.writeText(caption);
+      trackCityShared({ platform: "copy_caption", repoKey: activeRepoKey });
       setCopiedCaption(true);
       showToast("Caption copied to clipboard");
       setTimeout(() => setCopiedCaption(false), 2000);
@@ -152,10 +153,12 @@ export function ShareCityModal({
   };
 
   const shareToInstaPost = () => {
+    trackCityShared({ platform: "instagram_post", repoKey: activeRepoKey });
     shareToPlatform(null, "Instagram Post");
   };
 
   const shareToInstaStory = () => {
+    trackCityShared({ platform: "instagram_story", repoKey: activeRepoKey });
     shareToPlatform(null, "Instagram Story");
   };
 
@@ -173,6 +176,7 @@ export function ShareCityModal({
       `Check out my 3D repo city ${repoDisplayName} on PlayClaude!`
     );
     const url = encodeURIComponent("https://playclaude.vercel.app");
+    trackCityShared({ platform: "reddit", repoKey: activeRepoKey });
     shareToPlatform(
       `https://www.reddit.com/submit?title=${title}&url=${url}`,
       "Reddit"

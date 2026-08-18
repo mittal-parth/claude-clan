@@ -64,6 +64,9 @@ import {
   trackCityConnectionFailed,
   trackCommandPaletteOpened,
   trackFastTravelInitiated,
+  trackWorktreeShopOpened,
+  trackPrShopOpened,
+  trackDemoSignInPrompted,
 } from "@/lib/analytics";
 
 /** Everything on duty until the server's policy message says otherwise. */
@@ -542,6 +545,8 @@ export function useGameState({
         promptLength: command.prompt.length,
         effort: command.effort,
         model: command.model,
+        permissionMode: command.permissionMode,
+        contextPathCount: command.contextPaths?.length,
         repoKey: activeRepoKey,
         cityId: command.cityId,
       });
@@ -573,6 +578,7 @@ export function useGameState({
     if (!gated) {
       return false;
     }
+    trackDemoSignInPrompted({ action: gated });
     setSignInAction(gated);
     return true;
   }
@@ -588,7 +594,7 @@ export function useGameState({
     if (blockedByDemoGate({ action: "travel", cityId })) {
       return;
     }
-    trackFastTravelInitiated({ destinationCityId: cityId });
+    trackFastTravelInitiated({ destinationCityId: cityId, via: "command_palette" });
     setActiveCityId(cityId);
     setSelected(undefined);
     setDiff(undefined);
@@ -604,6 +610,7 @@ export function useGameState({
     if (blockedByDemoGate({ action: "travel", cityId })) {
       return;
     }
+    trackFastTravelInitiated({ destinationCityId: cityId, via: "ship" });
     setShipTravelTargetId(cityId);
     setSelected(undefined);
     setDiff(undefined);
@@ -666,6 +673,7 @@ export function useGameState({
     setSelected(undefined);
     setDiff(undefined);
     if (activeCityId === "main") {
+      trackWorktreeShopOpened();
       setWorktreeShopOpen(true);
       return;
     }
@@ -682,6 +690,7 @@ export function useGameState({
     setSelected(undefined);
     setDiff(undefined);
     if (activeCityId === "main") {
+      trackPrShopOpened();
       setPrShopOpen(true);
       return;
     }
