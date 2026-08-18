@@ -79,6 +79,7 @@ export class WorldAirportManager {
   constructor(
     private scene: Phaser.Scene,
     private isTravelTransitionActive: () => boolean,
+    private isSkipRequested: () => boolean,
   ) {}
 
   setAirportHoverListener(listener?: (info?: ShipHoverInfo) => void): void {
@@ -531,6 +532,18 @@ export class WorldAirportManager {
     const landingHeading = aircraftRotation(approachGround, touchdown);
     const entry = projection.project(airport.runwayEntry.x, airport.runwayEntry.y);
     const gate = projection.project(airport.gate.x, airport.gate.y);
+
+    const parkedRotation = this.parkedAircraftRotation(airport);
+    if (this.isSkipRequested()) {
+      this.activeFlight?.destroy();
+      this.activeFlightShadow?.destroy();
+      this.activeFlight = undefined;
+      this.activeFlightShadow = undefined;
+      this.parkedAirplane?.setVisible(true).setRotation(parkedRotation);
+      this.parkedAirplaneShadow?.setVisible(true).setRotation(parkedRotation);
+      return;
+    }
+
     const { flight, shadow } = this.createActiveAircraft(approachGround);
 
     await this.animateAircraft(flight, shadow, {
@@ -573,7 +586,6 @@ export class WorldAirportManager {
       ease: "Sine.easeInOut",
     });
 
-    const parkedRotation = this.parkedAircraftRotation(airport);
     flight.setRotation(parkedRotation);
     shadow.setRotation(parkedRotation);
     flight.destroy();
@@ -628,6 +640,18 @@ export class WorldAirportManager {
     snapshot: WorldSnapshot | undefined,
     transitionManager: WorldTransitionManager,
   ): Promise<void> {
+    if (this.isSkipRequested() && snapshot) {
+      const airport = this.airportLayout(snapshot);
+      const parkedRotation = this.parkedAircraftRotation(airport);
+      this.activeFlight?.destroy();
+      this.activeFlightShadow?.destroy();
+      this.activeFlight = undefined;
+      this.activeFlightShadow = undefined;
+      this.parkedAirplane?.setVisible(true).setRotation(parkedRotation);
+      this.parkedAirplaneShadow?.setVisible(true).setRotation(parkedRotation);
+      await transitionManager.partCloudCover();
+      return;
+    }
     const reveal = transitionManager.partCloudCover();
     await this.wait(WHITEOUT_HOLD_MS + 120);
     const landing = this.playFlightLanding(snapshot);

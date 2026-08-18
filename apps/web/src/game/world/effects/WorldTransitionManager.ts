@@ -5,6 +5,11 @@ import { randomCloudEdge } from "../core/worldMath";
 export class WorldTransitionManager {
   private transitionClouds: Phaser.GameObjects.Graphics[] = [];
   private transitionCloudVeil?: Phaser.GameObjects.Rectangle;
+  private _isCovering = false;
+
+  get isCovering(): boolean {
+    return this._isCovering;
+  }
 
   constructor(private scene: Phaser.Scene) {}
 
@@ -13,8 +18,10 @@ export class WorldTransitionManager {
   }
 
   playCoverTransition(): Promise<void> {
-    const camera = this.scene.cameras.main;
+    (this.scene as unknown as { resetTimeScale?: () => void }).resetTimeScale?.();
     this.clearTransitionClouds();
+    this._isCovering = true;
+    const camera = this.scene.cameras.main;
 
     const veil = this.scene.add
       .rectangle(0, 0, camera.width, camera.height, 0xffffff, 0)
@@ -25,7 +32,7 @@ export class WorldTransitionManager {
     const cloudCount = Phaser.Math.Clamp(
       Math.round((camera.width * camera.height) / 42_000),
       14,
-      24,
+      28,
     );
 
     return new Promise((resolve) => {
@@ -33,6 +40,7 @@ export class WorldTransitionManager {
       let veilFinished = false;
       const finishIfWhite = (): void => {
         if (veilFinished && finishedClouds === cloudCount) {
+          this._isCovering = false;
           resolve();
         }
       };
@@ -141,6 +149,7 @@ export class WorldTransitionManager {
   }
 
   clearTransitionClouds(): void {
+    this._isCovering = false;
     for (const cloud of this.transitionClouds) {
       this.scene.tweens.killTweensOf(cloud);
       cloud.destroy();
