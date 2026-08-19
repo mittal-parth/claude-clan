@@ -63,9 +63,9 @@ export class WorldScene extends Phaser.Scene {
     () => this.terrainManager.terrain,
     () => this.travelTransitionActive,
   );
-  public harbourManager = new WorldHarbourManager(this, () => this.travelTransitionActive);
-  public navyManager = new WorldNavyManager(this, () => this.travelTransitionActive);
-  public airportManager = new WorldAirportManager(this, () => this.travelTransitionActive);
+  public harbourManager = new WorldHarbourManager(this, () => this.travelTransitionActive, () => this._transitionSkipRequested);
+  public navyManager = new WorldNavyManager(this, () => this.travelTransitionActive, () => this._transitionSkipRequested);
+  public airportManager = new WorldAirportManager(this, () => this.travelTransitionActive, () => this._transitionSkipRequested);
   public issueShopManager = new WorldIssueShopManager(
     this,
     () => this.currentCityId,
@@ -76,6 +76,8 @@ export class WorldScene extends Phaser.Scene {
     () => this.travelTransitionActive,
   );
   public transitionManager = new WorldTransitionManager(this);
+
+  private _transitionSkipRequested = false;
 
   private snapshot?: WorldSnapshot;
   private ambient?: AmbientLife;
@@ -186,6 +188,7 @@ export class WorldScene extends Phaser.Scene {
   setTravelTransitionActive(active: boolean): void {
     this.travelTransitionActive = active;
     if (active) {
+      this._transitionSkipRequested = false;
       this.cancelBuildingDrag();
       this.cameraController.resetInputState();
       this.navyManager.clearHover();
@@ -206,6 +209,19 @@ export class WorldScene extends Phaser.Scene {
     ) {
       this.fitCamera();
     }
+  }
+
+  skipTransition(): void {
+    this._transitionSkipRequested = true;
+    if (!this.transitionManager.isCovering) {
+      this.time.timeScale = 100;
+      this.tweens.timeScale = 100;
+    }
+  }
+
+  resetTimeScale(): void {
+    this.time.timeScale = 1;
+    this.tweens.timeScale = 1;
   }
 
   setIssues(issues: readonly Issue[]): void {

@@ -55,6 +55,7 @@ export interface CanvasDragPreview {
 export type GameCanvasHandle = {
   focusBuilding: (path: string) => boolean;
   captureScreenshot: () => Promise<string>;
+  skipTransition: () => void;
 };
 
 interface GameCanvasProps {
@@ -254,6 +255,7 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
         ? scene?.revealAfterContainerVoyage(voyage.carriesContainer)
         : scene?.revealAfterTravel();
       void Promise.resolve(reveal).then(() => {
+        scene?.resetTimeScale();
         containerVoyageRef.current = undefined;
         const completedCityId = destinationCityRef.current;
         transitioningRef.current = false;
@@ -303,6 +305,7 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
         : scene.coverForTravel(targetCityId);
       void cover.then(() => {
         coverDoneRef.current = true;
+        scene.resetTimeScale();
         tryReveal();
       });
       travelRequestRef.current?.(targetCityId);
@@ -327,6 +330,7 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
       travelTransitionRef.current?.(true);
       void scene.coverForAirportTravel().then(() => {
         coverDoneRef.current = true;
+        scene.resetTimeScale();
         airportTravelCoveredRef.current?.(travel);
       });
       return true;
@@ -337,6 +341,7 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
       () => ({
         focusBuilding: (path: string) =>
           sceneRef.current?.focusBuilding(path) ?? false,
+        skipTransition: () => sceneRef.current?.skipTransition(),
         captureScreenshot: (): Promise<string> => {
           return new Promise((resolve, reject) => {
             const game = gameRef.current;
@@ -622,6 +627,7 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
       // different effect and can still be the departure city's, which lands
       // the aeroplane on the destination's open water.
       void sceneRef.current.revealAfterAirportTravel(world).then(() => {
+        sceneRef.current?.resetTimeScale();
         transitioningRef.current = false;
         coverDoneRef.current = false;
         departureCityRef.current = undefined;

@@ -1,6 +1,7 @@
 import { useGameState } from "@/hooks/use-game-state";
 
 import { AppHudArrival } from "./AppHudArrival";
+import { AppHudTeleport } from "./AppHudTeleport";
 import { AppHudScan } from "./AppHudScan";
 import { AppHudInspector } from "./AppHudInspector";
 import { AppHudOrder } from "./AppHudOrder";
@@ -24,6 +25,7 @@ export function AppHud(props: AppHudProps) {
   return (
     <>
       <AppHudArrival state={state} />
+      <AppHudTeleport state={state} />
 
       <div className="hud-layer" hidden={shipTransitioning}>
         <div className="hud-column hud-column--main">

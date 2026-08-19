@@ -110,6 +110,7 @@ export class WorldHarbourManager {
   constructor(
     private scene: Phaser.Scene,
     private isTravelTransitionActive: () => boolean,
+    private isSkipRequested: () => boolean,
   ) {}
 
   setHarbourShipClickListener(listener?: () => void): void {
@@ -806,6 +807,29 @@ export class WorldHarbourManager {
     const course = this.containerShipCourse();
     if (!ship || !course) return;
     this.scene.tweens.killTweensOf(ship);
+    if (this.isSkipRequested()) {
+      ship.setPosition(course.berth.x, course.berth.y);
+      this.setShipYaw(YAW_OUTBOUND);
+      ship.setData("restY", course.berth.y);
+      this.idleBobContainerShip();
+      if (carriesContainer) {
+        if (!this.harbourQuayCargo) {
+          const cargo = this.scene.add
+            .sprite(0, 0, HARBOUR_CARGO_CONTAINER_KEY)
+            .setOrigin(0.5, 1);
+          this.harbourQuayCargo = cargo;
+          this.harbourSprites.push(cargo);
+        }
+        this.harbourShipCargo?.destroy();
+        this.harbourShipCargo = undefined;
+        this.syncShipCargo();
+        if (this.harbourLayout) {
+          const point = this.quayPoint(this.harbourLayout.containerDrop, 0);
+          this.harbourQuayCargo.setPosition(point.x, point.y).setDepth(projection.depth(this.harbourLayout.containerDrop.x, this.harbourLayout.containerDrop.y) + 12);
+        }
+      }
+      return;
+    }
     ship.setPosition(course.open.x, course.open.y);
     this.setShipYaw(YAW_INBOUND);
     if (carriesContainer) {
@@ -851,6 +875,34 @@ export class WorldHarbourManager {
     carriesContainer: boolean,
     transitionManager: WorldTransitionManager,
   ): Promise<void> {
+    if (this.isSkipRequested()) {
+      const course = this.containerShipCourse();
+      const ship = this.harbourShip;
+      if (ship && course) {
+        ship.setPosition(course.berth.x, course.berth.y);
+        this.setShipYaw(YAW_OUTBOUND);
+        ship.setData("restY", course.berth.y);
+        this.idleBobContainerShip();
+        if (carriesContainer) {
+          if (!this.harbourQuayCargo) {
+            const cargo = this.scene.add
+              .sprite(0, 0, HARBOUR_CARGO_CONTAINER_KEY)
+              .setOrigin(0.5, 1);
+            this.harbourQuayCargo = cargo;
+            this.harbourSprites.push(cargo);
+          }
+          this.harbourShipCargo?.destroy();
+          this.harbourShipCargo = undefined;
+          this.syncShipCargo();
+          if (this.harbourLayout) {
+            const point = this.quayPoint(this.harbourLayout.containerDrop, 0);
+            this.harbourQuayCargo.setPosition(point.x, point.y).setDepth(projection.depth(this.harbourLayout.containerDrop.x, this.harbourLayout.containerDrop.y) + 12);
+          }
+        }
+      }
+      await transitionManager.partCloudCover();
+      return;
+    }
     await transitionManager.partCloudCover();
     await this.playContainerShipArrival();
     if (carriesContainer) {

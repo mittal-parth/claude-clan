@@ -101,6 +101,7 @@ export class WorldNavyManager {
   constructor(
     private scene: Phaser.Scene,
     private isTravelTransitionActive: () => boolean,
+    private isSkipRequested: () => boolean,
   ) {}
 
   setNavyShipHoverListener(listener?: (info?: ShipHoverInfo) => void): void {
@@ -609,6 +610,13 @@ export class WorldNavyManager {
     if (!ship || !course) return;
     this.scene.tweens.killTweensOf(ship);
     ship.setAlpha(1);
+    if (this.isSkipRequested()) {
+      ship.setPosition(course.berth.x, course.berth.y);
+      this.setNavyShipYaw(YAW_OUTBOUND);
+      ship.setData("restY", course.berth.y);
+      this.idleBobNavyShip();
+      return;
+    }
     ship.setPosition(course.open.x, course.open.y);
     this.setNavyShipYaw(YAW_INBOUND);
   }
@@ -698,6 +706,18 @@ export class WorldNavyManager {
   }
 
   async revealAfterTravel(transitionManager: WorldTransitionManager): Promise<void> {
+    if (this.isSkipRequested()) {
+      const course = this.navyShipCourse();
+      const ship = this.navyBattleship;
+      if (ship && course) {
+        ship.setPosition(course.berth.x, course.berth.y);
+        this.setNavyShipYaw(YAW_OUTBOUND);
+        ship.setData("restY", course.berth.y);
+        this.idleBobNavyShip();
+      }
+      await transitionManager.partCloudCover();
+      return;
+    }
     await transitionManager.partCloudCover();
     await this.playNavyBattleshipArrival();
     await this.playNavyBattleshipTurnaround();
