@@ -733,11 +733,26 @@
   display: grid;
   min-height: 0;
   grid-template-rows: 0fr;
-  transition: grid-template-rows 260ms var(--hud-ease);
+  overflow: hidden;
+  transition:
+    grid-template-rows 260ms var(--hud-ease),
+    visibility 260ms var(--hud-ease);
 }
 
 .hud-window[data-expanded="true"] .hud-window__reveal {
   grid-template-rows: 1fr;
+  visibility: visible;
+}
+
+.hud-window[data-expanded="false"] .hud-window__reveal {
+  visibility: hidden;
+}
+
+.hud-window__reveal-inner {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 .hud-window__reveal > * {
