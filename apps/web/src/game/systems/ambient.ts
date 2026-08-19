@@ -81,12 +81,23 @@ type ShipLeg =
       to: readonly [number, number];
     };
 
+import { isLowEndDevice } from "../../lib/hardware";
+
 export function prefersReducedMotion(): boolean {
-  return (
-    typeof window !== "undefined" &&
-    typeof window.matchMedia === "function" &&
-    window.matchMedia("(prefers-reduced-motion: reduce)").matches
-  );
+  if (typeof window === "undefined") {
+    return false;
+  }
+  
+  if (typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    return true;
+  }
+  
+  // Hardware-aware optimization: disable ambient life and fancy motion on low-end devices
+  if (isLowEndDevice()) {
+    return true;
+  }
+  
+  return false;
 }
 
 export class AmbientLife {

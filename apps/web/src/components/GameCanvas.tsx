@@ -14,6 +14,8 @@ import {
   type ShipHoverInfo,
 } from "../game/WorldScene";
 
+import type { TargetFps } from "@/lib/fps-preferences";
+
 export interface CanvasFileChange {
   /** Monotonic id so the same path changing twice still re-triggers. */
   id: string;
@@ -66,6 +68,8 @@ interface GameCanvasProps {
   /** Fires once the first world is applied and the initial viewport has settled. */
   onInitialWorldReady?: () => void;
   overlay?: PullRequestOverlay;
+  /** Target framerate for the game loop (30 or 60 fps). Defaults to 30. */
+  targetFps?: TargetFps;
   /** Snapshot that may be revealed once a ship has reached this city. */
   travelCityId?: string;
   travelWorld?: WorldSnapshot;
@@ -122,6 +126,7 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
       world,
       onInitialWorldReady,
       overlay,
+      targetFps = 30,
       travelCityId,
       travelWorld,
       travelOverlay,
@@ -441,20 +446,25 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
       });
       sceneRef.current = scene;
       const game = new Phaser.Game({
-        type: Phaser.AUTO,
+        type: Phaser.WEBGL,
         parent: host,
         backgroundColor: "#2e9fe0",
         scene,
+        autoFocus: true, // Bonus: Ensures rendering completely pauses on tab switch/minimize
         scale: {
           mode: Phaser.Scale.RESIZE,
           width: "100%",
           height: "100%",
         },
+        fps: {
+          target: targetFps,
+        },
         render: {
           antialias: false,
           pixelArt: true,
           roundPixels: true,
-          preserveDrawingBuffer: true,
+          clearBeforeRender: false,
+          powerPreference: "low-power",
         },
       });
       gameRef.current = game;
@@ -562,7 +572,16 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
 
     useEffect(() => {
       sceneRef.current?.setOverlay(overlay);
-    }, [overlay]);
+      
+      // Adaptive Rendering: Throttle to 5 FPS when an HTML overlay obscures the canvas
+      if (gameRef.current) {
+        if (overlay) {
+          gameRef.current.loop.targetFps = 5;
+        } else {
+          gameRef.current.loop.targetFps = targetFps; // Resume normal capped framerate
+        }
+      }
+    }, [overlay, targetFps]);
 
     useEffect(() => {
       // A destination may be cached before the click or may arrive over the
