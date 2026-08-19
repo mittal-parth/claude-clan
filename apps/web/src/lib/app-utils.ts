@@ -14,7 +14,6 @@ export type ConnectionState = "connecting" | "online" | "offline";
 
 export const websocketUrl =
   import.meta.env.VITE_WS_URL ?? "ws://127.0.0.1:4100/ws";
-export const maxBudgetUsd = Number(import.meta.env.VITE_MAX_BUDGET_USD ?? 1);
 
 /**
  * How long to wait for an edit burst to settle before asking the server to

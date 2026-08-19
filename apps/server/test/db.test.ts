@@ -33,6 +33,9 @@ describe.skipIf(!process.env.DATABASE_URL)("Database", () => {
 
   beforeAll(async () => {
     await db.migrate();
+    const cleanup = new Pool({ connectionString: process.env.DATABASE_URL });
+    await cleanup.query("DELETE FROM users WHERE id IN ($1, $2)", [userA.id, -1002]);
+    await cleanup.end();
   });
 
   afterAll(async () => {
