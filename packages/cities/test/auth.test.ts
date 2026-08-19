@@ -4,6 +4,7 @@ import {
   needsRefresh,
   parseInstallationsJson,
   parseRepoListJson,
+  parseUserReposJson,
   parseTokenResponse,
   parseViewerJson,
   repoKeyFor,
@@ -96,6 +97,29 @@ describe("parseRepoListJson", () => {
         },
       ],
     });
+    expect(repos).toEqual([
+      {
+        fullName: "octocat/hello-world",
+        owner: "octocat",
+        name: "hello-world",
+        private: false,
+        defaultBranch: "main",
+      },
+    ]);
+  });
+});
+
+describe("parseUserReposJson", () => {
+  it("maps GitHub's array repo shape", () => {
+    const repos = parseUserReposJson([
+      {
+        full_name: "octocat/hello-world",
+        owner: { login: "octocat" },
+        name: "hello-world",
+        private: false,
+        default_branch: "main",
+      },
+    ]);
     expect(repos).toEqual([
       {
         fullName: "octocat/hello-world",

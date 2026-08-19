@@ -105,6 +105,17 @@ export function parseRepoListJson(json: unknown): RepoRef[] {
   }));
 }
 
+export function parseUserReposJson(json: unknown): RepoRef[] {
+  const rows = (json as RawRepo[]) ?? [];
+  return rows.map((row) => ({
+    fullName: row.full_name,
+    owner: row.owner.login,
+    name: row.name,
+    private: row.private,
+    defaultBranch: row.default_branch,
+  }));
+}
+
 interface RawViewer {
   id: number;
   login: string;
@@ -239,37 +250,28 @@ export class GitHubAuth {
     return parseViewerJson(await response.json());
   }
 
-  /** Exactly the repos this user ticked on the installations picker -- no client-side filtering needed. */
+  /** All repos this user can access and the App is installed on (includes collaborator repos where they aren't an installation admin). */
   async accessibleRepos(accessToken: string): Promise<RepoRef[]> {
     const headers = {
       accept: "application/vnd.github+json",
       authorization: `Bearer ${accessToken}`,
       "user-agent": "sudo-city",
     };
-    const installationsResponse = await fetch(`${GITHUB_API}/user/installations`, {
-      headers,
-    });
-    if (!installationsResponse.ok) {
-      throw new Error(
-        `GitHub API ${installationsResponse.status} listing installations`,
-      );
+    
+    const allRepos: RepoRef[] = [];
+    let page = 1;
+    while (true) {
+      const response = await fetch(`${GITHUB_API}/user/repos?per_page=100&page=${page}`, { headers });
+      if (!response.ok) {
+        throw new Error(`GitHub API ${response.status} listing repositories`);
+      }
+      const repos = parseUserReposJson(await response.json());
+      allRepos.push(...repos);
+      if (repos.length < 100) {
+        break;
+      }
+      page++;
     }
-    const installations = parseInstallationsJson(await installationsResponse.json());
-
-    const repoLists = await Promise.all(
-      installations.map(async (installation) => {
-        const response = await fetch(
-          `${GITHUB_API}/user/installations/${installation.id}/repositories?per_page=100`,
-          { headers },
-        );
-        if (!response.ok) {
-          throw new Error(
-            `GitHub API ${response.status} listing repos for installation ${installation.id}`,
-          );
-        }
-        return parseRepoListJson(await response.json());
-      }),
-    );
-    return repoLists.flat();
+    return allRepos;
   }
 }
