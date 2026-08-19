@@ -57,7 +57,7 @@ export function AppHudOrder({ state }: AppHudOrderProps) {
           ) : null
         }
         persistent={
-          <div className="flex flex-col gap-2 sm:flex-row">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
             <div className="hud-field min-w-0 flex-1">
               <span aria-hidden="true" className="hud-field__caret">
                 ❯
@@ -73,17 +73,17 @@ export function AppHudOrder({ state }: AppHudOrderProps) {
                 disabled={connection !== "online"}
               />
             </div>
-            <div className="flex shrink-0 gap-2">
+            <div className="flex shrink-0 items-center gap-2">
               <HudButton
                 type="submit"
-                size="sm"
+                size="md"
                 disabled={connection !== "online" || !prompt.trim()}
               >
                 Dispatch
               </HudButton>
               <HudButton
                 type="button"
-                size="sm"
+                size="md"
                 variant="outline"
                 onClick={() =>
                   send({

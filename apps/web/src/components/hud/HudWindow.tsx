@@ -97,8 +97,10 @@ export function HudWindow({
 
       {children ? (
         <div id={bodyId} className="hud-window__reveal" inert={!expanded}>
-          <div className={cn("hud-window__body", bodyClassName)}>
-            {children}
+          <div className="hud-window__reveal-inner">
+            <div className={cn("hud-window__body", bodyClassName)}>
+              {children}
+            </div>
           </div>
         </div>
       ) : null}
