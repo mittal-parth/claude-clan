@@ -1,7 +1,7 @@
 import { access, rm } from "node:fs/promises";
 import { join } from "node:path";
 import type { SandboxSettings } from "@sudo-city/agent";
-import type { CityId, GameEvent } from "@sudo-city/protocol";
+import type { BudgetInfo, CityId, GameEvent } from "@sudo-city/protocol";
 import type { FastifyBaseLogger } from "fastify";
 import { cloneRepo } from "./clone.js";
 import { chooseEvictionVictim } from "./eviction.js";
@@ -90,6 +90,29 @@ export class WorkspaceManager {
     return this.userSpend.get(userId) ?? 0;
   }
 
+  budgetInfo(userId: number | undefined): BudgetInfo {
+    if (userId === undefined) {
+      const spent = [...this.workspaces.values()].reduce(
+        (total, workspace) => total + workspace.spentUsd(),
+        0,
+      );
+      const remaining = Math.max(0, this.globalMaxBudgetUsd - spent);
+      return {
+        totalBudgetUsd: this.globalMaxBudgetUsd,
+        spentUsd: spent,
+        remainingBudgetUsd: remaining,
+      };
+    }
+
+    const spent = this.userSpentUsd(userId);
+    const remaining = this.remainingBudgetFor(userId);
+    return {
+      totalBudgetUsd: this.perUserMaxBudgetUsd,
+      spentUsd: spent,
+      remainingBudgetUsd: remaining,
+    };
+  }
+
   /**
    * A signed-in user's order is capped by whichever runs out first: the shared
    * ceiling that funds the whole server, or their own lifetime allowance.
@@ -147,11 +170,15 @@ export class WorkspaceManager {
    * caller's error path rather than defaulting to zero -- treating a database
    * blip as "no spend yet" would hand out a fresh allowance every time.
    */
-  private async loadUserSpend(userId: number): Promise<void> {
+  async ensureUserSpendLoaded(userId: number): Promise<void> {
     if (!this.spendStore || this.userSpend.has(userId)) {
       return;
     }
     this.userSpend.set(userId, await this.spendStore.spentUsd(userId));
+  }
+
+  private async loadUserSpend(userId: number): Promise<void> {
+    await this.ensureUserSpendLoaded(userId);
   }
 
   private repoCloneDir(userId: number, owner: string, name: string): string {

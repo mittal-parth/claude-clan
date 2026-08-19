@@ -10,7 +10,6 @@ import {
   statusLabel,
   titleFromRepoPath,
   repoRootPath,
-  maxBudgetUsd,
 } from "@/lib/app-utils";
 import { getCrewMember, effortLabel, crewSpriteUrl } from "@/crew/catalog";
 import { eventsToQuests, findPendingPermit } from "@/lib/quest-utils";
@@ -35,6 +34,7 @@ export function AppHudConsole({
     cities,
     world,
     events,
+    budget,
     hud,
     crewSelection,
     orderPermissionMode,
@@ -48,15 +48,15 @@ export function AppHudConsole({
   const activeCity = cities.find((city) => city.id === activeCityId);
   const pendingPermit = findPendingPermit(events);
 
-  const usage = events
-    .slice()
-    .reverse()
-    .find((event) => event.type === "session.usage");
-  const treasuryUsed = usage?.type === "session.usage" ? usage.costUsd : 0;
-  const treasuryPercent = Math.min(
-    100,
-    Math.round((treasuryUsed / maxBudgetUsd) * 100),
-  );
+  const totalBudget = budget?.totalBudgetUsd ?? 1;
+  const treasuryUsed = budget?.spentUsd ?? 0;
+  const treasuryPercent = totalBudget > 0
+    ? Math.min(100, Math.round((treasuryUsed / totalBudget) * 100))
+    : 0;
+  const spentDisplay =
+    treasuryUsed > 0 && treasuryUsed < 0.01
+      ? treasuryUsed.toFixed(4)
+      : treasuryUsed.toFixed(2);
 
   const startedSession = events
     .slice()
@@ -228,7 +228,7 @@ export function AppHudConsole({
           />
           <HudMeter
             label="Treasury"
-            readout={`$${treasuryUsed.toFixed(4)} / $${maxBudgetUsd.toFixed(2)}`}
+            readout={`$${spentDisplay} / $${totalBudget.toFixed(2)}`}
             value={treasuryPercent}
           />
         </div>

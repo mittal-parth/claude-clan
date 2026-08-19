@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useMemo, FormEvent } from "react";
 import {
   type Building,
+  type BudgetInfo,
   type CitySummary,
   type CrewPolicy,
   type GameEvent,
@@ -95,6 +96,7 @@ export function useGameState({
   const [reconnectAttempt, setReconnectAttempt] = useState(0);
   const [cities, setCities] = useState<CitySummary[]>([]);
   const [issues, setIssues] = useState<Issue[]>([]);
+  const [budget, setBudget] = useState<BudgetInfo | null>(null);
   const [viewerLogin, setViewerLogin] = useState<string>();
   const [activeCityId, setActiveCityId] = useState("main");
   const [eventsByCity, setEventsByCity] = useState<Record<string, GameEvent[]>>(
@@ -211,6 +213,7 @@ export function useGameState({
   useEffect(() => {
     setCities([]);
     setIssues([]);
+    setBudget(null);
     setWorldByCity({});
     setWorldRepoKey(undefined);
     setOverlayByCity({});
@@ -358,6 +361,11 @@ export function useGameState({
 
         if (decoded.data.kind === "viewer") {
           setViewerLogin(decoded.data.login);
+          return;
+        }
+
+        if (decoded.data.kind === "budget") {
+          setBudget(decoded.data.budget);
           return;
         }
 
@@ -752,6 +760,7 @@ export function useGameState({
     reconnectAttempt,
     cities,
     issues,
+    budget,
     viewerLogin,
     activeCityId,
     eventsByCity,
@@ -797,6 +806,7 @@ export function useGameState({
     setReconnectAttempt,
     setCities,
     setIssues,
+    setBudget,
     setViewerLogin,
     setActiveCityId,
     setEventsByCity,

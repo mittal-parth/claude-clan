@@ -103,6 +103,15 @@ function send(socket: WebSocket, message: ServerMessage): void {
   socket.send(JSON.stringify(message));
 }
 
+function sendBudget(socket: WebSocket, state: ClientState): void {
+  if (socket.readyState === WebSocket.OPEN) {
+    send(socket, {
+      kind: "budget",
+      budget: workspaces.budgetInfo(state.userId),
+    });
+  }
+}
+
 interface ClientState {
   /**
    * Undefined until the client's repo.select lands. Every broadcast matches on
@@ -161,6 +170,17 @@ const workspaces = new WorkspaceManager({
           socket.readyState === WebSocket.OPEN
         ) {
           socket.send(message);
+        }
+      }
+      if (event.type === "session.usage") {
+        const workspaceOwnerId = workspaceKey.includes(":") ? Number(workspaceKey.split(":")[0]) : undefined;
+        for (const [socket, state] of clients) {
+          if (
+            (state.workspaceKey === workspaceKey || (workspaceOwnerId !== undefined && state.userId === workspaceOwnerId)) &&
+            socket.readyState === WebSocket.OPEN
+          ) {
+            sendBudget(socket, state);
+          }
         }
       }
     },
@@ -248,9 +268,11 @@ function sendOverlay(socket: WebSocket, workspace: Workspace, cityId: CityId): v
 }
 
 function sendWorkspaceState(socket: WebSocket, workspace: Workspace, cityId: CityId): void {
+  const state = clients.get(socket);
   send(socket, { kind: "cities", cities: workspace.summaries() });
   send(socket, { kind: "issues", issues: workspace.listIssues() });
   send(socket, { kind: "viewer", login: workspace.viewerLogin() });
+  send(socket, { kind: "budget", budget: workspaces.budgetInfo(state?.userId) });
   sendWorld(socket, workspace, cityId);
   sendOverlay(socket, workspace, cityId);
 }
@@ -273,6 +295,7 @@ app.get("/ws", { websocket: true }, (socket) => {
   // below it is sent on open: the HUD has to know which crews and thinking
   // levels this deployment allows before the mayor picks either.
   send(socket, { kind: "policy", policy: crewPolicy });
+  sendBudget(socket, { cityId: "main" });
   socket.once("close", () => clients.delete(socket));
 
   function currentWorkspace(): Workspace | undefined {
@@ -336,7 +359,10 @@ app.get("/ws", { websocket: true }, (socket) => {
         send(socket, { kind: "error", code: "AUTH_INVALID", message: "Session is invalid or expired." });
         return;
       }
-      clients.set(socket, { ...state, userId: session.userId, githubToken: session.tokens.accessToken });
+      await workspaces.ensureUserSpendLoaded(session.userId);
+      const newState: ClientState = { ...state, userId: session.userId, githubToken: session.tokens.accessToken };
+      clients.set(socket, newState);
+      sendBudget(socket, newState);
       return;
     }
 
@@ -346,7 +372,12 @@ app.get("/ws", { websocket: true }, (socket) => {
         return;
       }
       if (data.repoKey === "demo") {
-        clients.set(socket, { workspaceKey: demoWorkspace.key, cityId: "main" });
+        clients.set(socket, {
+          workspaceKey: demoWorkspace.key,
+          cityId: "main",
+          userId: currentState.userId,
+          githubToken: currentState.githubToken,
+        });
         sendWorkspaceState(socket, demoWorkspace, "main");
         return;
       }
@@ -391,7 +422,12 @@ app.get("/ws", { websocket: true }, (socket) => {
         });
         return;
       }
-      clients.set(socket, { workspaceKey: existing.key, cityId: "main", userId: currentState.userId });
+      clients.set(socket, {
+        workspaceKey: existing.key,
+        cityId: "main",
+        userId: currentState.userId,
+        githubToken: currentState.githubToken,
+      });
       sendWorkspaceState(socket, existing, "main");
       return;
     }

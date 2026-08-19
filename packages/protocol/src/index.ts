@@ -118,6 +118,12 @@ export const CrewPolicySchema = z.object({
   demoInteractive: z.boolean(),
 });
 
+export const BudgetInfoSchema = z.object({
+  totalBudgetUsd: z.number().nonnegative(),
+  spentUsd: z.number().nonnegative(),
+  remainingBudgetUsd: z.number().nonnegative(),
+});
+
 // "main" is the primary checkout; PR and issue cities are detached worktrees.
 export const CityIdSchema = z
   .string()
@@ -365,6 +371,10 @@ export const ServerMessageSchema = z.discriminatedUnion("kind", [
     kind: z.literal("policy"),
     policy: CrewPolicySchema,
   }),
+  z.object({
+    kind: z.literal("budget"),
+    budget: BudgetInfoSchema,
+  }),
 ]);
 
 // ---------------------------------------------------------------------------
@@ -494,6 +504,7 @@ export function inCapitolDistrict(
 }
 
 export type CrewPolicy = z.infer<typeof CrewPolicySchema>;
+export type BudgetInfo = z.infer<typeof BudgetInfoSchema>;
 export type EffortLevel = z.infer<typeof EffortLevelSchema>;
 export type Building = z.infer<typeof BuildingSchema>;
 export type ChangedFile = z.infer<typeof ChangedFileSchema>;

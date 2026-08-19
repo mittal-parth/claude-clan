@@ -340,4 +340,37 @@ describe("protocol contracts", () => {
       }),
     ).toThrow();
   });
+
+  it("carries the dynamic budget information from the server", () => {
+    const message = ServerMessageSchema.parse({
+      kind: "budget",
+      budget: {
+        totalBudgetUsd: 10,
+        spentUsd: 2.5,
+        remainingBudgetUsd: 7.5,
+      },
+    });
+
+    expect(message).toEqual({
+      kind: "budget",
+      budget: {
+        totalBudgetUsd: 10,
+        spentUsd: 2.5,
+        remainingBudgetUsd: 7.5,
+      },
+    });
+  });
+
+  it("rejects negative budget values", () => {
+    expect(() =>
+      ServerMessageSchema.parse({
+        kind: "budget",
+        budget: {
+          totalBudgetUsd: -5,
+          spentUsd: 0,
+          remainingBudgetUsd: 0,
+        },
+      }),
+    ).toThrow();
+  });
 });
