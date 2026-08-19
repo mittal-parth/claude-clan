@@ -23,9 +23,10 @@ export default function Root() {
   const [sessionChecked, setSessionChecked] = useState(false);
   const [activeRepoKey, setActiveRepoKey] = useState<string>();
   const [repos, setRepos] = useState<RepoSummary[]>([]);
+  const [maxRepoSizeMb, setMaxRepoSizeMb] = useState<number>();
   const [reposLoading, setReposLoading] = useState(false);
   const [reposError, setReposError] = useState<string>();
-  const [importing, setImporting] = useState<{ repoKey: string; startedAt: number }>();
+  const [importing, setImporting] = useState<{ repoKey: string; startedAt: number; message?: string }>();
   const [airportOpen, setAirportOpen] = useState(false);
   const [airportTravel, setAirportTravel] = useState<CanvasAirportTravel>();
   const [airportArrival, setAirportArrival] = useState<CanvasAirportTravel>();
@@ -112,8 +113,11 @@ export default function Root() {
     setReposLoading(true);
     setReposError(undefined);
     fetchRepos()
-      .then((nextRepos) => {
-        if (current()) setRepos(nextRepos);
+      .then((data) => {
+        if (current()) {
+          setRepos(data.repos);
+          setMaxRepoSizeMb(data.maxRepoSizeMb);
+        }
       })
       .catch((error: unknown) => {
         if (current()) {
@@ -196,6 +200,11 @@ export default function Root() {
     }
     if (!session.authenticated) return;
 
+    if (maxRepoSizeMb !== undefined && repo.size !== undefined && repo.size / 1024 > maxRepoSizeMb) {
+      setReposError(`sorry we currently only allow importing under ${maxRepoSizeMb} mb repos`);
+      return;
+    }
+
     const requestId = ++importRequestRef.current;
     const pending = { repoKey: repo.key, startedAt: Date.now() };
     importingRef.current = pending;
@@ -205,7 +214,10 @@ export default function Root() {
     const authEpoch = authEpochRef.current;
     const importIsCurrent = (): boolean =>
       requestId === importRequestRef.current && authEpoch === authEpochRef.current;
-    importRepo(repo.fullName)
+    importRepo(repo.fullName, (message) => {
+      if (!importIsCurrent()) return;
+      setImporting((prev) => (prev?.repoKey === repo.key ? { ...prev, message } : prev));
+    })
       .then(() => {
         if (!importIsCurrent()) return;
         repoLoadRequestRef.current += 1;
@@ -250,37 +262,24 @@ export default function Root() {
   if (!sessionChecked) return null;
 
   const gate = gateFor(session, activeRepoKey);
-  if (gate === "repos") {
-    return (
-      <RepoPicker
-        repos={repos}
-        loading={reposLoading}
-        error={reposError}
-        importing={importing}
-        onImportOrSelect={handleImportOrSelect}
-        onSeeDemo={() => setActiveRepoKey(DEMO_REPO_KEY)}
-        onRefresh={loadRepos}
-      />
-    );
-  }
-
   const demoIsTransitioning =
     activeRepoKey === DEMO_REPO_KEY && demoTransition !== "idle";
   const showLogin = gate === "login" || demoIsTransitioning;
+  const showRepos = gate === "repos";
 
   return (
     <div className="root-stage">
-      {gate === "login" || gate === "city" ? (
+      {gate === "login" || gate === "city" || gate === "repos" ? (
         <App
-          activeRepoKey={gate === "login" ? DEMO_REPO_KEY : activeRepoKey!}
+          activeRepoKey={gate === "login" || gate === "repos" ? DEMO_REPO_KEY : activeRepoKey!}
           activeRepo={
-            gate === "login"
+            gate === "login" || gate === "repos"
               ? undefined
               : repos.find((repo) => repo.key === activeRepoKey)
           }
           user={session.authenticated ? session.user : undefined}
           repoConnectionGeneration={repoConnectionGeneration}
-          loginBackground={gate === "login"}
+          loginBackground={gate === "login" || gate === "repos"}
           initialReveal={demoIsTransitioning}
           onInitialRevealReady={handleInitialRevealReady}
           onInitialRevealComplete={handleInitialRevealComplete}
@@ -326,6 +325,27 @@ export default function Root() {
         </div>
       ) : null}
 
+      {showRepos ? (
+        <div
+          className={`login-transition-cover${
+            demoTransition === "revealing"
+              ? " login-transition-cover--exiting"
+              : ""
+          }`}
+        >
+          <RepoPicker
+            repos={repos}
+            loading={reposLoading}
+            error={reposError}
+            importing={importing}
+            maxRepoSizeMb={maxRepoSizeMb}
+            onImportOrSelect={handleImportOrSelect}
+            onSeeDemo={startDemo}
+            onRefresh={loadRepos}
+          />
+        </div>
+      ) : null}
+
       {gate === "city" ? (
         session.authenticated ? (
           <RepoPicker
@@ -333,6 +353,7 @@ export default function Root() {
             loading={reposLoading}
             error={reposError}
             importing={importing}
+            maxRepoSizeMb={maxRepoSizeMb}
             onImportOrSelect={handleImportOrSelect}
             onSeeDemo={() => beginAirportJourney(DEMO_REPO_KEY)}
             onRefresh={loadRepos}
@@ -343,6 +364,7 @@ export default function Root() {
           <RepoPicker
             repos={[]}
             loading={false}
+            maxRepoSizeMb={maxRepoSizeMb}
             onImportOrSelect={() => undefined}
             onSeeDemo={() => setAirportOpen(false)}
             onRefresh={() => undefined}

@@ -154,6 +154,7 @@ export const RepoSummarySchema = z.object({
   name: z.string().min(1),
   private: z.boolean(),
   defaultBranch: z.string().min(1),
+  size: z.number().int().nonnegative().optional(),
   imported: z.boolean(),
 });
 
