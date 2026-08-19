@@ -174,32 +174,30 @@ function allocate(
   let minA = Math.ceil(minBlocksSum(groupA) / across);
   let minB = Math.ceil(minBlocksSum(groupB) / across);
 
-  // On a very deep, very uneven tree the 50/50 weight split can still leave
-  // one side without enough room for its items' combined floor; rebalance by
-  // moving the smallest-weight item across until both sides fit. This is a
-  // correctness guard for deep trees, not a tuning knob.
-  while (minA + minB > along && groupA.length > 1 && groupB.length > 1) {
-    if (groupA.length >= groupB.length) {
-      const moved = groupA[groupA.length - 1] as ResolvedItem;
-      groupA = groupA.slice(0, -1);
-      groupB = [...groupB, moved];
-    } else {
-      const moved = groupB[groupB.length - 1] as ResolvedItem;
-      groupB = groupB.slice(0, -1);
-      groupA = [...groupA, moved];
-    }
-    minA = Math.ceil(minBlocksSum(groupA) / across);
-    minB = Math.ceil(minBlocksSum(groupB) / across);
-  }
+  // If the initial split's combined floor exceeds along, search for any split
+  // index where both sides fit within along.
   if (minA + minB > along) {
-    throw new Error(
-      `Unable to allocate ${sorted.length} districts into a ${rect.bw}x${rect.bh} block field`,
-    );
+    for (let index = 1; index < sorted.length; index += 1) {
+      const candA = sorted.slice(0, index);
+      const candB = sorted.slice(index);
+      const mA = Math.ceil(minBlocksSum(candA) / across);
+      const mB = Math.ceil(minBlocksSum(candB) / across);
+      if (mA + mB <= along) {
+        groupA = candA;
+        groupB = candB;
+        minA = mA;
+        minB = mB;
+        break;
+      }
+    }
   }
 
   const weightA = groupA.reduce((sum, item) => sum + item.weight, 0);
   const rawCut = Math.round((along * weightA) / total);
-  const cut = Math.min(along - minB, Math.max(minA, rawCut));
+  const cut =
+    minA + minB <= along
+      ? Math.min(along - minB, Math.max(minA, rawCut))
+      : Math.max(1, Math.min(along - 1, rawCut));
 
   const rectA: BlockRect = horizontal
     ? { bx: rect.bx, by: rect.by, bw: cut, bh: rect.bh }

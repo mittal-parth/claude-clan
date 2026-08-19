@@ -490,8 +490,13 @@ export class Workspace {
       this.store.saveSnapshot(city, layout.snapshot);
       return layout.snapshot;
     } catch (error) {
-      this.log.warn({ error, city }, "Repository scan failed; using preview world");
-      return this.fallbackWorld(city, cwd);
+      this.log.error({ error, city, key: this.key }, "Repository scan or layout failed");
+      if (this.key === "demo") {
+        return this.fallbackWorld(city, cwd);
+      }
+      throw new Error(
+        `Failed to generate city layout: ${error instanceof Error ? error.message : String(error)}`,
+      );
     }
   }
 
