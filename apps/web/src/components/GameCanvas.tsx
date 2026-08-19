@@ -14,6 +14,8 @@ import {
   type ShipHoverInfo,
 } from "../game/WorldScene";
 
+import type { TargetFps } from "@/lib/fps-preferences";
+
 export interface CanvasFileChange {
   /** Monotonic id so the same path changing twice still re-triggers. */
   id: string;
@@ -65,6 +67,8 @@ interface GameCanvasProps {
   /** Fires once the first world is applied and the initial viewport has settled. */
   onInitialWorldReady?: () => void;
   overlay?: PullRequestOverlay;
+  /** Target framerate for the game loop (30 or 60 fps). Defaults to 30. */
+  targetFps?: TargetFps;
   /** Snapshot that may be revealed once a ship has reached this city. */
   travelCityId?: string;
   travelWorld?: WorldSnapshot;
@@ -121,6 +125,7 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
       world,
       onInitialWorldReady,
       overlay,
+      targetFps = 30,
       travelCityId,
       travelWorld,
       travelOverlay,
@@ -447,7 +452,7 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
           height: "100%",
         },
         fps: {
-          target: 30,
+          target: targetFps,
         },
         render: {
           antialias: false,
@@ -568,10 +573,10 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
         if (overlay) {
           gameRef.current.loop.targetFps = 5;
         } else {
-          gameRef.current.loop.targetFps = 30; // Resume normal capped framerate
+          gameRef.current.loop.targetFps = targetFps; // Resume normal capped framerate
         }
       }
-    }, [overlay]);
+    }, [overlay, targetFps]);
 
     useEffect(() => {
       // A destination may be cached before the click or may arrive over the

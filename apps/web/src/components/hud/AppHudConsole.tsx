@@ -14,6 +14,7 @@ import {
 } from "@/lib/app-utils";
 import { getCrewMember, effortLabel, crewSpriteUrl } from "@/crew/catalog";
 import { eventsToQuests, findPendingPermit } from "@/lib/quest-utils";
+import { useUiClick } from "@/hooks/use-ui-click";
 import type { AppHudProps } from "./AppHud";
 
 export function AppHudConsole({
@@ -22,8 +23,11 @@ export function AppHudConsole({
   onLogout,
   sfxEnabled,
   toggleSfx,
+  targetFps,
+  toggleTargetFps,
   user,
 }: AppHudProps) {
+  const playClick = useUiClick();
   const {
     connection,
     reconnectAttempt,
@@ -119,7 +123,7 @@ export function AppHudConsole({
                   src={user.avatarUrl}
                   alt={user.login}
                   title={user.login}
-                  className="size-5 rounded-none border-2 border-foreground dark:border-ring"
+                  className="hud-avatar"
                 />
                 <button
                   type="button"
@@ -163,6 +167,20 @@ export function AppHudConsole({
             >
               <Command className="size-2.5" aria-hidden="true" />K
             </button>
+            {targetFps && toggleTargetFps ? (
+              <button
+                type="button"
+                className="hud-icon-button retro px-1.5 text-[8px]"
+                aria-label={`Target framerate: ${targetFps} FPS. Click to switch to ${targetFps === 30 ? 60 : 30} FPS`}
+                title={`Framerate: ${targetFps} FPS (click to switch to ${targetFps === 30 ? 60 : 30} FPS)`}
+                onClick={() => {
+                  playClick();
+                  toggleTargetFps();
+                }}
+              >
+                {targetFps} FPS
+              </button>
+            ) : null}
           </>
         }
         footer={

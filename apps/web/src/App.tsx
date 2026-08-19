@@ -4,6 +4,7 @@ import { cn } from "@/lib/utils";
 import { type AuthUser } from "@/auth/gate";
 import { GameCanvas, type CanvasAirportTravel } from "@/components/GameCanvas";
 import { useAudio } from "@/components/audio-provider";
+import { useFps } from "@/components/fps-provider";
 import { useGameState } from "@/hooks/use-game-state";
 import { AppHud } from "@/components/hud/AppHud";
 import { AppDialogs } from "@/components/hud/AppDialogs";
@@ -51,6 +52,7 @@ export default function App(props: AppProps) {
   } = props;
 
   const { sfxEnabled, toggleSfx } = useAudio();
+  const { targetFps, toggleTargetFps } = useFps();
   const state = useGameState(props);
 
   /**
@@ -125,6 +127,7 @@ export default function App(props: AppProps) {
         cityId={state.activeCityId}
         worldKey={activeRepoKey}
         world={state.world}
+        targetFps={targetFps}
         onInitialWorldReady={
           initialReveal ? state.notifyInitialRevealReady : undefined
         }
@@ -191,6 +194,8 @@ export default function App(props: AppProps) {
         onLogout={onLogout}
         sfxEnabled={sfxEnabled}
         toggleSfx={toggleSfx}
+        targetFps={targetFps}
+        toggleTargetFps={toggleTargetFps}
         user={user}
         activeRepoKey={activeRepoKey}
       />

@@ -7,12 +7,16 @@ import { AppHudOrder } from "./AppHudOrder";
 import { AppHudConsole } from "./AppHudConsole";
 import { ShareCityCard } from "../ShareCityCard";
 
+import type { TargetFps } from "@/lib/fps-preferences";
+
 export interface AppHudProps {
   state: ReturnType<typeof useGameState>;
   onSignIn: () => void;
   onLogout: () => void;
   sfxEnabled: boolean;
   toggleSfx: () => void;
+  targetFps?: TargetFps;
+  toggleTargetFps?: () => void;
   user?: { login: string; avatarUrl: string };
   activeRepoKey: string;
 }

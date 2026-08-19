@@ -209,7 +209,7 @@ export function ShareCityModal({
         </header>
 
         {/* Main Content Body */}
-        <div className="p-4 space-y-4 max-h-[82vh] overflow-y-auto bg-[#081923]">
+        <div className="p-4 space-y-4 max-h-[82vh] overflow-y-auto airport-scrollbar bg-[#081923]">
           {/* Map Screenshot Frame */}
           <div className="relative overflow-hidden border border-[#1b3445] bg-[#03090d]">
             {screenshotUrl ? (
