@@ -15,6 +15,7 @@ import { ShutterFlash } from "../ShutterFlash";
 import { ShareCityModal } from "../ShareCityModal";
 import { fileBasename, fileDirname, cityLabel } from "@/lib/app-utils";
 import { useGameState } from "@/hooks/use-game-state";
+import { SessionModal } from "@/components/sessions/SessionModal";
 
 export interface AppDialogsProps {
   state: ReturnType<typeof useGameState>;
@@ -52,6 +53,7 @@ export function AppDialogs({ state, activeRepoKey }: AppDialogsProps) {
     send,
     cities,
     travelTo,
+    sessions,
 
     isFlashingShutter,
     setIsFlashingShutter,
@@ -60,6 +62,19 @@ export function AppDialogs({ state, activeRepoKey }: AppDialogsProps) {
     setShareModalOpen,
     screenshotUrl,
   } = state;
+
+  const focusedView = sessions.focusedSessionId
+    ? sessions.sessionsById[sessions.focusedSessionId]
+    : undefined;
+
+  function copyFocusedTranscript(): void {
+    if (!focusedView) return;
+    const transcript = focusedView.events
+      .filter((event) => event.type === "session.message")
+      .map((event) => `${event.role}: ${event.text}`)
+      .join("\n\n");
+    void navigator.clipboard?.writeText(transcript);
+  }
 
   return (
     <>
@@ -104,6 +119,41 @@ export function AppDialogs({ state, activeRepoKey }: AppDialogsProps) {
         }}
       />
 
+      <SessionModal
+        open={Boolean(sessions.focusedSessionId)}
+        view={focusedView}
+        connection={state.connection}
+        crewPolicy={state.crewPolicy}
+        onClose={sessions.blurSession}
+        onRename={(title) => {
+          if (sessions.focusedSessionId) {
+            sessions.renameSession(sessions.focusedSessionId, title);
+          }
+        }}
+        onCopyTranscript={copyFocusedTranscript}
+        onPermit={(toolCallId, decision) => {
+          if (sessions.focusedSessionId) {
+            sessions.resolvePermit(sessions.focusedSessionId, toolCallId, decision);
+          }
+        }}
+        onSend={(prompt, contextPaths) => {
+          if (sessions.focusedSessionId) {
+            sessions.sendToSession(sessions.focusedSessionId, prompt, contextPaths);
+          }
+        }}
+        onInterrupt={() => {
+          if (sessions.focusedSessionId) {
+            sessions.interruptSession(sessions.focusedSessionId);
+          }
+        }}
+        onConfigure={(changes) => {
+          if (sessions.focusedSessionId) {
+            sessions.configureSession(sessions.focusedSessionId, changes);
+          }
+        }}
+        onOpenFiles={() => setCommandOpen(true)}
+      />
+
       <CommandDialog open={commandOpen} onOpenChange={setCommandOpen}>
         <CommandInput placeholder="Search files or mayor commands..." />
         <CommandList>
@@ -141,11 +191,13 @@ export function AppDialogs({ state, activeRepoKey }: AppDialogsProps) {
             </CommandItem>
             <CommandItem
               onSelect={() => {
-                send({ type: "session.interrupt", cityId: activeCityId });
+                if (sessions.focusedSessionId) {
+                  sessions.focusSession(sessions.focusedSessionId);
+                }
                 setCommandOpen(false);
               }}
             >
-              Halt construction
+              Open focused session
             </CommandItem>
             <CommandItem
               onSelect={() => {

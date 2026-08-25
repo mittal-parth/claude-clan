@@ -1,8 +1,6 @@
 import {
-  GameEventSchema,
   type Building,
   type CitySummary,
-  type GameEvent,
   type Issue,
   type PermissionMode,
 } from "@sudo-city/protocol";
@@ -20,15 +18,6 @@ export const websocketUrl =
  * rescan. The agent usually writes several files in a row.
  */
 export const RESCAN_DEBOUNCE_MS = 1_200;
-
-export const EVENTS_STORAGE_PREFIX = "sudo-city:events:";
-/** The full quest log for a city; generous since each city keeps its own. */
-export const EVENTS_PER_CITY_CAP = 200;
-
-/** Two repos can both have a "pr-42" city, so the transcript key is namespaced by repo, not just city id. */
-export function eventsStorageKey(repoKey: string, cityId: string): string {
-  return `${EVENTS_STORAGE_PREFIX}${repoKey}:${cityId}`;
-}
 
 export const RECONNECT_BASE_DELAY_MS = 1_000;
 export const RECONNECT_MAX_DELAY_MS = 15_000;
@@ -130,23 +119,6 @@ export function colorWithAlpha(color: number, alpha: number): string {
   return `${colorToCss(color)}${Math.round(alpha * 255)
     .toString(16)
     .padStart(2, "0")}`;
-}
-
-export function loadStoredEvents(repoKey: string, cityId: string): GameEvent[] {
-  try {
-    const raw = localStorage.getItem(eventsStorageKey(repoKey, cityId));
-    if (!raw) return [];
-    const parsed = JSON.parse(raw) as unknown[];
-    return parsed.filter(
-      (item): item is GameEvent => GameEventSchema.safeParse(item).success,
-    );
-  } catch {
-    return [];
-  }
-}
-
-export function clearStoredEvents(cityId: string): void {
-  localStorage.removeItem(EVENTS_STORAGE_PREFIX + cityId);
 }
 
 export function cityLabel(city: CitySummary): string {

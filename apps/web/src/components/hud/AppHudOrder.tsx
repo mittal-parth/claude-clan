@@ -22,8 +22,6 @@ export function AppHudOrder({ state }: AppHudOrderProps) {
     prompt,
     setPrompt,
     connection,
-    send,
-    activeCityId,
     removeContextPath,
     world,
     crewSelection,
@@ -80,20 +78,6 @@ export function AppHudOrder({ state }: AppHudOrderProps) {
                 disabled={connection !== "online" || !prompt.trim()}
               >
                 Dispatch
-              </HudButton>
-              <HudButton
-                type="button"
-                size="md"
-                variant="outline"
-                onClick={() =>
-                  send({
-                    type: "session.interrupt",
-                    cityId: activeCityId,
-                  })
-                }
-                disabled={connection !== "online"}
-              >
-                Halt
               </HudButton>
             </div>
           </div>
