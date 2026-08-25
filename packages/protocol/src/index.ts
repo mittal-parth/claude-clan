@@ -104,7 +104,7 @@ export const EffortLevelSchema = z.enum([
  * socket opens so the HUD can disable the crew and thinking levels a public
  * deployment has switched off, rather than letting the mayor pick something
  * the server will reject. The server enforces the same lists on
- * session.prompt -- a raw socket can send whatever it likes, so the HUD is
+ * session.open -- a raw socket can send whatever it likes, so the HUD is
  * the courtesy and the server check is the control.
  */
 export const CrewPolicySchema = z.object({
@@ -190,6 +190,68 @@ export const PullRequestOverlaySchema = z.object({
   files: z.array(ChangedFileSchema),
 });
 
+export const TOOL_INPUT_PREVIEW_LIMIT = 2_000;
+export const TOOL_RESULT_PREVIEW_LIMIT = 2_000;
+export const SESSION_TITLE_LIMIT = 60;
+export const TRANSCRIPT_PAGE_LIMIT = 500;
+
+/**
+ * What a session is doing right now. Computed on the server and shipped as an
+ * event, never re-derived on the client -- the client used to sniff terminal
+ * state out of message text, which mislabelled ordinary crew prose as a stop.
+ */
+export const SessionStatusSchema = z.enum([
+  "starting",
+  "thinking",
+  "working",
+  "awaiting-permit",
+  "compacting",
+  "idle",
+  "failed",
+  "interrupted",
+  "closed",
+]);
+
+/** Terminal reason for the last turn, taken from the SDK result subtype. */
+export const TurnOutcomeSchema = z.enum([
+  "success",
+  "error",
+  "max-turns",
+  "budget-exhausted",
+  "interrupted",
+]);
+
+/** Statuses that mean the crew is on site and consuming a runner. */
+export const RUNNING_SESSION_STATUSES = [
+  "starting",
+  "thinking",
+  "working",
+  "compacting",
+] as const satisfies readonly z.infer<typeof SessionStatusSchema>[];
+
+export const SessionSummarySchema = z.object({
+  sessionId: z.string().min(1),
+  cityId: CityIdSchema,
+  title: z.string().min(1).max(120),
+  autoTitled: z.boolean(),
+  status: SessionStatusSchema,
+  lastTurnOutcome: TurnOutcomeSchema.optional(),
+  model: z.string().min(1),
+  effort: EffortLevelSchema,
+  permissionMode: PermissionModeSchema,
+  createdAt: z.string().datetime(),
+  updatedAt: z.string().datetime(),
+  turnCount: z.number().int().nonnegative(),
+  costUsd: z.number().nonnegative(),
+  contextPercent: z.number().min(0).max(100).optional(),
+  pendingPermitCount: z.number().int().nonnegative(),
+  queuedCount: z.number().int().nonnegative().default(0),
+  live: z.boolean(),
+  readOnly: z.boolean(),
+  activityLine: z.string().max(200).optional(),
+  lastSequence: z.number().int().nonnegative(),
+});
+
 const EventBaseSchema = z.object({
   id: z.string().min(1),
   cityId: CityIdSchema,
@@ -204,14 +266,62 @@ export const GameEventSchema = z.discriminatedUnion("type", [
     snapshot: WorldSnapshotSchema,
   }),
   EventBaseSchema.extend({
-    type: z.literal("session.started"),
+    type: z.literal("session.created"),
+    cityIdOfSession: CityIdSchema,
+    title: z.string().min(1),
     model: z.string().min(1),
     effort: EffortLevelSchema.default("high"),
     permissionMode: PermissionModeSchema.default("default"),
+    readOnly: z.boolean().default(false),
+  }),
+  EventBaseSchema.extend({
+    type: z.literal("session.status"),
+    status: SessionStatusSchema,
+    outcome: TurnOutcomeSchema.optional(),
+    detail: z.string().optional(),
+  }),
+  EventBaseSchema.extend({
+    type: z.literal("session.renamed"),
+    title: z.string().min(1).max(120),
+  }),
+  EventBaseSchema.extend({
+    type: z.literal("session.configured"),
+    model: z.string().min(1).optional(),
+    effort: EffortLevelSchema.optional(),
+    permissionMode: PermissionModeSchema.optional(),
+  }),
+  EventBaseSchema.extend({
+    type: z.literal("turn.started"),
+    turnId: z.string().min(1),
+    prompt: z.string(),
+    contextPaths: z.array(z.string().min(1)).default([]),
+  }),
+  EventBaseSchema.extend({
+    type: z.literal("turn.completed"),
+    turnId: z.string().min(1),
+    outcome: TurnOutcomeSchema,
+    costUsd: z.number().nonnegative(),
+    inputTokens: z.number().int().nonnegative(),
+    outputTokens: z.number().int().nonnegative(),
+    cacheReadTokens: z.number().int().nonnegative().default(0),
+    durationMs: z.number().int().nonnegative(),
+    numTurns: z.number().int().nonnegative().default(0),
+    detail: z.string().optional(),
   }),
   EventBaseSchema.extend({
     type: z.literal("session.message"),
+    messageId: z.string().min(1),
+    turnId: z.string().min(1).optional(),
     role: z.enum(["agent", "mayor", "system"]),
+    kind: z.enum(["text", "thinking", "notice"]).default("text"),
+    text: z.string(),
+    contextPaths: z.array(z.string().min(1)).default([]),
+  }),
+  EventBaseSchema.extend({
+    type: z.literal("session.delta"),
+    messageId: z.string().min(1),
+    turnId: z.string().min(1).optional(),
+    kind: z.enum(["text", "thinking"]).default("text"),
     text: z.string(),
   }),
   EventBaseSchema.extend({
@@ -223,9 +333,15 @@ export const GameEventSchema = z.discriminatedUnion("type", [
   EventBaseSchema.extend({
     type: z.literal("permit.requested"),
     toolCallId: z.string().min(1),
+    turnId: z.string().min(1).optional(),
     tool: z.string().min(1),
     message: z.string().min(1),
     input: z.record(z.string(), z.unknown()),
+  }),
+  EventBaseSchema.extend({
+    type: z.literal("permit.resolved"),
+    toolCallId: z.string().min(1),
+    decision: z.enum(["allow", "allow-always", "deny", "expired"]),
   }),
   EventBaseSchema.extend({
     type: z.literal("file.changed"),
@@ -235,13 +351,19 @@ export const GameEventSchema = z.discriminatedUnion("type", [
   EventBaseSchema.extend({
     type: z.literal("tool.started"),
     toolCallId: z.string().min(1),
+    turnId: z.string().min(1).optional(),
     tool: z.string().min(1),
     target: z.string().optional(),
+    title: z.string().optional(),
+    input: z.record(z.string(), z.unknown()).optional(),
   }),
   EventBaseSchema.extend({
     type: z.literal("tool.completed"),
     toolCallId: z.string().min(1),
-    outcome: z.enum(["success", "error", "denied"]),
+    turnId: z.string().min(1).optional(),
+    outcome: z.enum(["success", "error", "denied", "interrupted"]),
+    durationMs: z.number().int().nonnegative().optional(),
+    resultPreview: z.string().optional(),
   }),
   EventBaseSchema.extend({
     type: z.literal("subagent.changed"),
@@ -258,6 +380,9 @@ export const GameEventSchema = z.discriminatedUnion("type", [
   EventBaseSchema.extend({
     type: z.literal("compact.changed"),
     status: z.enum(["started", "completed"]),
+    trigger: z.enum(["manual", "auto"]).optional(),
+    preTokens: z.number().int().nonnegative().optional(),
+    postTokens: z.number().int().nonnegative().optional(),
   }),
   EventBaseSchema.extend({
     type: z.literal("diagnostics.updated"),
@@ -269,7 +394,7 @@ export const GameEventSchema = z.discriminatedUnion("type", [
 
 export const MayorCommandSchema = z.discriminatedUnion("type", [
   z.object({
-    type: z.literal("session.prompt"),
+    type: z.literal("session.open"),
     cityId: CityIdSchema,
     prompt: z.string().trim().min(1).max(20_000),
     permissionMode: PermissionModeSchema.optional(),
@@ -279,15 +404,55 @@ export const MayorCommandSchema = z.discriminatedUnion("type", [
       .optional(),
     model: z.string().min(1).optional(),
     effort: EffortLevelSchema.optional(),
+    title: z.string().trim().min(1).max(120).optional(),
+  }),
+  z.object({
+    type: z.literal("session.send"),
+    sessionId: z.string().min(1),
+    prompt: z.string().trim().min(1).max(20_000),
+    contextPaths: z
+      .array(z.string().trim().min(1).max(500))
+      .max(20)
+      .optional(),
   }),
   z.object({
     type: z.literal("session.interrupt"),
-    cityId: CityIdSchema,
+    sessionId: z.string().min(1),
+  }),
+  z.object({
+    type: z.literal("session.rename"),
+    sessionId: z.string().min(1),
+    title: z.string().trim().min(1).max(120),
+  }),
+  z.object({
+    type: z.literal("session.configure"),
+    sessionId: z.string().min(1),
+    model: z.string().min(1).optional(),
+    effort: EffortLevelSchema.optional(),
+    permissionMode: PermissionModeSchema.optional(),
+  }),
+  z.object({
+    type: z.literal("session.close"),
+    sessionId: z.string().min(1),
+  }),
+  z.object({
+    type: z.literal("session.subscribe"),
+    sessionId: z.string().min(1),
+    afterSequence: z.number().int().nonnegative().optional(),
+  }),
+  z.object({
+    type: z.literal("session.unsubscribe"),
+    sessionId: z.string().min(1),
+  }),
+  z.object({
+    type: z.literal("session.list"),
+    cityId: CityIdSchema.optional(),
   }),
   z.object({
     type: z.literal("permit.resolve"),
+    sessionId: z.string().min(1),
     toolCallId: z.string().min(1),
-    decision: z.enum(["allow", "deny"]),
+    decision: z.enum(["allow", "allow-always", "deny"]),
   }),
   z.object({
     type: z.literal("world.request"),
@@ -319,6 +484,21 @@ export const ServerMessageSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("event"),
     event: GameEventSchema,
+  }),
+  z.object({
+    kind: z.literal("sessions"),
+    sessions: z.array(SessionSummarySchema),
+  }),
+  z.object({
+    kind: z.literal("session"),
+    session: SessionSummarySchema,
+  }),
+  z.object({
+    kind: z.literal("transcript"),
+    sessionId: z.string().min(1),
+    fromSequence: z.number().int().nonnegative(),
+    events: z.array(GameEventSchema),
+    hasMore: z.boolean(),
   }),
   z.object({
     kind: z.literal("cities"),
@@ -354,6 +534,7 @@ export const ServerMessageSchema = z.discriminatedUnion("kind", [
     code: z.string().min(1),
     message: z.string().min(1),
     toolCallId: z.string().min(1).optional(),
+    sessionId: z.string().min(1).optional(),
   }),
   z.object({
     kind: z.literal("repos"),
@@ -523,7 +704,10 @@ export type PullRequestOverlay = z.infer<typeof PullRequestOverlaySchema>;
 export type RepoStatusPhase = z.infer<typeof RepoStatusPhaseSchema>;
 export type RepoSummary = z.infer<typeof RepoSummarySchema>;
 export type ServerMessage = z.infer<typeof ServerMessageSchema>;
+export type SessionStatus = z.infer<typeof SessionStatusSchema>;
+export type SessionSummary = z.infer<typeof SessionSummarySchema>;
 export type SourceFile = z.infer<typeof SourceFileSchema>;
+export type TurnOutcome = z.infer<typeof TurnOutcomeSchema>;
 export type WorldMap = z.infer<typeof WorldMapSchema>;
 export type WorldSize = z.infer<typeof WorldSizeSchema>;
 export type WorldSnapshot = z.infer<typeof WorldSnapshotSchema>;

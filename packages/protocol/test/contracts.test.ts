@@ -5,6 +5,8 @@ import {
   MayorCommandSchema,
   PullRequestOverlaySchema,
   ServerMessageSchema,
+  SessionStatusSchema,
+  TurnOutcomeSchema,
 } from "../src/index.js";
 
 const base = {
@@ -129,7 +131,7 @@ describe("protocol contracts", () => {
 
   it("carries permission mode on an individual order", () => {
     const command = MayorCommandSchema.parse({
-      type: "session.prompt",
+      type: "session.open",
       cityId: "main",
       prompt: "add an endpoint",
       permissionMode: "auto",
@@ -137,40 +139,40 @@ describe("protocol contracts", () => {
     });
 
     expect(command).toEqual({
-      type: "session.prompt",
+      type: "session.open",
       cityId: "main",
       prompt: "add an endpoint",
       permissionMode: "auto",
       contextPaths: ["src/index.ts", "packages/protocol/src/index.ts"],
     });
 
-    const started = GameEventSchema.parse({
+    const created = GameEventSchema.parse({
       ...base,
-      type: "session.started",
+      type: "session.created",
+      cityIdOfSession: "main",
+      title: "Add an endpoint",
       model: "sonnet",
       effort: "xhigh",
       permissionMode: "auto",
+      readOnly: false,
     });
-    expect(started).toMatchObject({
-      type: "session.started",
+    expect(created).toMatchObject({
+      type: "session.created",
       effort: "xhigh",
       permissionMode: "auto",
     });
 
-    const legacyStarted = GameEventSchema.parse({
+    const status = GameEventSchema.parse({
       ...base,
-      type: "session.started",
-      model: "sonnet",
+      type: "session.status",
+      status: "thinking",
     });
-    expect(legacyStarted).toMatchObject({
-      permissionMode: "default",
-      effort: "high",
-    });
+    expect(status).toEqual(expect.objectContaining({ type: "session.status" }));
   });
 
-  it("accepts model and effort on session.prompt", () => {
+  it("accepts model and effort on session.open", () => {
     const command = MayorCommandSchema.parse({
-      type: "session.prompt",
+      type: "session.open",
       cityId: "main",
       prompt: "refactor the district",
       model: "opus",
@@ -178,7 +180,7 @@ describe("protocol contracts", () => {
     });
 
     expect(command).toEqual({
-      type: "session.prompt",
+      type: "session.open",
       cityId: "main",
       prompt: "refactor the district",
       model: "opus",
@@ -188,13 +190,13 @@ describe("protocol contracts", () => {
 
   it("trims and validates mayor prompts", () => {
     const command = MayorCommandSchema.parse({
-      type: "session.prompt",
+      type: "session.open",
       cityId: "main",
       prompt: "  add an endpoint  ",
     });
 
     expect(command).toEqual({
-      type: "session.prompt",
+      type: "session.open",
       cityId: "main",
       prompt: "add an endpoint",
     });
@@ -374,3 +376,147 @@ describe("protocol contracts", () => {
     ).toThrow();
   });
 });
+
+  it("parses session.open with optional configuration and trims its prompt", () => {
+    expect(MayorCommandSchema.parse({
+      type: "session.open",
+      cityId: "main",
+      prompt: "  add an endpoint  ",
+    })).toEqual({
+      type: "session.open",
+      cityId: "main",
+      prompt: "add an endpoint",
+    });
+
+    expect(MayorCommandSchema.parse({
+      type: "session.open",
+      cityId: "pr-51",
+      prompt: "review this change",
+      model: "opus",
+      effort: "max",
+      permissionMode: "auto",
+      title: "PR review",
+    })).toEqual({
+      type: "session.open",
+      cityId: "pr-51",
+      prompt: "review this change",
+      model: "opus",
+      effort: "max",
+      permissionMode: "auto",
+      title: "PR review",
+    });
+  });
+
+  it("requires a session id and non-empty prompt for session.send", () => {
+    expect(MayorCommandSchema.parse({
+      type: "session.send",
+      sessionId: "session_1",
+      prompt: "follow up",
+    })).toEqual({
+      type: "session.send",
+      sessionId: "session_1",
+      prompt: "follow up",
+    });
+    expect(() => MayorCommandSchema.parse({
+      type: "session.send",
+      sessionId: "session_1",
+      prompt: "   ",
+    })).toThrow();
+    expect(() => MayorCommandSchema.parse({
+      type: "session.send",
+      prompt: "follow up",
+    })).toThrow();
+  });
+
+  it("addresses permit decisions to a session and rejects the legacy shape", () => {
+    for (const decision of ["allow", "allow-always", "deny"] as const) {
+      expect(MayorCommandSchema.parse({
+        type: "permit.resolve",
+        sessionId: "session_1",
+        toolCallId: "tool_1",
+        decision,
+      })).toMatchObject({ sessionId: "session_1", decision });
+    }
+    expect(() => MayorCommandSchema.parse({
+      type: "permit.resolve",
+      toolCallId: "tool_1",
+      decision: "allow",
+    })).toThrow();
+  });
+
+  it("defaults session message fields and parses deltas", () => {
+    const message = GameEventSchema.parse({
+      ...base,
+      type: "session.message",
+      messageId: "message_1",
+      role: "agent",
+      text: "hello",
+    });
+    expect(message).toMatchObject({ kind: "text", contextPaths: [] });
+
+    const delta = GameEventSchema.parse({
+      ...base,
+      type: "session.delta",
+      messageId: "message_1",
+      text: "hel",
+    });
+    expect(delta).toMatchObject({ type: "session.delta", kind: "text" });
+  });
+
+  it("parses every session status and turn outcome", () => {
+    for (const status of SessionStatusSchema.options) {
+      expect(GameEventSchema.parse({
+        ...base,
+        type: "session.status",
+        status,
+      })).toMatchObject({ type: "session.status", status });
+    }
+    for (const outcome of TurnOutcomeSchema.options) {
+      expect(GameEventSchema.parse({
+        ...base,
+        type: "turn.completed",
+        turnId: "turn_1",
+        outcome,
+        costUsd: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+        durationMs: 0,
+      })).toMatchObject({ type: "turn.completed", outcome });
+    }
+  });
+
+  it("parses session roster and transcript messages and rejects invalid context percentages", () => {
+    expect(ServerMessageSchema.parse({ kind: "sessions", sessions: [] })).toEqual({
+      kind: "sessions",
+      sessions: [],
+    });
+    const summary = {
+      sessionId: "session_1",
+      cityId: "main",
+      title: "First order",
+      autoTitled: true,
+      status: "idle",
+      model: "sonnet",
+      effort: "high",
+      permissionMode: "default",
+      createdAt: "2026-08-08T05:38:00.000Z",
+      updatedAt: "2026-08-08T05:38:01.000Z",
+      turnCount: 1,
+      costUsd: 0.01,
+      pendingPermitCount: 0,
+      live: false,
+      readOnly: false,
+      lastSequence: 2,
+    };
+    expect(ServerMessageSchema.parse({
+      kind: "transcript",
+      sessionId: "session_1",
+      fromSequence: 0,
+      events: [],
+      hasMore: true,
+    })).toMatchObject({ kind: "transcript", hasMore: true });
+    expect(() => ServerMessageSchema.parse({
+      kind: "session",
+      session: { ...summary, contextPercent: 101 },
+    })).toThrow();
+  });
