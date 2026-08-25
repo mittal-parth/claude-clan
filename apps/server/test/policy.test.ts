@@ -7,7 +7,7 @@ import {
 
 /**
  * The policy object is what the HUD renders and what index.ts checks
- * session.prompt against, so both halves of the restriction live or die on
+ * session.open against, so both halves of the restriction live or die on
  * these lists being exactly right.
  */
 describe("buildCrewPolicy", () => {

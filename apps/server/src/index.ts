@@ -18,6 +18,7 @@ import { buildCrewPolicy, buildSandboxSettings } from "./policy.js";
 import { registerAuthRoutes } from "./routes/auth.js";
 import { registerRepoRoutes } from "./routes/repos.js";
 import { Workspace } from "./workspace.js";
+import { shouldDeliverEvent } from "./event-routing.js";
 import { WorkspaceManager } from "./workspaces.js";
 
 const host = process.env.HOST ?? "127.0.0.1";
@@ -123,6 +124,8 @@ interface ClientState {
   cityId: CityId;
   userId?: number;
   githubToken?: string;
+  /** Sessions whose modals are open; transcript traffic follows these across cities. */
+  subscriptions: Set<string>;
 }
 
 /** Every connected socket, keyed by itself, carrying which workspace+city it's currently viewing. */
@@ -161,26 +164,37 @@ const workspaces = new WorkspaceManager({
       }
     : undefined,
   sink: {
-    onEvent(workspaceKey, cityId, event: GameEvent) {
+    onEvent(workspaceKey, cityId, sessionId, event: GameEvent) {
       const message = JSON.stringify({ kind: "event", event } satisfies ServerMessage);
       for (const [socket, state] of clients) {
         if (
-          state.workspaceKey === workspaceKey &&
-          state.cityId === cityId &&
-          socket.readyState === WebSocket.OPEN
+          socket.readyState !== WebSocket.OPEN ||
+          !shouldDeliverEvent(state, workspaceKey, cityId, sessionId, event)
         ) {
-          socket.send(message);
+          continue;
         }
+        socket.send(message);
       }
       if (event.type === "session.usage") {
-        const workspaceOwnerId = workspaceKey.includes(":") ? Number(workspaceKey.split(":")[0]) : undefined;
+        const workspaceOwnerId = workspaceKey.includes(":")
+          ? Number(workspaceKey.split(":")[0])
+          : undefined;
         for (const [socket, state] of clients) {
           if (
-            (state.workspaceKey === workspaceKey || (workspaceOwnerId !== undefined && state.userId === workspaceOwnerId)) &&
+            (state.workspaceKey === workspaceKey ||
+              (workspaceOwnerId !== undefined && state.userId === workspaceOwnerId)) &&
             socket.readyState === WebSocket.OPEN
           ) {
             sendBudget(socket, state);
           }
+        }
+      }
+    },
+    onSessionChanged(workspaceKey, session) {
+      const message = JSON.stringify({ kind: "session", session } satisfies ServerMessage);
+      for (const [socket, state] of clients) {
+        if (state.workspaceKey === workspaceKey && socket.readyState === WebSocket.OPEN) {
+          socket.send(message);
         }
       }
     },
@@ -256,7 +270,7 @@ function sendWorld(socket: WebSocket, workspace: Workspace, cityId: CityId): voi
   }
   send(socket, {
     kind: "event",
-    event: workspace.createEvent(city, { type: "world.ready", snapshot: city.snapshot }),
+    event: workspace.createWorldEvent(city),
   });
 }
 
@@ -273,6 +287,7 @@ function sendWorkspaceState(socket: WebSocket, workspace: Workspace, cityId: Cit
   send(socket, { kind: "issues", issues: workspace.listIssues() });
   send(socket, { kind: "viewer", login: workspace.viewerLogin() });
   send(socket, { kind: "budget", budget: workspaces.budgetInfo(state?.userId) });
+  send(socket, { kind: "sessions", sessions: workspace.sessionSummaries() });
   sendWorld(socket, workspace, cityId);
   sendOverlay(socket, workspace, cityId);
 }
@@ -290,12 +305,12 @@ app.get("/ws", { websocket: true }, (socket) => {
   // Every client sends repo.select on open (the demo included, as "demo"),
   // and that path replies with the full state — so this costs nothing but the
   // round trip it should always have waited for.
-  clients.set(socket, { cityId: "main" });
+  clients.set(socket, { cityId: "main", subscriptions: new Set() });
   // Connection-level rather than workspace-level, so unlike the world state
   // below it is sent on open: the HUD has to know which crews and thinking
   // levels this deployment allows before the mayor picks either.
   send(socket, { kind: "policy", policy: crewPolicy });
-  sendBudget(socket, { cityId: "main" });
+  sendBudget(socket, { cityId: "main", subscriptions: new Set() });
   socket.once("close", () => clients.delete(socket));
 
   function currentWorkspace(): Workspace | undefined {
@@ -377,6 +392,7 @@ app.get("/ws", { websocket: true }, (socket) => {
           cityId: "main",
           userId: currentState.userId,
           githubToken: currentState.githubToken,
+          subscriptions: new Set(),
         });
         sendWorkspaceState(socket, demoWorkspace, "main");
         return;
@@ -427,6 +443,7 @@ app.get("/ws", { websocket: true }, (socket) => {
         cityId: "main",
         userId: currentState.userId,
         githubToken: currentState.githubToken,
+        subscriptions: new Set(),
       });
       sendWorkspaceState(socket, existing, "main");
       return;
@@ -446,6 +463,39 @@ app.get("/ws", { websocket: true }, (socket) => {
       return city;
     }
 
+    function sendSessionError(error: { code: string; message?: string }): void {
+      const fallback = error.code === "SESSION_NOT_FOUND"
+        ? "That session no longer exists."
+        : error.code === "SESSION_CLOSED"
+          ? "That session is closed."
+          : error.code === "TOO_MANY_SESSIONS"
+            ? "This city has reached its session limit."
+            : error.code === "TOO_MANY_RUNNING_SESSIONS"
+              ? "Too many crews are running at once."
+              : "That order cannot be funded right now.";
+      send(socket, { kind: "error", code: error.code, message: error.message ?? fallback });
+    }
+
+    function policyAllows(model?: string, effort?: typeof crewPolicy.allowedEfforts[number]): boolean {
+      if (model && !crewPolicy.allowedModels.includes(model)) {
+        send(socket, {
+          kind: "error",
+          code: "MODEL_NOT_ALLOWED",
+          message: `The ${model} crew is not on duty on this server.`,
+        });
+        return false;
+      }
+      if (effort && !crewPolicy.allowedEfforts.includes(effort)) {
+        send(socket, {
+          kind: "error",
+          code: "EFFORT_NOT_ALLOWED",
+          message: `Thinking level "${effort}" is not available on this server.`,
+        });
+        return false;
+      }
+      return true;
+    }
+
     switch (data.type) {
       case "world.request": {
         if (!requireCity(data.cityId)) {
@@ -461,76 +511,160 @@ app.get("/ws", { websocket: true }, (socket) => {
         });
         break;
       }
-      case "session.prompt": {
+      case "session.open": {
         if (!requireCity(data.cityId)) {
           break;
         }
-        // The HUD opens a sign-in modal instead of sending this, but the
-        // socket is the real boundary -- nothing stops a client sending
-        // whatever it likes.
         if (demoIsLocked(workspace)) {
           sendSignInRequired(socket, "dispatch a crew");
           break;
         }
-        if (data.model && !crewPolicy.allowedModels.includes(data.model)) {
-          send(socket, {
-            kind: "error",
-            code: "MODEL_NOT_ALLOWED",
-            message: `The ${data.model} crew is not on duty on this server.`,
-          });
+        if (!policyAllows(data.model, data.effort)) {
           break;
         }
-        if (data.effort && !crewPolicy.allowedEfforts.includes(data.effort)) {
-          send(socket, {
-            kind: "error",
-            code: "EFFORT_NOT_ALLOWED",
-            message: `Thinking level "${data.effort}" is not available on this server.`,
-          });
-          break;
-        }
-        // Reject up front rather than starting a run with a $0 ceiling, which
-        // would fail somewhere inside the SDK with a much worse message.
-        if (workspace.remainingBudgetUsd() <= 0) {
-          const spent = state.userId === undefined
-            ? undefined
-            : workspaces.userSpentUsd(state.userId);
-          send(socket, {
-            kind: "error",
-            code: "BUDGET_EXHAUSTED",
-            message:
-              spent !== undefined && workspaces.remainingUserBudget(state.userId!) <= 0
-                ? `The treasury is empty: you have spent $${spent.toFixed(2)} of your $${PER_USER_MAX_BUDGET_USD.toFixed(2)} allowance.`
-                : "The city treasury is empty. No further orders can be funded right now.",
-          });
-          break;
-        }
-        workspace.prompt(data.cityId, data.prompt, {
+        const result = await workspace.openSession(data.cityId, {
+          prompt: data.prompt,
+          title: "title" in data ? data.title : undefined,
           permissionMode: data.permissionMode,
           contextPaths: data.contextPaths,
           model: data.model,
           effort: data.effort,
         });
+        if ("error" in result) {
+          sendSessionError(result.error);
+          break;
+        }
+        state.subscriptions.add(result.session.sessionId);
+        send(socket, { kind: "session", session: result.session });
+        const initialTranscript = workspace.transcript(result.session.sessionId);
+        if (initialTranscript) {
+          send(socket, {
+            kind: "transcript",
+            sessionId: result.session.sessionId,
+            fromSequence: initialTranscript.fromSequence,
+            events: initialTranscript.events,
+            hasMore: initialTranscript.hasMore,
+          });
+        }
+        break;
+      }
+      case "session.send": {
+        if (demoIsLocked(workspace)) {
+          sendSignInRequired(socket, "send a follow-up order");
+          break;
+        }
+        const result = await workspace.sendToSession(
+          data.sessionId,
+          data.prompt,
+          data.contextPaths,
+        );
+        if ("error" in result) {
+          sendSessionError(result.error);
+        }
         break;
       }
       case "session.interrupt": {
-        if (!requireCity(data.cityId)) {
-          break;
+        if (!(await workspace.interruptSession(data.sessionId))) {
+          send(socket, {
+            kind: "error",
+            code: "SESSION_NOT_FOUND",
+            message: "That session no longer exists.",
+            sessionId: data.sessionId,
+          });
         }
-        workspace.interrupt(data.cityId);
         break;
       }
+      case "session.rename": {
+        if (!(await workspace.renameSession(data.sessionId, data.title))) {
+          send(socket, {
+            kind: "error",
+            code: "SESSION_NOT_FOUND",
+            message: "That session no longer exists.",
+            sessionId: data.sessionId,
+          });
+        }
+        break;
+      }
+      case "session.configure": {
+        if (demoIsLocked(workspace)) {
+          sendSignInRequired(socket, "configure a crew");
+          break;
+        }
+        if (!policyAllows(data.model, data.effort)) {
+          break;
+        }
+        if (!(await workspace.configureSession(data.sessionId, data))) {
+          send(socket, {
+            kind: "error",
+            code: "SESSION_NOT_FOUND",
+            message: "That session is closed or no longer exists.",
+            sessionId: data.sessionId,
+          });
+        }
+        break;
+      }
+      case "session.close": {
+        if (!(await workspace.closeSession(data.sessionId))) {
+          send(socket, {
+            kind: "error",
+            code: "SESSION_NOT_FOUND",
+            message: "That session no longer exists.",
+            sessionId: data.sessionId,
+          });
+          break;
+        }
+        for (const clientState of clients.values()) {
+          clientState.subscriptions.delete(data.sessionId);
+        }
+        break;
+      }
+      case "session.subscribe": {
+        const transcript = workspace.transcript(data.sessionId, data.afterSequence);
+        if (!transcript) {
+          send(socket, {
+            kind: "error",
+            code: "SESSION_NOT_FOUND",
+            message: "That session no longer exists.",
+            sessionId: data.sessionId,
+          });
+          break;
+        }
+        state.subscriptions.add(data.sessionId);
+        send(socket, {
+          kind: "transcript",
+          sessionId: data.sessionId,
+          fromSequence: transcript.fromSequence,
+          events: transcript.events,
+          hasMore: transcript.hasMore,
+        });
+        break;
+      }
+      case "session.unsubscribe":
+        state.subscriptions.delete(data.sessionId);
+        break;
+      case "session.list":
+        send(socket, {
+          kind: "sessions",
+          sessions: workspace.sessionSummaries(data.cityId),
+        });
+        break;
       case "permit.resolve": {
         if (demoIsLocked(workspace)) {
           sendSignInRequired(socket, "stamp a permit");
           break;
         }
-        const resolved = workspace.resolvePermit(data.toolCallId, data.decision);
+        const resolved = workspace.resolvePermit(
+          data.sessionId,
+          data.toolCallId,
+          data.decision,
+        );
         if (!resolved) {
           send(socket, {
             kind: "error",
             code: "PERMIT_NOT_FOUND",
             message: "This permit is no longer pending.",
             toolCallId: data.toolCallId,
+            sessionId: data.sessionId,
           });
         }
         break;
