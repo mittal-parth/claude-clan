@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { type RepoSummary } from "@sudo-city/protocol";
+import { type RepoSummary, RUNNING_SESSION_STATUSES } from "@sudo-city/protocol";
 import { cn } from "@/lib/utils";
 import { type AuthUser } from "@/auth/gate";
 import { GameCanvas, type CanvasAirportTravel } from "@/components/GameCanvas";
@@ -8,7 +8,7 @@ import { useFps } from "@/components/fps-provider";
 import { useGameState } from "@/hooks/use-game-state";
 import { AppHud } from "@/components/hud/AppHud";
 import { AppDialogs } from "@/components/hud/AppDialogs";
-import { crewSpriteUrl } from "@/crew/catalog";
+import { crewSpriteUrl, findCrewByModel, getCrewMember } from "@/crew/catalog";
 import type { BillboardRepo, BillboardTarget } from "@/game/layouts/billboards";
 
 export interface AppProps {
@@ -77,15 +77,29 @@ export default function App(props: AppProps) {
     window.open(target.url, "_blank", "noopener,noreferrer");
   }
 
-  const startedSession = state.events
-    .slice()
-    .reverse()
-    .find((event) => event.type === "session.started");
-  const activeEffort =
-    startedSession?.type === "session.started"
-      ? startedSession.effort
-      : state.crewSelection.effort;
-  const crewSprite = crewSpriteUrl(state.crewSelection.crewId, activeEffort);
+  const activeCrews = state.sessions.sessions
+    .filter((summary) => {
+      if (summary.cityId !== state.activeCityId) return false;
+      const hasSites = (state.constructionBySession[summary.sessionId]?.length ?? 0) > 0;
+      const running = RUNNING_SESSION_STATUSES.includes(
+        summary.status as (typeof RUNNING_SESSION_STATUSES)[number],
+      );
+      return running || hasSites;
+    })
+    .map((summary) => {
+      const crew = findCrewByModel(summary.model) ?? getCrewMember("sonnet");
+      return {
+        sessionId: summary.sessionId,
+        sprite: crewSpriteUrl(crew.id, summary.effort),
+        paths: state.constructionBySession[summary.sessionId] ?? [],
+      };
+    });
+  const focusedMapSessionId = state.sessions.focusedSessionId
+    ?? state.sessions.sessions.find(
+      (summary) =>
+        summary.cityId === state.activeCityId &&
+        RUNNING_SESSION_STATUSES.includes(summary.status as (typeof RUNNING_SESSION_STATUSES)[number]),
+    )?.sessionId;
 
   return (
     <div
@@ -145,8 +159,8 @@ export default function App(props: AppProps) {
         }
         fileChange={state.fileChange}
         cities={state.cities}
-        buildingPaths={state.buildingPaths}
-        crewSprite={crewSprite}
+        crews={activeCrews}
+        focusedSessionId={focusedMapSessionId}
         issues={state.issues}
         travelRequest={state.navyTravelRequest ?? state.issueTravelRequest}
         airportTravel={airportTravel}

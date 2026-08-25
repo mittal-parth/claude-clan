@@ -11,6 +11,7 @@ import type { BillboardRepo, BillboardTarget } from "../game/layouts/billboards"
 import {
   WorldScene,
   type FileChange,
+  type SceneCrew,
   type ShipHoverInfo,
 } from "../game/WorldScene";
 
@@ -60,6 +61,8 @@ export type GameCanvasHandle = {
   skipTransition: () => void;
 };
 
+export type CanvasCrew = SceneCrew;
+
 interface GameCanvasProps {
   cityId: string;
   /** Repository identity is separate from cityId (both repositories have a main). */
@@ -85,10 +88,10 @@ interface GameCanvasProps {
   airportArrival?: CanvasAirportTravel;
   /** Names the repository on the airport billboard; absent in demo mode. */
   repo?: BillboardRepo;
-  /** Public URL of the portrait to stand on every construction site. */
-  crewSprite?: string;
-  /** Files the crew is working on; each gets a construction site. */
-  buildingPaths?: string[];
+  /** Crew portraits and construction paths, one entry per active session. */
+  crews?: readonly CanvasCrew[];
+  /** Session whose work is allowed to pull the camera into view. */
+  focusedSessionId?: string;
   /** Starts loading the destination while the current city remains on screen. */
   onTravelRequest?: (cityId: string) => void;
   /** Commits the application chrome to the new city after the arrival animation. */
@@ -137,8 +140,8 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
       airportTravel,
       airportArrival,
       repo,
-      crewSprite,
-      buildingPaths,
+      crews,
+      focusedSessionId,
       onTravelRequest,
       onTravelComplete,
       onTravelTransitionChange,
@@ -667,19 +670,21 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
     }, [fileChange]);
 
     useEffect(() => {
-      sceneRef.current?.setCrewSprite(crewSprite);
-    }, [crewSprite]);
-
-    useEffect(() => {
       sceneRef.current?.setRepoIdentity(repo);
     }, [repo]);
 
-    // Joined rather than passed by identity: the parent rebuilds this array on
-    // every event, and only a change in membership should disturb the sites.
-    const pathKey = (buildingPaths ?? []).join("\0");
+    // The key keeps a new React array from rebuilding every construction site
+    // on unrelated HUD events; membership or a path change is what matters.
+    const crewsKey = (crews ?? [])
+      .map((crew) => `${crew.sessionId}:${crew.sprite}:${crew.paths.join("\0")}`)
+      .join("\x01");
     useEffect(() => {
-      sceneRef.current?.setBuildingPaths(pathKey ? pathKey.split("\0") : []);
-    }, [pathKey]);
+      sceneRef.current?.setCrews(crews ?? []);
+    }, [crewsKey]);
+
+    useEffect(() => {
+      sceneRef.current?.setFocusedSessionId(focusedSessionId);
+    }, [focusedSessionId]);
 
     return (
       <div
