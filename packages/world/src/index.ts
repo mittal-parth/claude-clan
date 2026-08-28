@@ -372,7 +372,23 @@ export class SQLiteWorldStore implements WorldStore {
   }
 
   deleteSession(sessionId: string): void {
-    this.database.prepare(`DELETE FROM sessions WHERE session_id = ?`).run(sessionId);
+    const deleteEvents = this.database.prepare(
+      `DELETE FROM events WHERE session_id = ?`,
+    );
+    const deleteSession = this.database.prepare(
+      `DELETE FROM sessions WHERE session_id = ?`,
+    );
+    this.database.exec("BEGIN IMMEDIATE");
+    try {
+      // Hard deletion must remove the transcript too; normal session.close is
+      // intentionally a soft close so its history remains readable.
+      deleteEvents.run(sessionId);
+      deleteSession.run(sessionId);
+      this.database.exec("COMMIT");
+    } catch (error) {
+      this.database.exec("ROLLBACK");
+      throw error;
+    }
   }
 
   saveSnapshot(worldId: string, snapshot: WorldSnapshot): void {

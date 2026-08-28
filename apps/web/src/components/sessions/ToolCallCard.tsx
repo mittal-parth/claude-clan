@@ -19,7 +19,7 @@ function inputText(item: Extract<ChatItem, { kind: "tool" }>): string | undefine
 export function ToolCallCard({ item }: ToolCallCardProps) {
   const Icon = toolIconFor(item.tool);
   const statusIcon = item.status === "running"
-    ? <Loader2 className="size-3 animate-spin" aria-hidden="true" />
+    ? <Loader2 className="size-3 animate-spin text-amber-400" aria-hidden="true" />
     : item.status === "success"
       ? <Check className="size-3 text-[var(--color-signal)]" aria-hidden="true" />
       : item.status === "interrupted"
@@ -33,15 +33,19 @@ export function ToolCallCard({ item }: ToolCallCardProps) {
   return (
     <details
       className={cn(
-        "border-l-2 border-border/70 bg-muted/10 px-2 py-1.5",
-        item.status === "error" || item.status === "denied"
-          ? "border-l-destructive"
-          : item.status === "interrupted" && "border-l-muted-foreground",
+        "border-l-2 border-border/70 bg-muted/10 px-2 py-1.5 transition-colors min-w-0 max-w-full overflow-hidden",
+        item.status === "running"
+          ? "border-l-amber-400 bg-amber-500/[0.08]"
+          : item.status === "error" || item.status === "denied"
+            ? "border-l-destructive bg-destructive/5"
+            : item.status === "interrupted"
+              ? "border-l-muted-foreground"
+              : "border-l-amber-500/50 hover:border-l-amber-400",
       )}
     >
-      <summary className="flex cursor-pointer list-none items-center gap-1.5">
-        <Icon className="size-3 shrink-0 text-primary" aria-hidden="true" />
-        <span className="retro min-w-0 truncate text-[8px] text-foreground">
+      <summary className="flex cursor-pointer list-none items-center gap-1.5 min-w-0 w-full">
+        <Icon className="size-3 shrink-0 text-amber-400" aria-hidden="true" />
+        <span className="retro min-w-0 flex-1 truncate text-[8px] text-foreground">
           {item.tool}
           {item.target ? ` · ${item.target}` : ""}
         </span>
@@ -53,14 +57,14 @@ export function ToolCallCard({ item }: ToolCallCardProps) {
         </span>
       </summary>
       {input || result ? (
-        <div className="mt-2 grid gap-1.5">
+        <div className="mt-2 grid gap-1.5 min-w-0 max-w-full">
           {input ? (
-            <pre className="max-h-40 overflow-auto border border-border/40 bg-background/60 p-1.5 text-[8px] leading-relaxed text-foreground">
+            <pre className="max-h-40 overflow-x-auto max-w-full border border-border/40 bg-background/60 p-1.5 text-[8px] leading-relaxed text-foreground whitespace-pre-wrap break-all">
               {input}
             </pre>
           ) : null}
           {result ? (
-            <pre className="max-h-48 overflow-auto border border-border/40 bg-background/60 p-1.5 text-[8px] leading-relaxed text-muted-foreground">
+            <pre className="max-h-48 overflow-x-auto max-w-full border border-border/40 bg-background/60 p-1.5 text-[8px] leading-relaxed text-muted-foreground whitespace-pre-wrap break-all">
               {result}
             </pre>
           ) : null}

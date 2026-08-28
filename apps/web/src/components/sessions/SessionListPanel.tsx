@@ -1,3 +1,4 @@
+import { Archive } from "lucide-react";
 import type { SessionSummary } from "@sudo-city/protocol";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { SessionRow } from "./SessionRow";
@@ -10,7 +11,8 @@ export interface SessionListPanelProps {
   permitCount: number;
   unreadFor: (sessionId: string) => number;
   onSelect: (sessionId: string) => void;
-  onNewOrder: () => void;
+  onArchive: (sessionId: string) => void;
+  onOpenArchived: () => void;
 }
 
 export function SessionListPanel({
@@ -21,7 +23,8 @@ export function SessionListPanel({
   permitCount,
   unreadFor,
   onSelect,
-  onNewOrder,
+  onArchive,
+  onOpenArchived,
 }: SessionListPanelProps) {
   const counts = [
     runningCount > 0 ? `${runningCount} running` : undefined,
@@ -31,7 +34,7 @@ export function SessionListPanel({
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-1.5 border-t border-border/50 pt-2">
       <div className="flex items-center justify-between gap-2">
-        <span className="hud-label">Sessions</span>
+        <span className="hud-label">Orders</span>
         <div className="flex items-center gap-2">
           {counts ? <span className="hud-pill">{counts}</span> : null}
           {permitCount > 0 ? (
@@ -41,10 +44,12 @@ export function SessionListPanel({
           ) : null}
           <button
             type="button"
-            className="retro text-[8px] uppercase text-muted-foreground transition-colors hover:text-foreground"
-            onClick={onNewOrder}
+            className="retro inline-flex cursor-pointer items-center gap-1 text-[8px] uppercase text-muted-foreground transition-colors hover:text-primary focus-visible:text-primary"
+            onClick={onOpenArchived}
+            title="Open archived orders"
           >
-            New order
+            <Archive className="size-3" aria-hidden="true" />
+            Archive
           </button>
         </div>
       </div>
@@ -58,7 +63,9 @@ export function SessionListPanel({
                 activeCityId={activeCityId}
                 focused={summary.sessionId === focusedSessionId}
                 unread={unreadFor(summary.sessionId)}
+                action="archive"
                 onSelect={() => onSelect(summary.sessionId)}
+                onAction={() => onArchive(summary.sessionId)}
               />
             ))}
           </div>

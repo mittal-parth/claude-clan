@@ -109,6 +109,54 @@ describe("sessionsReducer", () => {
     expect(state.byId["session-1"]?.events.map((item) => item.sequence)).toEqual([1, 2]);
   });
 
+  it("keeps background events unread until the session is seen", () => {
+    let state = withSummary(summary({ lastSequence: 7 }));
+    state = sessionsReducer(state, {
+      type: "event",
+      event: event(8, "session.message", {
+        messageId: "message-8",
+        role: "agent",
+        text: "background update",
+      }),
+    });
+    state = sessionsReducer(state, {
+      type: "summary",
+      session: summary({ lastSequence: 8 }),
+    });
+
+    expect(state.byId["session-1"]?.seenSequence).toBe(7);
+
+    state = sessionsReducer(state, { type: "seen", sessionId: "session-1" });
+
+    expect(state.byId["session-1"]?.seenSequence).toBe(8);
+  });
+
+  it("marks incoming events as seen while the session is focused", () => {
+    let state = withSummary();
+    state = sessionsReducer(state, { type: "focus", sessionId: "session-1" });
+    state = sessionsReducer(state, {
+      type: "event",
+      event: event(1, "session.message", {
+        messageId: "message-1",
+        role: "agent",
+        text: "focused update",
+      }),
+    });
+
+    expect(state.byId["session-1"]?.seenSequence).toBe(1);
+  });
+
+  it("marks the latest summary sequence as seen even before transcript hydration", () => {
+    let state = withSummary();
+    state = sessionsReducer(state, {
+      type: "summary",
+      session: summary({ lastSequence: 9 }),
+    });
+    state = sessionsReducer(state, { type: "seen", sessionId: "session-1" });
+
+    expect(state.byId["session-1"]?.seenSequence).toBe(9);
+  });
+
   it("accumulates deltas outside the durable event list", () => {
     let state = withSummary();
     state = sessionsReducer(state, {
@@ -236,5 +284,79 @@ describe("sessionsReducer", () => {
     expect(view?.events).toHaveLength(EVENTS_PER_SESSION_CAP);
     expect(view?.events[0]?.sequence).toBe(1);
     expect(view?.trimmed).toBe(true);
+  });
+
+  it("accumulates multiple deltas under the same messageId into a single string", () => {
+    let state = withSummary();
+    const msgId = "msg_011CeVKL7iwyLEUSK3vPKYsd:thinking";
+    state = sessionsReducer(state, {
+      type: "event",
+      event: event(1, "session.delta", {
+        messageId: msgId,
+        kind: "thinking",
+        text: "The user wants ",
+      }),
+    });
+    state = sessionsReducer(state, {
+      type: "event",
+      event: event(2, "session.delta", {
+        messageId: msgId,
+        kind: "thinking",
+        text: "to edit README.",
+      }),
+    });
+
+    const view = state.byId["session-1"];
+    expect(Object.keys(view?.streaming ?? {})).toHaveLength(1);
+    expect(view?.streaming[msgId]).toBe("The user wants to edit README.");
+  });
+
+  it("clears streaming thinking when tool.started arrives", () => {
+    let state = withSummary();
+    const thinkingId = "msg_1:thinking";
+    state = sessionsReducer(state, {
+      type: "event",
+      event: event(1, "session.delta", {
+        messageId: thinkingId,
+        kind: "thinking",
+        text: "Let me check the files",
+      }),
+    });
+    expect(state.byId["session-1"]?.streaming[thinkingId]).toBe("Let me check the files");
+
+    state = sessionsReducer(state, {
+      type: "event",
+      event: event(2, "tool.started", {
+        toolCallId: "tool-1",
+        tool: "Read",
+        target: "README.md",
+      }),
+    });
+    expect(state.byId["session-1"]?.streaming[thinkingId]).toBeUndefined();
+  });
+
+  it("clears all streaming buffers when turn.completed or idle status arrives", () => {
+    let state = withSummary();
+    state = sessionsReducer(state, {
+      type: "event",
+      event: event(1, "session.delta", {
+        messageId: "msg_1",
+        kind: "text",
+        text: "Some trailing stream",
+      }),
+    });
+    expect(state.byId["session-1"]?.streaming["msg_1"]).toBe("Some trailing stream");
+
+    state = sessionsReducer(state, {
+      type: "event",
+      event: event(2, "turn.completed", {
+        turnId: "turn-1",
+        outcome: "success",
+        costUsd: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+      }),
+    });
+    expect(state.byId["session-1"]?.streaming).toEqual({});
   });
 });

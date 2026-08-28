@@ -123,13 +123,13 @@ export default function App(props: AppProps) {
           alt=""
           aria-hidden="true"
           draggable={false}
-          className="pointer-events-none fixed z-[100] select-none"
+          className="pointer-events-none fixed z-[100] select-none drop-shadow-md"
           style={{
             left: state.dragPosition.clientX,
             top: state.dragPosition.clientY,
             transform: "translate(-50%, -100%)",
-            opacity: 0.48,
-            width: 32,
+            opacity: 0.7,
+            width: 34,
             height: "auto",
             imageRendering: "pixelated",
           }}
@@ -162,7 +162,11 @@ export default function App(props: AppProps) {
         crews={activeCrews}
         focusedSessionId={focusedMapSessionId}
         issues={state.issues}
-        travelRequest={state.navyTravelRequest ?? state.issueTravelRequest}
+        travelRequest={
+          state.teleportTravelRequest ??
+          state.navyTravelRequest ??
+          state.issueTravelRequest
+        }
         airportTravel={airportTravel}
         airportArrival={airportArrival}
         repo={billboardRepo}

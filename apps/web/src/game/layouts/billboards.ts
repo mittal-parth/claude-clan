@@ -85,7 +85,7 @@ export const SPONSORS: readonly Sponsor[] = [
   {
     id: "pushtoprod",
     name: "PushToProd.art",
-    url: "https://pushtoprod.art",
+    url: "https://pushtoprod-india.devfolio.co/overview",
     artwork: "/ads/pushtoprod.webp",
     size: "square",
     background: "#f4ede1",
@@ -93,7 +93,7 @@ export const SPONSORS: readonly Sponsor[] = [
   {
     id: "basecamp",
     name: "Basecamp",
-    url: "https://basecamp.com",
+    url: "https://www.basecampblr.com/",
     artwork: "/ads/basecamp.png",
     size: "small",
     background: "#283441",

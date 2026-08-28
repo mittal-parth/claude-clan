@@ -34,8 +34,12 @@ interface ContentBlock {
 interface StructuralMessage {
   type?: unknown;
   uuid?: unknown;
-  message?: { content?: unknown };
-  event?: { type?: unknown; delta?: { type?: unknown; text?: unknown; thinking?: unknown } };
+  message?: { id?: unknown; content?: unknown };
+  event?: {
+    type?: unknown;
+    message?: { id?: unknown };
+    delta?: { type?: unknown; text?: unknown; thinking?: unknown };
+  };
   compact_metadata?: {
     trigger?: unknown;
     pre_tokens?: unknown;
@@ -55,18 +59,22 @@ function stringValue(value: unknown): string | undefined {
 export function translateMessage(
   input: unknown,
   turnId?: string,
+  currentMessageId?: string,
 ): TranslatedAgentEvent[] {
   if (typeof input !== "object" || input === null) {
     return [];
   }
   const message = input as StructuralMessage;
-  const messageId = stringValue(message.uuid);
-  if (!messageId) {
-    return [];
-  }
 
   if (message.type === "assistant") {
     if (!Array.isArray(message.message?.content)) {
+      return [];
+    }
+    const messageId =
+      stringValue(message.message?.id) ??
+      currentMessageId ??
+      stringValue(message.uuid);
+    if (!messageId) {
       return [];
     }
     const events: TranslatedAgentEvent[] = [];
@@ -115,6 +123,13 @@ export function translateMessage(
   if (message.type === "stream_event") {
     const event = message.event;
     if (event?.type !== "content_block_delta") {
+      return [];
+    }
+    const messageId =
+      currentMessageId ??
+      stringValue(event.message?.id) ??
+      stringValue(message.uuid);
+    if (!messageId) {
       return [];
     }
     if (event.delta?.type === "text_delta") {

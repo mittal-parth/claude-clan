@@ -55,4 +55,85 @@ describe("agent translation", () => {
     ]));
     expect(JSON.stringify(events)).not.toContain("encrypted payload");
   });
+
+  it("shares stable messageId across stream chunks and matches final assistant message", () => {
+    const stableMessageId = "msg_011CeVKL7iwyLEUSK3vPKYsd";
+
+    // 1. Thinking delta chunk 1 (random frame uuid)
+    const chunk1 = translateMessage({
+      type: "stream_event",
+      uuid: "random-uuid-1",
+      event: {
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "thinking_delta", thinking: "The user wants " },
+      },
+    }, "turn-1", stableMessageId);
+
+    // 2. Thinking delta chunk 2 (different random frame uuid)
+    const chunk2 = translateMessage({
+      type: "stream_event",
+      uuid: "random-uuid-2",
+      event: {
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "thinking_delta", thinking: "to edit README." },
+      },
+    }, "turn-1", stableMessageId);
+
+    // Both chunks must share the EXACT SAME messageId so the client accumulates them in one box
+    expect(chunk1).toEqual([
+      {
+        type: "session.delta",
+        messageId: `${stableMessageId}:thinking`,
+        turnId: "turn-1",
+        kind: "thinking",
+        text: "The user wants ",
+      },
+    ]);
+    expect(chunk2).toEqual([
+      {
+        type: "session.delta",
+        messageId: `${stableMessageId}:thinking`,
+        turnId: "turn-1",
+        kind: "thinking",
+        text: "to edit README.",
+      },
+    ]);
+
+    // 3. Final assistant message arrives
+    const assistant = translateMessage({
+      type: "assistant",
+      uuid: "assistant-random-uuid",
+      message: {
+        id: stableMessageId,
+        content: [
+          { type: "thinking", thinking: "The user wants to edit README." },
+          { type: "text", text: "Done!" },
+        ],
+      },
+    }, "turn-1", stableMessageId);
+
+    // The thinking messageId must match the delta stream messageId exactly so it clears and replaces it
+    expect(assistant).toEqual([
+      {
+        type: "session.message",
+        messageId: `${stableMessageId}:thinking`,
+        turnId: "turn-1",
+        role: "agent",
+        kind: "thinking",
+        text: "The user wants to edit README.",
+        contextPaths: [],
+      },
+      {
+        type: "session.message",
+        messageId: stableMessageId,
+        turnId: "turn-1",
+        role: "agent",
+        kind: "text",
+        text: "Done!",
+        contextPaths: [],
+      },
+    ]);
+  });
 });

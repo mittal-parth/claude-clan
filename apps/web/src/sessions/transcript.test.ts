@@ -107,6 +107,43 @@ describe("toChatItems", () => {
     expect(items.find((item) => item.id === "stream:live")).toMatchObject({ streaming: true });
   });
 
+  it("renders a single live thinking stream item and suppresses it when final message arrives", () => {
+    const liveThinking = toChatItems(view([], {
+      "msg_1:thinking": "Thinking step by step...",
+    }));
+    expect(liveThinking).toHaveLength(1);
+    expect(liveThinking[0]).toMatchObject({
+      kind: "thinking",
+      id: "stream:msg_1:thinking",
+      text: "Thinking step by step...",
+      streaming: true,
+    });
+
+    const finalizedWithThinkingId = toChatItems(view([
+      event(1, "session.message", { messageId: "msg_1:thinking", role: "agent", kind: "thinking", text: "Thinking step by step..." }),
+    ], {
+      "msg_1:thinking": "Thinking step by step...",
+    }));
+    expect(finalizedWithThinkingId).toHaveLength(1);
+    expect(finalizedWithThinkingId[0]).toMatchObject({
+      kind: "thinking",
+      id: "event-1",
+      streaming: false,
+    });
+
+    const finalizedWithBaseId = toChatItems(view([
+      event(1, "session.message", { messageId: "msg_1", role: "agent", kind: "thinking", text: "Thinking step by step..." }),
+    ], {
+      "msg_1:thinking": "Thinking step by step...",
+    }));
+    expect(finalizedWithBaseId).toHaveLength(1);
+    expect(finalizedWithBaseId[0]).toMatchObject({
+      kind: "thinking",
+      id: "event-1",
+      streaming: false,
+    });
+  });
+
   it("renders turn dividers and excludes turn.started and usage events", () => {
     const items = toChatItems(view([
       event(1, "turn.started", { turnId: "turn-1", prompt: "start", contextPaths: [] }),

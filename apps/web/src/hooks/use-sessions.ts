@@ -34,6 +34,7 @@ export function useSessions({
 }: UseSessionsOptions) {
   const [state, dispatch] = useReducer(sessionsReducer, initialSessionsState);
   const focusNextOpenedSessionRef = useRef(false);
+  const pendingUnarchiveSessionRef = useRef<string | undefined>(undefined);
 
   const dispatchAction = useCallback((action: SessionsAction) => {
     dispatch(action);
@@ -51,7 +52,7 @@ export function useSessions({
           });
         }
         break;
-      case "session":
+      case "session": {
         dispatch({ type: "summary", session: message.session });
         dispatch({
           type: "stored",
@@ -62,7 +63,15 @@ export function useSessions({
           focusNextOpenedSessionRef.current = false;
           dispatch({ type: "focus", sessionId: message.session.sessionId });
         }
+        if (
+          pendingUnarchiveSessionRef.current === message.session.sessionId &&
+          message.session.status !== "closed"
+        ) {
+          pendingUnarchiveSessionRef.current = undefined;
+          dispatch({ type: "focus", sessionId: message.session.sessionId });
+        }
         break;
+      }
       case "transcript":
         dispatch({
           type: "transcript",
@@ -82,6 +91,8 @@ export function useSessions({
 
   useEffect(() => {
     dispatch({ type: "reset" });
+    focusNextOpenedSessionRef.current = false;
+    pendingUnarchiveSessionRef.current = undefined;
   }, [activeRepoKey]);
 
   useEffect(() => {
@@ -182,12 +193,19 @@ export function useSessions({
     send({ type: "session.configure", sessionId, ...changes });
   }, [send]);
 
-  const closeSession = useCallback((sessionId: string): void => {
+  const archiveSession = useCallback((sessionId: string): void => {
     send({ type: "session.close", sessionId });
     if (state.focusedSessionId === sessionId) {
       dispatch({ type: "focus" });
     }
   }, [send, state.focusedSessionId]);
+
+  const unarchiveSession = useCallback((sessionId: string): void => {
+    pendingUnarchiveSessionRef.current = sessionId;
+    send({ type: "session.unarchive", sessionId });
+  }, [send]);
+
+  const closeSession = archiveSession;
 
   const resolvePermit = useCallback((
     sessionId: string,
@@ -201,12 +219,20 @@ export function useSessions({
     send({ type: "permit.resolve", sessionId, toolCallId, decision });
   }, [demoLocked, onDemoGate, send]);
 
-  const summaries = useMemo(
+  const allSummaries = useMemo(
     () => state.order.flatMap((sessionId) => {
       const summary = state.byId[sessionId]?.summary;
       return summary ? [summary] : [];
     }),
     [state.byId, state.order],
+  );
+  const archivedSessions = useMemo(
+    () => allSummaries.filter((summary) => summary.status === "closed"),
+    [allSummaries],
+  );
+  const summaries = useMemo(
+    () => allSummaries.filter((summary) => summary.status !== "closed"),
+    [allSummaries],
   );
 
   const sessionsById = state.byId;
@@ -223,6 +249,7 @@ export function useSessions({
     dispatch: dispatchAction,
     handleServerMessage,
     sessions: summaries,
+    archivedSessions,
     sessionsById,
     focusedSessionId: state.focusedSessionId,
     openSession,
@@ -230,6 +257,8 @@ export function useSessions({
     interruptSession,
     renameSession,
     configureSession,
+    archiveSession,
+    unarchiveSession,
     closeSession,
     focusSession,
     blurSession,

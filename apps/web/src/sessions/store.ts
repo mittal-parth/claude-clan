@@ -56,7 +56,9 @@ function createView(summary: SessionSummary): SessionView {
     summary,
     events: [],
     streaming: {},
-    seenSequence: 0,
+    // History that predates this view is not unread activity. New events keep
+    // this cursor unchanged until the session is focused or explicitly seen.
+    seenSequence: summary.lastSequence,
     hydrated: false,
     pending: [],
     trimmed: false,
@@ -74,6 +76,16 @@ function cloneView(view: SessionView): SessionView {
   };
 }
 
+function markViewSeen(view: SessionView): SessionView {
+  const next = cloneView(view);
+  next.seenSequence = Math.max(
+    next.seenSequence,
+    next.summary.lastSequence,
+    next.events.at(-1)?.sequence ?? 0,
+  );
+  return next;
+}
+
 function eventExists(view: SessionView, event: GameEvent): boolean {
   return view.eventIds.has(event.id);
 }
@@ -82,6 +94,7 @@ function mergeEvents(
   view: SessionView,
   incoming: readonly GameEvent[],
   replace: boolean,
+  markSeen = false,
 ): SessionView {
   const next = cloneView(view);
   if (replace) {
@@ -94,6 +107,19 @@ function mergeEvents(
         continue;
       }
       next.eventIds.add(event.id);
+      if (event.kind === "thinking" || event.messageId.endsWith(":thinking")) {
+        for (const key of Object.keys(next.streaming)) {
+          if (key.endsWith(":thinking") && key !== event.messageId) {
+            delete next.streaming[key];
+          }
+        }
+      } else if (event.kind === "text" && !event.messageId.endsWith(":thinking")) {
+        for (const key of Object.keys(next.streaming)) {
+          if (!key.endsWith(":thinking") && key !== event.messageId) {
+            delete next.streaming[key];
+          }
+        }
+      }
       next.streaming[event.messageId] = `${next.streaming[event.messageId] ?? ""}${event.text}`;
       continue;
     }
@@ -105,9 +131,31 @@ function mergeEvents(
     if (event.type === "session.message") {
       delete next.streaming[event.messageId];
       delete next.streaming[`${event.messageId}:thinking`];
+      if (event.messageId.endsWith(":thinking")) {
+        delete next.streaming[event.messageId.slice(0, -":thinking".length)];
+      }
       if (event.role === "mayor") {
         next.pending = next.pending.filter((pending) => pending.text !== event.text);
       }
+    }
+    if (event.type === "tool.started") {
+      for (const key of Object.keys(next.streaming)) {
+        if (key.endsWith(":thinking")) {
+          delete next.streaming[key];
+        }
+      }
+    }
+    if (event.type === "turn.completed") {
+      next.streaming = {};
+    }
+    if (
+      event.type === "session.status" &&
+      (event.status === "idle" ||
+        event.status === "failed" ||
+        event.status === "interrupted" ||
+        event.status === "closed")
+    ) {
+      next.streaming = {};
     }
   }
   next.events.sort((left, right) => left.sequence - right.sequence);
@@ -115,24 +163,21 @@ function mergeEvents(
     next.events = next.events.slice(-EVENTS_PER_SESSION_CAP);
     next.trimmed = true;
   }
-  next.seenSequence = Math.max(
-    next.seenSequence,
-    ...next.events.map((event) => event.sequence),
-  );
-  return next;
+  return markSeen ? markViewSeen(next) : next;
 }
 
 function applyHeld(
   byId: Record<string, SessionView>,
   holding: Record<string, GameEvent[]>,
   sessionId: string,
+  markSeen = false,
 ): void {
   const view = byId[sessionId];
   const events = holding[sessionId];
   if (!view || !events) {
     return;
   }
-  byId[sessionId] = mergeEvents(view, events, false);
+  byId[sessionId] = mergeEvents(view, events, false, markSeen);
   delete holding[sessionId];
 }
 
@@ -152,14 +197,19 @@ export function sessionsReducer(
       for (const summary of action.sessions) {
         if (!isWorldSession(summary.sessionId)) {
           const existing = state.byId[summary.sessionId];
-          byId[summary.sessionId] = existing
-            ? { ...existing, summary }
-            : createView(summary);
+          if (!existing) {
+            byId[summary.sessionId] = createView(summary);
+            continue;
+          }
+          const updated = { ...existing, summary };
+          byId[summary.sessionId] = state.focusedSessionId === summary.sessionId
+            ? markViewSeen(updated)
+            : updated;
         }
       }
       const holding = { ...state.holding };
       for (const sessionId of Object.keys(byId)) {
-        applyHeld(byId, holding, sessionId);
+        applyHeld(byId, holding, sessionId, state.focusedSessionId === sessionId);
       }
       return withOrder({ ...state, holding }, byId);
     }
@@ -169,11 +219,21 @@ export function sessionsReducer(
       }
       const byId = { ...state.byId };
       const existing = byId[action.session.sessionId];
-      byId[action.session.sessionId] = existing
-        ? { ...existing, summary: action.session }
-        : createView(action.session);
+      if (existing) {
+        const updated = { ...existing, summary: action.session };
+        byId[action.session.sessionId] = state.focusedSessionId === action.session.sessionId
+          ? markViewSeen(updated)
+          : updated;
+      } else {
+        byId[action.session.sessionId] = createView(action.session);
+      }
       const holding = { ...state.holding };
-      applyHeld(byId, holding, action.session.sessionId);
+      applyHeld(
+        byId,
+        holding,
+        action.session.sessionId,
+        state.focusedSessionId === action.session.sessionId,
+      );
       return withOrder({ ...state, holding }, byId);
     }
     case "event": {
@@ -192,7 +252,12 @@ export function sessionsReducer(
           holding: { ...state.holding, [event.sessionId]: holdingEvents },
         };
       }
-      const view = mergeEvents(existing, [event], false);
+      const view = mergeEvents(
+        existing,
+        [event],
+        false,
+        state.focusedSessionId === event.sessionId,
+      );
       return withOrder(
         state,
         { ...state.byId, [event.sessionId]: view },
@@ -215,7 +280,12 @@ export function sessionsReducer(
           },
         };
       }
-      const view = mergeEvents(existing, action.events, action.fromSequence === 0);
+      const view = mergeEvents(
+        existing,
+        action.events,
+        action.fromSequence === 0,
+        state.focusedSessionId === action.sessionId,
+      );
       view.hydrated = true;
       view.trimmed = view.trimmed || action.hasMore;
       return withOrder(
@@ -228,7 +298,12 @@ export function sessionsReducer(
       if (!existing || isWorldSession(action.sessionId)) {
         return state;
       }
-      const view = mergeEvents(existing, action.events, false);
+      const view = mergeEvents(
+        existing,
+        action.events,
+        false,
+        state.focusedSessionId === action.sessionId,
+      );
       return { ...state, byId: { ...state.byId, [action.sessionId]: view } };
     }
     case "focus":
@@ -238,8 +313,7 @@ export function sessionsReducer(
       if (!view) {
         return state;
       }
-      const next = cloneView(view);
-      next.seenSequence = next.events.at(-1)?.sequence ?? next.seenSequence;
+      const next = markViewSeen(view);
       return { ...state, byId: { ...state.byId, [action.sessionId]: next } };
     }
     case "optimistic": {

@@ -6,7 +6,6 @@ import { AppHudScan } from "./AppHudScan";
 import { AppHudInspector } from "./AppHudInspector";
 import { AppHudOrder } from "./AppHudOrder";
 import { AppHudConsole } from "./AppHudConsole";
-import { ShareCityCard } from "../ShareCityCard";
 
 import type { TargetFps } from "@/lib/fps-preferences";
 
@@ -24,7 +23,7 @@ export interface AppHudProps {
 
 export function AppHud(props: AppHudProps) {
   const { state } = props;
-  const { shipTransitioning, isCapturingSnapshot, handleTakeSnapshot } = state;
+  const { shipTransitioning } = state;
 
   return (
     <>
@@ -34,11 +33,6 @@ export function AppHud(props: AppHudProps) {
       <div className="hud-layer" hidden={shipTransitioning}>
         <div className="hud-column hud-column--main">
           <AppHudScan state={state} />
-
-          <ShareCityCard
-            onSnapshot={handleTakeSnapshot}
-            isCapturing={isCapturingSnapshot}
-          />
 
           <div className="flex-1" />
 

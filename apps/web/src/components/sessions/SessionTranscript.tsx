@@ -57,9 +57,9 @@ export function SessionTranscript({ view, onPermit }: SessionTranscriptProps) {
   }, [items, pinned]);
 
   return (
-    <div ref={rootRef} className="relative min-h-0">
-      <ScrollArea className="h-full px-3 py-3">
-        <div className="grid gap-3" aria-live="polite">
+    <div ref={rootRef} className="relative min-h-0 min-w-0 overflow-hidden">
+      <ScrollArea className="h-full w-full max-w-full">
+        <div className="grid gap-3 px-3 py-3 min-w-0 max-w-full overflow-x-hidden" aria-live="polite">
           {items.length === 0 ? (
             <p className="retro py-8 text-center text-[8px] text-muted-foreground">
               No transmissions yet.

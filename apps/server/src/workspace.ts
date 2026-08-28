@@ -1126,6 +1126,20 @@ export class Workspace {
     return true;
   }
 
+  async unarchiveSession(sessionId: string): Promise<boolean> {
+    const session = this.sessions.get(sessionId);
+    if (!session || session.status !== "closed") {
+      return false;
+    }
+    session.closedAt = undefined;
+    session.queued = [];
+    this.emitAgentEvent(sessionId, {
+      type: "session.status",
+      status: "idle",
+    });
+    return true;
+  }
+
   resolvePermit(
     sessionId: string,
     toolCallId: string,

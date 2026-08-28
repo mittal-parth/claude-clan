@@ -29,7 +29,7 @@ export interface CanvasTravelRequest {
   id: string;
   cityId: string;
   /** Which fleet carries this trip. Defaults to the container ship. */
-  ship?: "container" | "navy";
+  ship?: "container" | "navy" | "teleport";
   /**
    * Voyages of the harbour's container ship. Set when the trip is carrying a
    * container -- taking an issue out -- and cleared when she sails home empty.
@@ -200,6 +200,7 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
     const containerVoyageRef = useRef<{ carriesContainer: boolean } | undefined>(
       undefined,
     );
+    const travelModeRef = useRef<"container" | "navy" | "teleport">("container");
     const handledAirportTravelRef = useRef<string | undefined>(undefined);
     const handledAirportArrivalRef = useRef<string | undefined>(undefined);
 
@@ -254,14 +255,19 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
       // crane lands her box -- so it reveals through the harbour rather than
       // the PR fleet's arrival.
       const voyage = containerVoyageRef.current;
-      if (voyage) {
-        scene?.prepareContainerArrival(voyage.carriesContainer);
-      } else {
-        scene?.prepareArrivalForTravel();
+      const isTeleport = travelModeRef.current === "teleport";
+      if (!isTeleport) {
+        if (voyage) {
+          scene?.prepareContainerArrival(voyage.carriesContainer);
+        } else {
+          scene?.prepareArrivalForTravel();
+        }
       }
-      const reveal = voyage
-        ? scene?.revealAfterContainerVoyage(voyage.carriesContainer)
-        : scene?.revealAfterTravel();
+      const reveal = isTeleport
+        ? scene?.revealAfterTeleport()
+        : voyage
+          ? scene?.revealAfterContainerVoyage(voyage.carriesContainer)
+          : scene?.revealAfterTravel();
       void Promise.resolve(reveal).then(() => {
         scene?.resetTimeScale();
         containerVoyageRef.current = undefined;
@@ -285,6 +291,7 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
     // in-scene ship click and the issue shop's programmatic travel request.
     function beginTravel(
       targetCityId: string,
+      mode: "container" | "navy" | "teleport" = "container",
       voyage?: { carriesContainer: boolean },
     ): boolean {
       const scene = sceneRef.current;
@@ -295,6 +302,7 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
       ) {
         return false;
       }
+      travelModeRef.current = mode;
       containerVoyageRef.current = voyage;
       transitioningRef.current = true;
       coverDoneRef.current = false;
@@ -308,9 +316,11 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
       // isn't needlessly delayed by the animation's fixed duration; a slow
       // (lazy PR build) travel just leaves the clouds covering a little
       // longer, which reads fine as a loading state.
-      const cover = voyage
-        ? scene.coverForContainerVoyage(voyage.carriesContainer)
-        : scene.coverForTravel(targetCityId);
+      const cover = mode === "teleport"
+        ? scene.coverForTeleport()
+        : voyage
+          ? scene.coverForContainerVoyage(voyage.carriesContainer)
+          : scene.coverForTravel(targetCityId);
       void cover.then(() => {
         coverDoneRef.current = true;
         scene.resetTimeScale();
@@ -609,11 +619,12 @@ export const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
       ) {
         return;
       }
+      const mode = travelRequest.ship ?? "container";
       const voyage =
-        (travelRequest.ship ?? "container") === "container"
+        mode === "container"
           ? { carriesContainer: travelRequest.carriesContainer ?? false }
           : undefined;
-      if (beginTravel(travelRequest.cityId, voyage)) {
+      if (beginTravel(travelRequest.cityId, mode, voyage)) {
         handledTravelRequestRef.current = travelRequest.id;
       }
     }, [travelRequest]);

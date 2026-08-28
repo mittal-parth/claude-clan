@@ -533,6 +533,14 @@ export class WorldScene extends Phaser.Scene {
     await this.navyManager.revealAfterTravel(this.transitionManager);
   }
 
+  async coverForTeleport(): Promise<void> {
+    await this.transitionManager.playCoverTransition();
+  }
+
+  async revealAfterTeleport(): Promise<void> {
+    await this.transitionManager.partCloudCover();
+  }
+
   /**
    * `destination` is the snapshot the caller already matched against the
    * arrival's destination key, and it is what the runway is derived from.

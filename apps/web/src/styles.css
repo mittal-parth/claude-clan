@@ -552,6 +552,26 @@
   backdrop-filter: blur(16px) saturate(140%);
 }
 
+.hud-window--modal {
+  position: fixed !important;
+  display: grid !important;
+  backdrop-filter: blur(28px) saturate(160%) !important;
+  -webkit-backdrop-filter: blur(28px) saturate(160%) !important;
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in oklab, var(--card) 94%, transparent),
+      color-mix(in oklab, var(--background) 96%, transparent)
+    ) !important;
+  overflow: hidden;
+}
+
+[data-radix-scroll-area-viewport] > div {
+  display: block !important;
+  min-width: 0 !important;
+  max-width: 100% !important;
+}
+
 /* Accent hairline riding the top edge. */
 .hud-window::before {
   content: "";
@@ -1142,10 +1162,20 @@ button.hud-pill:focus-visible {
 /* --- drop target ---------------------------------------------------------- */
 
 .hud-form {
+  position: relative;
+  z-index: 10;
   pointer-events: auto;
 }
 
-.hud-form.is-drop-target .hud-window {
+.hud-form .hud-window[data-expanded="true"] .hud-window__reveal,
+.hud-form .hud-window[data-expanded="true"] .hud-window__reveal-inner,
+.hud-form .hud-window[data-expanded="true"] .hud-window__reveal > * {
+  overflow: visible;
+  z-index: 10;
+}
+
+.hud-form.is-drop-target .hud-window,
+.hud-window.is-drop-target {
   border-color: color-mix(in oklab, var(--hud-accent) 70%, transparent);
   box-shadow:
     inset 0 0 0 1px color-mix(in oklab, var(--hud-accent) 35%, transparent),

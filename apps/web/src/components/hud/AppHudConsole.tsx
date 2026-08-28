@@ -31,8 +31,7 @@ export function AppHudConsole({
     crewSelection,
     toggleHud,
     setCommandOpen,
-    setHud,
-    orderFormRef,
+    setArchivedSessionsOpen,
     sessions,
   } = state;
 
@@ -56,15 +55,6 @@ export function AppHudConsole({
   const repoName = titleFromRepoPath(repoRootPath(world?.repoPath, activeCityId) ?? "");
   const branchLabel = activeCity?.status === "building" ? "constructing…" : (activeCity?.ref ?? "main");
   const cityDetail = activeCity && (activeCity.kind === "pull-request" || activeCity.kind === "issue") ? activeCity.title : undefined;
-  const contextPercent = focusedView?.summary.contextPercent;
-
-  function focusNewOrder(): void {
-    setHud((current) => ({ ...current, order: true }));
-    requestAnimationFrame(() => {
-      const input = orderFormRef.current?.querySelector<HTMLInputElement>("#mayor-prompt");
-      input?.focus();
-    });
-  }
 
   return (
     <div className="hud-column hud-column--console">
@@ -133,12 +123,6 @@ export function AppHudConsole({
         </div>
 
         <div className="grid gap-1.5">
-          <HudMeter
-            label="Context stamina"
-            readout={contextPercent === undefined ? "—" : `${Math.round(contextPercent)}%`}
-            value={contextPercent ?? 0}
-            tone="var(--color-signal)"
-          />
           <HudMeter label="Treasury" readout={`$${spentDisplay} / $${totalBudget.toFixed(2)}`} value={treasuryPercent} />
         </div>
 
@@ -150,7 +134,8 @@ export function AppHudConsole({
           permitCount={sessions.permitCount}
           unreadFor={sessions.unreadFor}
           onSelect={sessions.focusSession}
-          onNewOrder={focusNewOrder}
+          onArchive={sessions.archiveSession}
+          onOpenArchived={() => setArchivedSessionsOpen(true)}
         />
       </HudWindow>
     </div>

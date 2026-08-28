@@ -100,6 +100,7 @@ export class SessionRunner {
   private status: SessionStatus = "idle";
   private queryCostUsd = 0;
   private currentTurnId?: string;
+  private currentMessageId?: string;
   private interruptRequested = false;
   private contextPercent?: number;
 
@@ -151,6 +152,7 @@ export class SessionRunner {
 
     const turnId = `turn_${randomUUID()}`;
     this.currentTurnId = turnId;
+    this.currentMessageId = undefined;
     this.emit({
       type: "turn.started",
       turnId,
@@ -250,11 +252,37 @@ export class SessionRunner {
       return;
     }
 
-    for (const event of translateMessage(message, this.currentTurnId)) {
+    if (message.type === "stream_event") {
+      const streamEvent = (
+        message as {
+          event?: {
+            type?: string;
+            message?: { id?: string };
+          };
+        }
+      ).event;
+      if (
+        streamEvent?.type === "message_start" &&
+        typeof streamEvent.message?.id === "string"
+      ) {
+        this.currentMessageId = streamEvent.message.id;
+      }
+    }
+
+    for (const event of translateMessage(
+      message,
+      this.currentTurnId,
+      this.currentMessageId,
+    )) {
       this.emit(event as AgentEvent);
     }
 
+    if (message.type === "assistant") {
+      this.currentMessageId = undefined;
+    }
+
     if (message.type === "result") {
+      this.currentMessageId = undefined;
       this.completeTurn(message);
     }
   }
@@ -295,6 +323,7 @@ export class SessionRunner {
     });
 
     this.currentTurnId = undefined;
+    this.currentMessageId = undefined;
     this.interruptRequested = false;
     this.setStatus(
       outcome === "success" || outcome === "max-turns"
@@ -471,6 +500,7 @@ export class SessionRunner {
     this.runningTools.clear();
     await this.activeQuery?.interrupt().catch(() => undefined);
     this.currentTurnId = undefined;
+    this.currentMessageId = undefined;
     this.setStatus("interrupted", "interrupted");
     this.scheduleIdleClose();
   }

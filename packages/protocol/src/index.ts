@@ -436,6 +436,10 @@ export const MayorCommandSchema = z.discriminatedUnion("type", [
     sessionId: z.string().min(1),
   }),
   z.object({
+    type: z.literal("session.unarchive"),
+    sessionId: z.string().min(1),
+  }),
+  z.object({
     type: z.literal("session.subscribe"),
     sessionId: z.string().min(1),
     afterSequence: z.number().int().nonnegative().optional(),

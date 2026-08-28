@@ -78,6 +78,7 @@ export function useGameState({
   const socketRef = useRef<WebSocket>(null);
   const canvasRef = useRef<GameCanvasHandle>(null);
   const orderFormRef = useRef<HTMLFormElement>(null);
+  const sessionModalRef = useRef<HTMLDivElement>(null);
   const initialRevealReadyRef = useRef(false);
   const initialRevealTimerRef = useRef<
     ReturnType<typeof setTimeout> | undefined
@@ -112,6 +113,7 @@ export function useGameState({
   const [dragPreview, setDragPreview] = useState<CanvasDragPreview>();
   const [dragPosition, setDragPosition] = useState<CanvasPointerPosition>();
   const [contextPaths, setContextPaths] = useState<string[]>([]);
+  const [sessionContextPaths, setSessionContextPaths] = useState<string[]>([]);
   const [orderPermissionMode, setOrderPermissionMode] =
     useState<PermissionMode>("default");
   const [crewSelection, setCrewSelection] = useState<CrewSelection>({
@@ -119,6 +121,7 @@ export function useGameState({
     effort: DEFAULT_EFFORT,
   });
   const [crewDialogOpen, setCrewDialogOpen] = useState(false);
+  const [archivedSessionsOpen, setArchivedSessionsOpen] = useState(false);
   const [crewPolicy, setCrewPolicy] = useState<CrewPolicy>(UNRESTRICTED_POLICY);
   /** The action a visitor reached for in the demo city; opens the sign-in modal. */
   const [signInAction, setSignInAction] = useState<string>();
@@ -136,6 +139,8 @@ export function useGameState({
   const [issueTravelRequest, setIssueTravelRequest] =
     useState<CanvasTravelRequest>();
   const [navyTravelRequest, setNavyTravelRequest] =
+    useState<CanvasTravelRequest>();
+  const [teleportTravelRequest, setTeleportTravelRequest] =
     useState<CanvasTravelRequest>();
   const [airportArrivalDelayed, setAirportArrivalDelayed] = useState(false);
   const [initialRevealReady, setInitialRevealReady] = useState(false);
@@ -179,6 +184,10 @@ export function useGameState({
       setSignInAction(action === "permit" ? "stamp a permit" : "dispatch a crew");
     },
   });
+
+  useEffect(() => {
+    setSessionContextPaths([]);
+  }, [sessions.focusedSessionId]);
   const world =
     worldRepoKey === activeRepoKey ? worldByCity[activeCityId] : undefined;
   const overlay = overlayByCity[activeCityId];
@@ -503,6 +512,19 @@ export function useGameState({
     send({ type: "city.travel", cityId });
   }
 
+  function teleportToCity(cityId: string): void {
+    if (cityId === activeCityId || blockedByDemoGate({ action: "travel", cityId })) {
+      return;
+    }
+    setSelected(undefined);
+    setDiff(undefined);
+    setTeleportTravelRequest({
+      id: `teleport-${cityId}-${Date.now()}`,
+      cityId,
+      ship: "teleport",
+    });
+  }
+
   function requestShipTravel(cityId: string): void {
     if (blockedByDemoGate({ action: "travel", cityId })) {
       return;
@@ -518,6 +540,7 @@ export function useGameState({
     setShipTravelTargetId(undefined);
     setIssueTravelRequest(undefined);
     setNavyTravelRequest(undefined);
+    setTeleportTravelRequest(undefined);
   }
 
   function takeIssueToFix(issue: Issue): void {
@@ -649,6 +672,12 @@ export function useGameState({
     setDraggingBuilding(undefined);
     setDragPreview(undefined);
     setDragPosition(undefined);
+    if (pointIsInside(sessionModalRef.current, position)) {
+      setSessionContextPaths((current) =>
+        current.includes(building.path) ? current : [...current, building.path],
+      );
+      return;
+    }
     if (!pointIsInside(orderFormRef.current, position)) {
       return;
     }
@@ -686,6 +715,7 @@ export function useGameState({
     socketRef,
     canvasRef,
     orderFormRef,
+    sessionModalRef,
     connection,
     reconnectAttempt,
     cities,
@@ -705,9 +735,12 @@ export function useGameState({
     dragPreview,
     dragPosition,
     contextPaths,
+    sessionContextPaths,
+    setSessionContextPaths,
     orderPermissionMode,
     crewSelection,
     crewDialogOpen,
+    archivedSessionsOpen,
     hud,
     fileChange,
     selected,
@@ -751,6 +784,7 @@ export function useGameState({
     setOrderPermissionMode,
     setCrewSelection,
     setCrewDialogOpen,
+    setArchivedSessionsOpen,
     setHud,
     setFileChange,
     setSelected,
@@ -762,6 +796,8 @@ export function useGameState({
     setWorktreeShopOpen,
     setIssueTravelRequest,
     setNavyTravelRequest,
+    teleportTravelRequest,
+    setTeleportTravelRequest,
     setAirportArrivalDelayed,
     setInitialRevealReady,
     setInitialRevealComplete,
@@ -774,6 +810,7 @@ export function useGameState({
     toggleHud,
     send,
     travelTo,
+    teleportToCity,
     requestShipTravel,
     completeShipTravel,
     takeIssueToFix,

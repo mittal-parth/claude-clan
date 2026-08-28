@@ -1,3 +1,4 @@
+import { resolve } from "node:path";
 import { defineConfig } from "vitest/config";
 
 /**
@@ -9,6 +10,11 @@ import { defineConfig } from "vitest/config";
  * React and CSS, so the tests are plain TypeScript running under node.
  */
 export default defineConfig({
+  resolve: {
+    alias: {
+      "@": resolve(import.meta.dirname, "./src"),
+    },
+  },
   test: {
     environment: "node",
     include: ["src/**/*.test.ts"],

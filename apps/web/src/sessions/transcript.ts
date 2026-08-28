@@ -213,7 +213,14 @@ export function toChatItems(view: SessionView): ChatItem[] {
   }
 
   for (const [messageId, text] of Object.entries(view.streaming)) {
-    if (!text || finalMessageIds.has(messageId)) {
+    if (
+      !text ||
+      finalMessageIds.has(messageId) ||
+      finalMessageIds.has(messageId.replace(/:thinking$/, "")) ||
+      (messageId.endsWith(":thinking")
+        ? false
+        : finalMessageIds.has(`${messageId}:thinking`))
+    ) {
       continue;
     }
     const thinking = messageId.endsWith(":thinking");

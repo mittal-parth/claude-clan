@@ -192,6 +192,41 @@ describe("session persistence", () => {
     store.close();
   });
 
+  it("deletes a session and its transcript without touching other events", () => {
+    const store = createStore();
+    store.saveSession({
+      sessionId: "session-delete",
+      cityId: "main",
+      title: "Delete me",
+      autoTitled: false,
+      model: "sonnet",
+      effort: "high",
+      permissionMode: "default",
+      status: "closed",
+      lastTurnOutcome: "success",
+      createdAt: "2026-08-08T00:00:00.000Z",
+      updatedAt: "2026-08-08T00:01:00.000Z",
+      turnCount: 1,
+      costUsd: 0.1,
+      sequence: 1,
+      readOnly: false,
+      closedAt: "2026-08-08T00:02:00.000Z",
+    });
+    store.appendEvent(messageEvent("session-delete", 0));
+    store.appendEvent(messageEvent("session-keep", 0));
+
+    store.deleteSession("session-delete");
+
+    expect(store.loadSessions()).toEqual([]);
+    expect(store.readEvents("session-delete")).toEqual([]);
+    expect(store.readEventPage("session-delete")).toEqual({
+      events: [],
+      hasMore: false,
+    });
+    expect(store.readEvents("session-keep")).toHaveLength(1);
+    store.close();
+  });
+
   it("pages newest events by default and later events after a cursor", () => {
     const store = createStore();
     for (const sequence of [0, 1, 2, 3, 4]) {

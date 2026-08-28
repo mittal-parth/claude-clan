@@ -618,6 +618,17 @@ app.get("/ws", { websocket: true }, (socket) => {
         }
         break;
       }
+      case "session.unarchive": {
+        if (!(await workspace.unarchiveSession(data.sessionId))) {
+          send(socket, {
+            kind: "error",
+            code: "SESSION_NOT_FOUND",
+            message: "That archived session no longer exists.",
+            sessionId: data.sessionId,
+          });
+        }
+        break;
+      }
       case "session.subscribe": {
         const transcript = workspace.transcript(data.sessionId, data.afterSequence);
         if (!transcript) {
