@@ -218,7 +218,12 @@ export default function App(props: AppProps) {
         activeRepoKey={activeRepoKey}
       />
 
-      <AppDialogs state={state} activeRepoKey={activeRepoKey} />
+      <AppDialogs
+        state={state}
+        activeRepoKey={activeRepoKey}
+        user={user}
+        onOpenAirport={onOpenAirport}
+      />
     </div>
   );
 }

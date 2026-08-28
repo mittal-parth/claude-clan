@@ -85,7 +85,9 @@ export function AppHudOrder({ state }: AppHudOrderProps) {
       >
         {demoLocked ? (
           <p className="retro text-[8px] leading-relaxed text-muted-foreground">
-            You're touring the demo city — dispatching a crew needs an account.
+            {state.viewerLogin
+              ? "You're touring the demo city — you can only dispatch orders in your repos."
+              : "You're touring the demo city — dispatching a crew needs an account."}
           </p>
         ) : null}
 
