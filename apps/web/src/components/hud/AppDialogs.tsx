@@ -15,15 +15,23 @@ import { ShutterFlash } from "../ShutterFlash";
 import { ShareCityModal } from "../ShareCityModal";
 import { fileBasename, fileDirname, cityLabel, pointIsInside } from "@/lib/app-utils";
 import { useGameState } from "@/hooks/use-game-state";
+import type { AuthUser } from "@/auth/gate";
 import { SessionModal } from "@/components/sessions/SessionModal";
 import { ArchivedSessionsModal } from "@/components/sessions/ArchivedSessionsModal";
 
 export interface AppDialogsProps {
   state: ReturnType<typeof useGameState>;
   activeRepoKey: string;
+  user?: AuthUser;
+  onOpenAirport?: () => void;
 }
 
-export function AppDialogs({ state, activeRepoKey }: AppDialogsProps) {
+export function AppDialogs({
+  state,
+  activeRepoKey,
+  user,
+  onOpenAirport,
+}: AppDialogsProps) {
   const {
     issueShopOpen,
     setIssueShopOpen,
@@ -127,6 +135,11 @@ export function AppDialogs({ state, activeRepoKey }: AppDialogsProps) {
 
       <SignInDialog
         action={state.signInAction}
+        isAuthenticated={Boolean(user ?? state.viewerLogin)}
+        onPickRepo={() => {
+          state.setSignInAction(undefined);
+          onOpenAirport?.();
+        }}
         onOpenChange={(open) => {
           if (!open) {
             state.setSignInAction(undefined);
