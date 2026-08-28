@@ -30,10 +30,10 @@ export function isPublicDeployment(
   env: NodeJS.ProcessEnv = process.env,
 ): boolean {
   const value = env.SUDO_CITY_PUBLIC_DEPLOYMENT?.trim().toLowerCase();
-  if (!value) {
-    return false;
+  if (value) {
+    return value !== "0" && value !== "false" && value !== "no";
   }
-  return value !== "0" && value !== "false" && value !== "no";
+  return env.NODE_ENV === "production";
 }
 
 /**
@@ -54,7 +54,7 @@ export function isPublicDeployment(
  * deterministic denial of everything else.
  */
 export function buildSandboxSettings(
-  workspace: { repoPath: string; cloneRoot: string },
+  workspace: { repoPath: string; cloneRoot: string; serverRoot?: string },
   env: NodeJS.ProcessEnv = process.env,
 ): SandboxSettings | undefined {
   if (!isPublicDeployment(env)) {
@@ -64,6 +64,12 @@ export function buildSandboxSettings(
     .split(",")
     .map((domain) => domain.trim())
     .filter(Boolean);
+
+  const serverRoot = workspace.serverRoot ?? env.SUDO_CITY_REPO;
+  const denyRead = [
+    workspace.cloneRoot,
+    ...(serverRoot && serverRoot !== workspace.repoPath ? [serverRoot] : []),
+  ];
 
   return {
     enabled: true,
@@ -75,7 +81,9 @@ export function buildSandboxSettings(
       // this workspace closes that -- allowRead takes precedence over
       // denyRead, so the crew keeps full access to its own tree (including
       // .git, which git needs) while its neighbours cease to exist.
-      denyRead: [workspace.cloneRoot],
+      // Denying the server checkout additionally prevents reading server secrets
+      // or .env files stored on disk.
+      denyRead,
       allowRead: [workspace.repoPath],
     },
     credentials: {

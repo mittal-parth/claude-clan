@@ -17,6 +17,7 @@ import { buildAuthContext, resolveSession, type AuthContext } from "./auth-conte
 import { buildCrewPolicy, buildSandboxSettings } from "./policy.js";
 import { registerAuthRoutes } from "./routes/auth.js";
 import { registerRepoRoutes } from "./routes/repos.js";
+import { isValidRepoFullName } from "@sudo-city/cities";
 import { Workspace } from "./workspace.js";
 import { shouldDeliverEvent } from "./event-routing.js";
 import { WorkspaceManager } from "./workspaces.js";
@@ -84,7 +85,7 @@ const cloneRoot = resolve(
 const crewPolicy = buildCrewPolicy();
 // Per workspace, not per process: each crew's allowRead is its own clone.
 const sandboxFor = (repoPath: string) =>
-  buildSandboxSettings({ repoPath, cloneRoot });
+  buildSandboxSettings({ repoPath, cloneRoot, serverRoot: demoRepoPath });
 // Deliberately not the settings object itself: those are per workspace, and
 // logging a specimen built from the clone root printed allowRead == denyRead,
 // which reads as "the restriction is a no-op" when the real per-workspace
@@ -401,11 +402,11 @@ app.get("/ws", { websocket: true }, (socket) => {
         send(socket, { kind: "error", code: "AUTH_REQUIRED", message: "Sign in to select your own repos." });
         return;
       }
-      const [owner, name] = data.repoKey.split("/");
-      if (!owner || !name) {
+      if (!isValidRepoFullName(data.repoKey)) {
         send(socket, { kind: "error", code: "REPO_NOT_FOUND", message: "Unknown repository." });
         return;
       }
+      const [owner, name] = data.repoKey.split("/") as [string, string];
       // The socket only carries an authenticated userId, never a token --
       // repo.select must be paired with a prior /api/repos/import (which
       // has the bearer token) unless the workspace is already open.

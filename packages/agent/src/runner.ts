@@ -21,6 +21,8 @@ import type {
 } from "@sudo-city/protocol";
 import { MessageQueue } from "./queue.js";
 import {
+  extractTargetPaths,
+  isInsideDirectory,
   normalisePath,
   previewInput,
   previewResult,
@@ -400,6 +402,17 @@ export class SessionRunner {
     input,
     options,
   ) => {
+    const targetPaths = extractTargetPaths(input);
+    for (const p of targetPaths) {
+      if (!isInsideDirectory(this.cwd, p)) {
+        return {
+          behavior: "deny",
+          message: `Access denied: "${p}" is outside the workspace repository.`,
+          toolUseID: options.toolUseID,
+        };
+      }
+    }
+
     if (this.safeTools.has(toolName)) {
       return { behavior: "allow", toolUseID: options.toolUseID };
     }

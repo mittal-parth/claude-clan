@@ -1,5 +1,5 @@
 import { access, rm } from "node:fs/promises";
-import { join } from "node:path";
+import { isAbsolute, join, relative, resolve } from "node:path";
 import type { SandboxSettings } from "@sudo-city/agent";
 import type { BudgetInfo, CityId, GameEvent, SessionSummary } from "@sudo-city/protocol";
 import type { FastifyBaseLogger } from "fastify";
@@ -183,7 +183,13 @@ export class WorkspaceManager {
   }
 
   private repoCloneDir(userId: number, owner: string, name: string): string {
-    return join(this.cloneRoot, String(userId), owner, name);
+    const userDir = join(this.cloneRoot, String(userId));
+    const targetDir = resolve(userDir, owner, name);
+    const rel = relative(userDir, targetDir);
+    if (rel === "" || rel.startsWith("..") || isAbsolute(rel)) {
+      throw new Error(`Invalid repository path traversal detected: ${owner}/${name}`);
+    }
+    return targetDir;
   }
 
   /**

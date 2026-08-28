@@ -170,6 +170,35 @@ export function repoKeyFor(fullName: string): string {
   return fullName.toLowerCase();
 }
 
+export const GITHUB_REPO_REGEX =
+  /^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,38}\/[a-zA-Z0-9_.-]{1,100}$/;
+
+/**
+ * Validates that a repository identifier matches a safe GitHub `owner/name` pattern
+ * and contains no path traversal segments (`..` or `.`).
+ */
+export function isValidRepoFullName(fullName: unknown): fullName is string {
+  if (typeof fullName !== "string" || !GITHUB_REPO_REGEX.test(fullName)) {
+    return false;
+  }
+  const parts = fullName.split("/");
+  if (parts.length !== 2) {
+    return false;
+  }
+  const [owner, name] = parts;
+  if (
+    !owner ||
+    !name ||
+    owner === "." ||
+    owner === ".." ||
+    name === "." ||
+    name === ".."
+  ) {
+    return false;
+  }
+  return true;
+}
+
 /** HMAC-signed `${timestamp}.${signature}` -- no server memory needed to validate a 10-minute-TTL nonce. */
 export function signState(secret: string, now: Date): string {
   const payload = String(now.getTime());
