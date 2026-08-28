@@ -23,6 +23,8 @@ import { MessageQueue } from "./queue.js";
 import {
   extractTargetPaths,
   isInsideDirectory,
+  isRecord,
+  isRestrictedBashCommand,
   normalisePath,
   previewInput,
   previewResult,
@@ -155,11 +157,14 @@ export class SessionRunner {
     const turnId = `turn_${randomUUID()}`;
     this.currentTurnId = turnId;
     this.currentMessageId = undefined;
+    const safeContextPaths = contextPaths.filter((p) =>
+      isInsideDirectory(this.cwd, p),
+    );
     this.emit({
       type: "turn.started",
       turnId,
       prompt,
-      contextPaths: [...contextPaths],
+      contextPaths: [...safeContextPaths],
     });
     this.setStatus("thinking");
     this.queue?.push({
@@ -169,7 +174,7 @@ export class SessionRunner {
       session_id: this.sessionKey,
       message: {
         role: "user",
-        content: promptWithContext(prompt, contextPaths),
+        content: promptWithContext(prompt, safeContextPaths),
       },
     });
     return turnId;
@@ -411,6 +416,19 @@ export class SessionRunner {
           toolUseID: options.toolUseID,
         };
       }
+    }
+
+    if (
+      toolName === "Bash" &&
+      isRecord(input) &&
+      typeof input.command === "string" &&
+      isRestrictedBashCommand(input.command)
+    ) {
+      return {
+        behavior: "deny",
+        message: "Access denied: command references restricted system paths or out-of-workspace secrets.",
+        toolUseID: options.toolUseID,
+      };
     }
 
     if (this.safeTools.has(toolName)) {

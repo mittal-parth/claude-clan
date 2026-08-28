@@ -24,6 +24,19 @@ export function isInsideDirectory(baseDir: string, targetPath: string): boolean 
   return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
 }
 
+const TARGET_PATH_KEYS = [
+  "file_path",
+  "path",
+  "notebook_path",
+  "directory",
+  "dir_path",
+  "destination",
+  "dest",
+  "source",
+  "src",
+  "target",
+] as const;
+
 /**
  * Extracts candidate file/directory paths from tool input arguments.
  */
@@ -32,13 +45,40 @@ export function extractTargetPaths(input: unknown): string[] {
     return [];
   }
   const paths: string[] = [];
-  for (const key of ["file_path", "path"]) {
+  for (const key of TARGET_PATH_KEYS) {
     const value = input[key];
     if (typeof value === "string" && value.trim()) {
       paths.push(value.trim());
     }
   }
+  if (typeof input.pattern === "string") {
+    const pattern = input.pattern.trim();
+    if (pattern.startsWith("/") || pattern.includes("..")) {
+      paths.push(pattern);
+    }
+  }
   return paths;
+}
+
+const RESTRICTED_BASH_PATTERNS = [
+  // System runtime, environment & secret configuration paths
+  /(?:^|[\s"'`=;&|])\/(?:run|proc|sys|root|etc\/systemd|etc\/environment|etc\/default|etc\/shadow|etc\/sudoers|etc\/security|var\/run|var\/log)(?:[\s"'`=;&|/]|$)/i,
+  // Out-of-workspace traversals targeting sensitive files or directories
+  /(?:^|[\s"'`=;&|])(?:\.\.\/)+.*(?:\.env|sudo-city|\/run|\/proc|\/etc|\/root)/i,
+  // Cloud metadata services (AWS IMDS, GCP metadata, Azure instance metadata)
+  /169\.254\.169\.254|metadata\.google\.internal|fd00:ec2::254/i,
+  // Process debugging / inspection of host memory
+  /(?:^|[\s"'`=;&|])(?:gdb|lldb|ptrace|strace|ltrace)\b/i,
+];
+
+/**
+ * Checks whether a shell command references restricted system paths or parent directory secret traversals.
+ */
+export function isRestrictedBashCommand(command: string): boolean {
+  if (typeof command !== "string") {
+    return false;
+  }
+  return RESTRICTED_BASH_PATTERNS.some((pattern) => pattern.test(command));
 }
 
 /**

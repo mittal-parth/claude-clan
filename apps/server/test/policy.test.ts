@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  SYSTEM_SECRET_PATHS,
   buildCrewPolicy,
   buildSandboxSettings,
   isPublicDeployment,
@@ -67,7 +68,10 @@ describe("buildSandboxSettings", () => {
       SUDO_CITY_PUBLIC_DEPLOYMENT: "1",
     });
 
-    expect(sandbox?.filesystem?.denyRead).toEqual([WORKSPACE.cloneRoot]);
+    expect(sandbox?.filesystem?.denyRead).toEqual([
+      WORKSPACE.cloneRoot,
+      ...SYSTEM_SECRET_PATHS,
+    ]);
     expect(sandbox?.filesystem?.allowRead).toEqual([WORKSPACE.repoPath]);
   });
 
@@ -78,6 +82,7 @@ describe("buildSandboxSettings", () => {
     );
     expect(sandbox?.filesystem?.denyRead).toEqual([
       WORKSPACE.cloneRoot,
+      ...SYSTEM_SECRET_PATHS,
       "/opt/claude-clan",
     ]);
   });
@@ -96,6 +101,11 @@ describe("buildSandboxSettings", () => {
       "SESSION_SECRET",
       "GITHUB_CLIENT_SECRET",
       "GITHUB_TOKEN",
+      "AWS_SECRET_ACCESS_KEY",
+      "AWS_ACCESS_KEY_ID",
+      "AWS_SESSION_TOKEN",
+      "AWS_SSH_PRIVATE_KEY",
+      "AWS_KNOWN_HOSTS",
     ]);
     expect(denied?.every((entry) => entry.mode === "deny")).toBe(true);
   });

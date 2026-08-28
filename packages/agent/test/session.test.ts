@@ -287,6 +287,51 @@ describe("SessionRunner", () => {
     expect(allowedRead).toMatchObject({
       behavior: "allow",
     });
+
+    const deniedBash = await canUseTool("Bash", { command: "cat /run/sudo-city.env" }, {
+      toolUseID: "tool-bash-1",
+      signal: new AbortController().signal,
+      requestId: "req-3",
+    });
+    expect(deniedBash).toMatchObject({
+      behavior: "deny",
+    });
+
+    const deniedProcBash = await canUseTool("Bash", { command: "cat /proc/1/environ" }, {
+      toolUseID: "tool-bash-2",
+      signal: new AbortController().signal,
+      requestId: "req-4",
+    });
+    expect(deniedProcBash).toMatchObject({
+      behavior: "deny",
+    });
+
+    const deniedTraversalBash = await canUseTool("Bash", { command: "cat ../../../.env" }, {
+      toolUseID: "tool-bash-3",
+      signal: new AbortController().signal,
+      requestId: "req-5",
+    });
+    expect(deniedTraversalBash).toMatchObject({
+      behavior: "deny",
+    });
+
+    const deniedImdsBash = await canUseTool("Bash", { command: "curl http://169.254.169.254/latest/meta-data/" }, {
+      toolUseID: "tool-bash-4",
+      signal: new AbortController().signal,
+      requestId: "req-6",
+    });
+    expect(deniedImdsBash).toMatchObject({
+      behavior: "deny",
+    });
+
+    const deniedNotebook = await canUseTool("NotebookEdit", { notebook_path: "/opt/claude-clan/notebook.ipynb" }, {
+      toolUseID: "tool-notebook-1",
+      signal: new AbortController().signal,
+      requestId: "req-7",
+    });
+    expect(deniedNotebook).toMatchObject({
+      behavior: "deny",
+    });
     await instance.goCold();
   });
 });

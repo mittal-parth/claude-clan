@@ -39,6 +39,16 @@ await app.register(cors, {
 await app.register(cookie);
 await app.register(websocket);
 
+app.setErrorHandler((error, _request, reply) => {
+  app.log.error(error);
+  const err = (error ?? {}) as { statusCode?: number; name?: string; message?: string };
+  const status = typeof err.statusCode === "number" ? err.statusCode : 500;
+  void reply.status(status).send({
+    error: status >= 500 ? "Internal Server Error" : (err.name ?? "Error"),
+    message: status >= 500 ? "An unexpected error occurred." : (err.message ?? "An error occurred."),
+  });
+});
+
 const demoRepoPath = process.env.SUDO_CITY_REPO ?? process.env.INIT_CWD ?? process.cwd();
 
 if (!process.env.ANTHROPIC_API_KEY) {
