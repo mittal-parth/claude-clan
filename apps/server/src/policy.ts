@@ -53,6 +53,19 @@ export function isPublicDeployment(
  * runs a test suite. Tune it against a real dispatch, then set it and get
  * deterministic denial of everything else.
  */
+export const SYSTEM_SECRET_PATHS = [
+  "/run",
+  "/etc/systemd",
+  "/etc/default",
+  "/etc/environment",
+  "/etc/shadow",
+  "/etc/sudoers",
+  "/etc/security",
+  "/root",
+  "/var/run",
+  "/var/log",
+] as const;
+
 export function buildSandboxSettings(
   workspace: { repoPath: string; cloneRoot: string; serverRoot?: string },
   env: NodeJS.ProcessEnv = process.env,
@@ -66,10 +79,13 @@ export function buildSandboxSettings(
     .filter(Boolean);
 
   const serverRoot = workspace.serverRoot ?? env.SUDO_CITY_REPO;
-  const denyRead = [
-    workspace.cloneRoot,
-    ...(serverRoot && serverRoot !== workspace.repoPath ? [serverRoot] : []),
-  ];
+  const denyRead = Array.from(
+    new Set([
+      workspace.cloneRoot,
+      ...SYSTEM_SECRET_PATHS,
+      ...(serverRoot && serverRoot !== workspace.repoPath ? [serverRoot] : []),
+    ]),
+  );
 
   return {
     enabled: true,
@@ -81,8 +97,8 @@ export function buildSandboxSettings(
       // this workspace closes that -- allowRead takes precedence over
       // denyRead, so the crew keeps full access to its own tree (including
       // .git, which git needs) while its neighbours cease to exist.
-      // Denying the server checkout additionally prevents reading server secrets
-      // or .env files stored on disk.
+      // Denying the server checkout and system secret paths additionally
+      // prevents reading server secrets, /run environment files, or daemon configs.
       denyRead,
       allowRead: [workspace.repoPath],
     },
@@ -99,13 +115,18 @@ export function buildSandboxSettings(
   };
 }
 
-const SECRET_ENV_VARS = [
+export const SECRET_ENV_VARS = [
   "ANTHROPIC_API_KEY",
   "DATABASE_URL",
   "TOKEN_ENCRYPTION_KEY",
   "SESSION_SECRET",
   "GITHUB_CLIENT_SECRET",
   "GITHUB_TOKEN",
+  "AWS_SECRET_ACCESS_KEY",
+  "AWS_ACCESS_KEY_ID",
+  "AWS_SESSION_TOKEN",
+  "AWS_SSH_PRIVATE_KEY",
+  "AWS_KNOWN_HOSTS",
 ] as const;
 
 export function buildCrewPolicy(

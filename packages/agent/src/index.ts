@@ -15,6 +15,7 @@ export {
   extractTargetPaths,
   isInsideDirectory,
   isRecord,
+  isRestrictedBashCommand,
   normalisePath,
   normalizePath,
   previewInput,
