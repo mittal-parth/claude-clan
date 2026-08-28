@@ -1,6 +1,8 @@
+import { Camera } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 import type { useGameState } from "@/hooks/use-game-state";
+import { HudButton } from "./HudButton";
 import { HudWindow } from "./HudWindow";
 import { paletteFor, colorToCss } from "@/game/math/palette";
 import { summarizeLanguages, colorWithAlpha } from "@/lib/app-utils";
@@ -10,7 +12,14 @@ export interface AppHudScanProps {
 }
 
 export function AppHudScan({ state }: AppHudScanProps) {
-  const { world, connection, hud, toggleHud } = state;
+  const {
+    world,
+    connection,
+    hud,
+    toggleHud,
+    isCapturingSnapshot,
+    handleTakeSnapshot,
+  } = state;
   const surveying = !world && connection !== "offline";
   const languageSummary = world ? summarizeLanguages(world.buildings) : [];
 
@@ -30,6 +39,26 @@ export function AppHudScan({ state }: AppHudScanProps) {
           />
           {world ? "synced" : surveying ? "linking" : "no link"}
         </span>
+      }
+      footer={
+        <div className="flex items-center justify-between gap-2">
+          <span className="retro truncate text-[9px] text-sky-100/80">
+            Share your repo city with your friends
+          </span>
+          <HudButton
+            type="button"
+            size="sm"
+            variant="primary"
+            disabled={isCapturingSnapshot}
+            onClick={handleTakeSnapshot}
+            className="shrink-0"
+          >
+            <Camera className="mr-1 size-3" aria-hidden="true" />
+            <span className="retro text-[9px]">
+              {isCapturingSnapshot ? "SNAP…" : "SNAP"}
+            </span>
+          </HudButton>
+        </div>
       }
     >
       <div className="grid gap-2 p-2.5">

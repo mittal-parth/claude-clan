@@ -5,7 +5,7 @@ import { dirname, relative, resolve, sep } from "node:path";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import {
-  AgentSessionManager,
+  SessionRunner,
   type AgentEvent,
   type SandboxSettings,
 } from "@sudo-city/agent";
@@ -34,10 +34,23 @@ import type {
   Issue,
   PermissionMode,
   PullRequestOverlay,
+  SessionStatus,
+  SessionSummary,
+  TurnOutcome,
   WorldSnapshot,
 } from "@sudo-city/protocol";
 import { SQLiteWorldStore } from "@sudo-city/world";
 import { scanRepository } from "@sudo-city/worldgen";
+import { BudgetLedger } from "./budget-ledger.js";
+import {
+  MAX_RUNNING_SESSIONS_PER_WORKSPACE,
+  MAX_SESSIONS_PER_CITY,
+  SessionRegistry,
+  autoTitle,
+  sessionToRecord,
+  type QueuedTurn,
+  type SessionState,
+} from "./sessions.js";
 import type { FastifyBaseLogger } from "fastify";
 
 const MAX_CONTEXT_FILES = 20;
@@ -48,16 +61,23 @@ type EventInput<Event extends GameEvent = GameEvent> = Event extends GameEvent
   ? Omit<Event, "id" | "cityId" | "sessionId" | "sequence" | "timestamp">
   : never;
 
+export type SessionError =
+  | { code: "CITY_NOT_FOUND" }
+  | { code: "SESSION_NOT_FOUND" }
+  | { code: "SESSION_CLOSED" }
+  | { code: "BUDGET_EXHAUSTED"; message: string }
+  | { code: "TOO_MANY_RUNNING_SESSIONS"; message: string }
+  | { code: "TOO_MANY_SESSIONS"; message: string };
+
 /** One city's worth of process state, identical in shape to the pre-multi-tenant single-repo server -- only its owning Workspace changed. */
 interface City {
   readonly id: CityId;
   readonly cwd: string;
-  readonly agent: AgentSessionManager;
-  readonly sessionId: string;
-  sequence: number;
+  readonly readOnly: boolean;
+  readonly disallowedTools?: readonly string[];
+  readonly systemPromptAppend?: string;
   snapshot: WorldSnapshot;
   overlay?: PullRequestOverlay;
-  spentUsd: number;
   pendingScan?: Promise<WorldSnapshot>;
 }
 
@@ -202,9 +222,6 @@ class CityRegistry {
     return entries;
   }
 
-  async disposeAll(): Promise<void> {
-    await Promise.all(this.list().map((city) => city.agent.interrupt()));
-  }
 }
 
 const REVIEW_DISALLOWED_TOOLS = ["Write", "Edit", "NotebookEdit"] as const;
@@ -251,7 +268,8 @@ export interface WorkspaceOptions {
   onSpend?: (amountUsd: number) => void;
   /** OS-level confinement for this workspace's crews; undefined runs them unsandboxed. */
   sandbox?: SandboxSettings;
-  onEvent: (cityId: CityId, event: GameEvent) => void;
+  onEvent: (cityId: CityId, sessionId: string, event: GameEvent) => void;
+  onSessionChanged: (session: SessionSummary) => void;
   onCitiesChanged: () => void;
   onIssuesChanged: () => void;
 }
@@ -275,8 +293,12 @@ export class Workspace {
   private readonly sandbox: WorkspaceOptions["sandbox"];
   private readonly onSpend: WorkspaceOptions["onSpend"];
   private readonly onEvent: WorkspaceOptions["onEvent"];
+  private readonly onSessionChanged: WorkspaceOptions["onSessionChanged"];
   private readonly onCitiesChanged: WorkspaceOptions["onCitiesChanged"];
   private readonly onIssuesChanged: WorkspaceOptions["onIssuesChanged"];
+  private readonly sessions = new SessionRegistry();
+  private readonly ledger: BudgetLedger;
+  private readonly worldSequences = new Map<CityId, number>();
   /** Bumped on every access; the WorkspaceManager's LRU reads this to find an eviction candidate. */
   lastUsedAt = Date.now();
 
@@ -289,8 +311,13 @@ export class Workspace {
     this.sandbox = options.sandbox;
     this.onSpend = options.onSpend;
     this.onEvent = options.onEvent;
+    this.onSessionChanged = options.onSessionChanged;
     this.onCitiesChanged = options.onCitiesChanged;
     this.onIssuesChanged = options.onIssuesChanged;
+    this.ledger = new BudgetLedger(
+      this.remainingBudget,
+      (amountUsd) => this.onSpend?.(amountUsd),
+    );
     this.store = new SQLiteWorldStore(join(this.repoPath, ".sudocity", "world.db"));
     this.githubClient = new GitHubApiClient();
   }
@@ -302,18 +329,11 @@ export class Workspace {
     workspace.registry.add({
       id: "main",
       cwd: workspace.repoPath,
-      agent: new AgentSessionManager({
-        cwd: workspace.repoPath,
-        emit: (event) => workspace.emitAgentEvent("main", event),
-        maxBudgetUsd: workspace.remainingBudget(),
-        sandbox: workspace.sandbox,
-      }),
-      sessionId: `local-${randomUUID()}`,
-      sequence: 0,
+      readOnly: false,
       snapshot,
-      spentUsd: 0,
     });
     await workspace.refreshRoster();
+    workspace.restoreSessions();
     workspace.viewerLoginValue = await workspace.githubClient
       .viewerLogin(workspace.githubToken)
       .catch(() => undefined);
@@ -335,10 +355,10 @@ export class Workspace {
   }
 
   spentUsd(): number {
-    return this.registry.list().reduce((total, city) => total + city.spentUsd, 0);
+    return this.sessions.list().reduce((total, session) => total + session.costUsd, 0);
   }
 
-  /** What a new order here could spend: the tighter of the shared ceiling and this owner's cap. */
+  /** What a new order here could spend after settled workspace spend. */
   remainingBudgetUsd(): number {
     return this.remainingBudget();
   }
@@ -393,7 +413,7 @@ export class Workspace {
   }
 
   hasRunningAgent(): boolean {
-    return this.registry.list().some((city) => city.agent.isRunning());
+    return this.sessions.list().some((session) => session.runner?.isRunning() ?? false);
   }
 
   city(id: CityId): City | undefined {
@@ -500,34 +520,213 @@ export class Workspace {
     }
   }
 
-  createEvent(city: City, event: EventInput): GameEvent {
-    const currentSequence = city.sequence++;
+  /**
+   * Stamps a durable or live event with the conversation's own sequence. A
+   * city has many sessions now; using a city counter made one transcript's
+   * event order depend on unrelated work in the same checkout.
+   */
+  private createEvent(session: SessionState, event: EventInput): GameEvent {
+    const sequence = session.sequence++;
     const completedEvent = {
       ...event,
-      id: `${city.id}_evt_${currentSequence}`,
-      cityId: city.id,
-      sessionId: city.sessionId,
-      sequence: currentSequence,
+      id: `${session.sessionId}_evt_${sequence}`,
+      cityId: session.cityId,
+      sessionId: session.sessionId,
+      sequence,
       timestamp: new Date().toISOString(),
     } as GameEvent;
     this.store.appendEvent(completedEvent);
+    this.store.saveSession(sessionToRecord(session));
     return completedEvent;
   }
 
-  private emitAgentEvent(cityId: CityId, event: AgentEvent): void {
-    const city = this.registry.get(cityId);
-    if (!city) {
+  /**
+   * `world.ready` belongs to a city, not a conversation. The protocol envelope
+   * still needs a session id, so a stable synthetic id keeps map snapshots out
+   * of every real transcript and the client can filter it from the roster.
+   */
+  createWorldEvent(city: City, snapshot = city.snapshot): GameEvent {
+    const sessionId = `world:${city.id}`;
+    const sequence = this.worldSequences.get(city.id) ?? 0;
+    this.worldSequences.set(city.id, sequence + 1);
+    const event = {
+      type: "world.ready" as const,
+      snapshot,
+      id: `${sessionId}_evt_${sequence}`,
+      cityId: city.id,
+      sessionId,
+      sequence,
+      timestamp: new Date().toISOString(),
+    };
+    this.store.appendEvent(event);
+    return event;
+  }
+
+  private emitSessionEvent(
+    session: SessionState,
+    event: EventInput,
+    notify = true,
+  ): GameEvent {
+    const completed = this.createEvent(session, event);
+    if (notify) {
+      session.updatedAt = new Date().toISOString();
+      this.store.saveSession(sessionToRecord(session));
+      this.onSessionChanged(this.sessionSummary(session));
+    }
+    this.onEvent(session.cityId, session.sessionId, completed);
+    return completed;
+  }
+
+  private sessionSummary(session: SessionState): SessionSummary {
+    const summary = this.sessions
+      .summaries()
+      .find((candidate) => candidate.sessionId === session.sessionId);
+    if (!summary) {
+      throw new Error(`Session ${session.sessionId} is not registered`);
+    }
+    return summary;
+  }
+
+  private emitAgentEvent(sessionId: string, event: AgentEvent): void {
+    const session = this.sessions.get(sessionId);
+    if (!session) {
       return;
     }
-    if (event.type === "session.usage") {
-      // One usage event per dispatch, carrying that run's total -- so this
-      // accumulates across orders. Assigning here (as it used to) threw away
-      // every previous run's cost, which made both the shared ceiling and the
-      // per-user cap read far lower than what had actually been spent.
-      city.spentUsd += event.costUsd;
-      this.onSpend?.(event.costUsd);
+
+    switch (event.type) {
+      case "session.status":
+        session.status = event.status;
+        if (event.outcome !== undefined) {
+          session.lastTurnOutcome = event.outcome;
+        }
+        if (event.status === "closed") {
+          session.closedAt ??= new Date().toISOString();
+        }
+        break;
+      case "turn.completed":
+        session.turnCount += 1;
+        session.costUsd += event.costUsd;
+        session.lastTurnOutcome = event.outcome;
+        break;
+      case "permit.requested":
+        session.pendingPermits.add(event.toolCallId);
+        break;
+      case "permit.resolved":
+        session.pendingPermits.delete(event.toolCallId);
+        break;
+      case "tool.started":
+        session.activityLine = `${event.tool}${event.target ? ` · ${event.target}` : ""}`;
+        break;
+      case "session.message":
+        if (event.role === "agent" && event.kind === "text") {
+          session.activityLine = event.text.split("\n", 1)[0]?.trim().slice(0, 200);
+        }
+        break;
+      default:
+        break;
     }
-    this.onEvent(cityId, this.createEvent(city, event));
+
+    const notify = event.type !== "session.delta";
+    this.emitSessionEvent(session, event, notify);
+
+    if (event.type === "turn.completed") {
+      // SessionRunner emits the following idle status synchronously after this
+      // event. Waiting one microtask prevents a queued follow-up from being
+      // started before that status transition has landed in the registry.
+      queueMicrotask(() => {
+        void this.drainQueued(session.sessionId);
+      });
+    }
+  }
+
+  private async drainQueued(sessionId: string): Promise<void> {
+    const session = this.sessions.get(sessionId);
+    if (!session || session.status === "closed" || session.queued.length === 0) {
+      return;
+    }
+    const queued = session.queued.shift();
+    if (!queued) {
+      return;
+    }
+    session.updatedAt = new Date().toISOString();
+    this.store.saveSession(sessionToRecord(session));
+    this.onSessionChanged(this.sessionSummary(session));
+    const runner = this.ensureRunner(session);
+    void runner.send(queued.prompt, queued.contextPaths).catch((error: unknown) => {
+      this.emitAgentEvent(session.sessionId, {
+        type: "session.status",
+        status: "failed",
+        outcome: "error",
+        detail: error instanceof Error ? error.message : String(error),
+      });
+    });
+  }
+
+  private ensureRunner(session: SessionState): SessionRunner {
+    if (session.runner) {
+      return session.runner;
+    }
+    const city = this.registry.get(session.cityId);
+    if (!city) {
+      throw new Error(`City ${session.cityId} is not available`);
+    }
+    const runner = new SessionRunner({
+      sessionId: session.sessionId,
+      cwd: city.cwd,
+      emit: (event) => this.emitAgentEvent(session.sessionId, event),
+      model: session.model,
+      effort: session.effort,
+      permissionMode: session.permissionMode,
+      disallowedTools: city.disallowedTools,
+      systemPromptAppend: city.systemPromptAppend,
+      sandbox: this.sandbox,
+      resume: session.turnCount > 0,
+      title: session.title,
+      budget: {
+        reserve: (sessionId) => this.ledger.reserve(sessionId),
+        settle: (sessionId, actualUsd) => this.ledger.settle(sessionId, actualUsd),
+      },
+      onContextUsage: (percentage) => {
+        session.contextPercent = percentage;
+        session.updatedAt = new Date().toISOString();
+        this.store.saveSession(sessionToRecord(session));
+        this.onSessionChanged(this.sessionSummary(session));
+      },
+    });
+    session.runner = runner;
+    return runner;
+  }
+
+  private restoreSessions(): void {
+    for (const record of this.store.loadSessions()) {
+      if (this.sessions.get(record.sessionId)) {
+        continue;
+      }
+      const activeStatus = ["starting", "thinking", "working", "awaiting-permit", "compacting"]
+        .includes(record.status)
+        ? "idle"
+        : record.status;
+      this.sessions.add({
+        sessionId: record.sessionId,
+        cityId: record.cityId as CityId,
+        readOnly: record.readOnly,
+        title: record.title,
+        autoTitled: record.autoTitled,
+        model: record.model,
+        effort: record.effort as EffortLevel,
+        permissionMode: record.permissionMode as PermissionMode,
+        status: activeStatus as SessionStatus,
+        lastTurnOutcome: record.lastTurnOutcome as TurnOutcome | undefined,
+        sequence: record.sequence,
+        turnCount: record.turnCount,
+        costUsd: record.costUsd,
+        pendingPermits: new Set(),
+        createdAt: record.createdAt,
+        updatedAt: record.updatedAt,
+        closedAt: record.closedAt,
+        queued: [],
+      });
+    }
   }
 
   private async computeOverlay(
@@ -607,7 +806,9 @@ export class Workspace {
 
     for (const city of this.registry.list()) {
       if (city.id !== "main" && !keep.has(city.id)) {
-        await city.agent.interrupt();
+        for (const session of this.sessions.list(city.id)) {
+          await this.closeSession(session.sessionId);
+        }
         this.registry.remove(city.id);
       }
     }
@@ -630,48 +831,30 @@ export class Workspace {
       );
       return undefined;
     });
-    const agent = new AgentSessionManager({
-      cwd: worktree,
-      emit: (event) => this.emitAgentEvent(cityId, event),
-      maxBudgetUsd: this.remainingBudget(),
-      sandbox: this.sandbox,
-      disallowedTools: REVIEW_DISALLOWED_TOOLS,
-      systemPromptAppend: reviewSystemPrompt(pr, overlay),
-    });
     return {
       id: cityId,
       cwd: worktree,
-      agent,
-      sessionId: `local-${randomUUID()}`,
-      sequence: 0,
+      readOnly: true,
+      disallowedTools: REVIEW_DISALLOWED_TOOLS,
+      systemPromptAppend: reviewSystemPrompt(pr, overlay),
       snapshot,
       overlay,
-      spentUsd: 0,
     };
   }
 
   private async buildIssueCity(cityId: CityId, issue: IssueRef): Promise<City> {
     const worktree = await ensureMainWorktree(this.repoPath, cityId);
     const snapshot = await this.generateWorld(cityId, worktree);
-    const agent = new AgentSessionManager({
+    return {
+      id: cityId,
       cwd: worktree,
-      emit: (event) => this.emitAgentEvent(cityId, event),
-      maxBudgetUsd: this.remainingBudget(),
-      sandbox: this.sandbox,
+      readOnly: false,
       systemPromptAppend: [
         `You are fixing GitHub issue #${issue.number}, "${issue.title}".`,
         "This city is a writable detached worktree based on main. Implement and verify the fix here; do not change the primary checkout.",
         issue.body ? `Issue details:\n${issue.body}` : "No issue description was provided.",
       ].join("\n\n"),
-    });
-    return {
-      id: cityId,
-      cwd: worktree,
-      agent,
-      sessionId: `local-${randomUUID()}`,
-      sequence: 0,
       snapshot,
-      spentUsd: 0,
     };
   }
 
@@ -710,75 +893,274 @@ export class Workspace {
       city.pendingScan = undefined;
     });
     city.snapshot = await city.pendingScan;
-    const event = this.createEvent(city, { type: "world.ready", snapshot: city.snapshot });
-    this.onEvent(city.id, event);
+    const event = this.createWorldEvent(city, city.snapshot);
+    this.onEvent(city.id, event.sessionId, event);
     return event;
   }
 
-  prompt(
-    cityId: CityId,
-    prompt: string,
-    options: {
-      permissionMode?: PermissionMode;
-      contextPaths?: readonly string[];
-      model?: string;
-      effort?: EffortLevel;
-    },
-  ): { city: City } | undefined {
-    const city = this.registry.get(cityId);
-    if (!city) {
-      return undefined;
-    }
-    const contextPaths = this.sanitizeContextPaths(options.contextPaths);
-    this.onEvent(
-      city.id,
-      this.createEvent(city, {
-        type: "session.message",
-        role: "mayor",
-        text: mayorMessage(prompt, contextPaths),
-      }),
-    );
-    city.agent.setMaxBudgetUsd(this.remainingBudget());
-    void city.agent
-      .start(prompt, options.permissionMode ?? "default", {
-        model: options.model,
-        effort: options.effort,
-        contextPaths,
-      })
-      .catch((error: unknown) => {
-        this.emitAgentEvent(city.id, {
-          type: "session.message",
-          role: "system",
-          text:
-            error instanceof Error
-              ? `Agent stopped: ${error.message}`
-              : "Agent stopped unexpectedly.",
-        });
-      });
-    return { city };
+  sessionSummaries(cityId?: CityId): SessionSummary[] {
+    return this.sessions.summaries(cityId);
   }
 
-  interrupt(cityId: CityId): boolean {
-    const city = this.registry.get(cityId);
+  async openSession(
+    cityId: CityId,
+    options: {
+      prompt: string;
+      title?: string;
+      model?: string;
+      effort?: EffortLevel;
+      permissionMode?: PermissionMode;
+      contextPaths?: readonly string[];
+    },
+  ): Promise<{ session: SessionSummary } | { error: SessionError }> {
+    const city = await this.ensureCity(cityId);
     if (!city) {
+      return { error: { code: "CITY_NOT_FOUND" } };
+    }
+    if (this.sessions.countForCity(cityId) >= MAX_SESSIONS_PER_CITY) {
+      return { error: { code: "TOO_MANY_SESSIONS", message: "This city has reached its session limit." } };
+    }
+    if (this.sessions.runningCount() >= MAX_RUNNING_SESSIONS_PER_WORKSPACE) {
+      return { error: { code: "TOO_MANY_RUNNING_SESSIONS", message: "Too many crews are running at once." } };
+    }
+    if (!this.ledger.canFund()) {
+      return { error: { code: "BUDGET_EXHAUSTED", message: "The city treasury cannot fund another order." } };
+    }
+
+    const contextPaths = this.sanitizeContextPaths(options.contextPaths);
+    const now = new Date().toISOString();
+    const sessionId = randomUUID();
+    const session: SessionState = {
+      sessionId,
+      cityId,
+      readOnly: city.readOnly,
+      title: options.title ?? autoTitle(options.prompt),
+      autoTitled: options.title === undefined,
+      model: options.model ?? "sonnet",
+      effort: options.effort ?? "high",
+      permissionMode: options.permissionMode ?? "default",
+      status: "starting",
+      sequence: 0,
+      turnCount: 0,
+      costUsd: 0,
+      pendingPermits: new Set(),
+      createdAt: now,
+      updatedAt: now,
+      queued: [],
+    };
+    this.sessions.add(session);
+    this.store.saveSession(sessionToRecord(session));
+    this.emitSessionEvent(session, {
+      type: "session.created",
+      cityIdOfSession: cityId,
+      title: session.title,
+      model: session.model,
+      effort: session.effort,
+      permissionMode: session.permissionMode,
+      readOnly: session.readOnly,
+    });
+    this.emitSessionEvent(session, {
+      type: "session.message",
+      messageId: `${sessionId}:mayor:0`,
+      role: "mayor",
+      kind: "text",
+      text: options.prompt,
+      contextPaths,
+    });
+
+    const runner = this.ensureRunner(session);
+    void runner.send(options.prompt, contextPaths).catch((error: unknown) => {
+      this.emitAgentEvent(sessionId, {
+        type: "session.status",
+        status: "failed",
+        outcome: "error",
+        detail: error instanceof Error ? error.message : String(error),
+      });
+    });
+    return { session: this.sessionSummary(session) };
+  }
+
+  async sendToSession(
+    sessionId: string,
+    prompt: string,
+    contextPaths?: readonly string[],
+  ): Promise<{ ok: true } | { error: SessionError }> {
+    const session = this.sessions.get(sessionId);
+    if (!session) {
+      return { error: { code: "SESSION_NOT_FOUND" } };
+    }
+    if (session.status === "closed") {
+      return { error: { code: "SESSION_CLOSED" } };
+    }
+    if (!this.ledger.canFund()) {
+      return { error: { code: "BUDGET_EXHAUSTED", message: "The city treasury cannot fund another order." } };
+    }
+    const city = await this.ensureCity(session.cityId);
+    if (!city) {
+      return { error: { code: "CITY_NOT_FOUND" } };
+    }
+    const safeContextPaths = this.sanitizeContextPaths(contextPaths);
+    const running = ["starting", "thinking", "working", "awaiting-permit", "compacting"].includes(session.status)
+      || (session.runner?.isRunning() ?? false);
+    if (running) {
+      session.queued.push({ prompt, contextPaths: safeContextPaths });
+      session.updatedAt = new Date().toISOString();
+      this.store.saveSession(sessionToRecord(session));
+      this.emitSessionEvent(session, {
+        type: "session.message",
+        messageId: `${sessionId}:mayor:${session.sequence}`,
+        role: "mayor",
+        kind: "text",
+        text: prompt,
+        contextPaths: safeContextPaths,
+      });
+      return { ok: true };
+    }
+
+    const runner = this.ensureRunner(session);
+    this.emitSessionEvent(session, {
+      type: "session.message",
+      messageId: `${sessionId}:mayor:${session.sequence}`,
+      role: "mayor",
+      kind: "text",
+      text: prompt,
+      contextPaths: safeContextPaths,
+    });
+    void runner.send(prompt, safeContextPaths).catch((error: unknown) => {
+      this.emitAgentEvent(sessionId, {
+        type: "session.status",
+        status: "failed",
+        outcome: "error",
+        detail: error instanceof Error ? error.message : String(error),
+      });
+    });
+    return { ok: true };
+  }
+
+  async interruptSession(sessionId: string): Promise<boolean> {
+    const session = this.sessions.get(sessionId);
+    if (!session || session.status === "closed") {
       return false;
     }
-    void city.agent.interrupt();
-    this.onEvent(
-      city.id,
-      this.createEvent(city, {
+    const dropped = session.queued.length;
+    session.queued = [];
+    if (dropped > 0) {
+      this.emitSessionEvent(session, {
         type: "session.message",
+        messageId: `${sessionId}:notice:${session.sequence}`,
         role: "system",
-        text: "Construction paused by the mayor.",
-      }),
-    );
+        kind: "notice",
+        text: `${dropped} queued order${dropped === 1 ? "" : "s"} discarded by the mayor.`,
+        contextPaths: [],
+      });
+    }
+    if (session.runner) {
+      await session.runner.interrupt();
+    } else {
+      this.emitAgentEvent(sessionId, {
+        type: "session.status",
+        status: "interrupted",
+        outcome: "interrupted",
+      });
+    }
     return true;
   }
 
-  resolvePermit(toolCallId: string, decision: "allow" | "deny"): boolean {
-    return this.registry
-      .list()
-      .some((city) => city.agent.resolvePermit(toolCallId, decision));
+  async renameSession(sessionId: string, title: string): Promise<boolean> {
+    const session = this.sessions.get(sessionId);
+    if (!session) {
+      return false;
+    }
+    session.title = title;
+    session.autoTitled = false;
+    this.emitSessionEvent(session, { type: "session.renamed", title });
+    return true;
+  }
+
+  async configureSession(
+    sessionId: string,
+    changes: { model?: string; effort?: EffortLevel; permissionMode?: PermissionMode },
+  ): Promise<boolean> {
+    const session = this.sessions.get(sessionId);
+    if (!session || session.status === "closed") {
+      return false;
+    }
+    if (changes.model !== undefined) {
+      session.model = changes.model;
+      await session.runner?.setModel(changes.model);
+    }
+    if (changes.effort !== undefined) {
+      session.effort = changes.effort;
+      session.runner?.setEffort(changes.effort);
+    }
+    if (changes.permissionMode !== undefined) {
+      session.permissionMode = changes.permissionMode;
+      await session.runner?.setPermissionMode(changes.permissionMode);
+    }
+    this.emitSessionEvent(session, {
+      type: "session.configured",
+      model: changes.model,
+      effort: changes.effort,
+      permissionMode: changes.permissionMode,
+    });
+    return true;
+  }
+
+  async closeSession(sessionId: string): Promise<boolean> {
+    const session = this.sessions.get(sessionId);
+    if (!session) {
+      return false;
+    }
+    session.queued = [];
+    if (session.runner) {
+      await session.runner.dispose();
+      session.runner = undefined;
+    }
+    if (session.status !== "closed") {
+      session.closedAt = new Date().toISOString();
+      this.emitAgentEvent(sessionId, {
+        type: "session.status",
+        status: "closed",
+      });
+    }
+    return true;
+  }
+
+  async unarchiveSession(sessionId: string): Promise<boolean> {
+    const session = this.sessions.get(sessionId);
+    if (!session || session.status !== "closed") {
+      return false;
+    }
+    session.closedAt = undefined;
+    session.queued = [];
+    this.emitAgentEvent(sessionId, {
+      type: "session.status",
+      status: "idle",
+    });
+    return true;
+  }
+
+  resolvePermit(
+    sessionId: string,
+    toolCallId: string,
+    decision: "allow" | "allow-always" | "deny",
+  ): boolean {
+    return this.sessions.get(sessionId)?.runner?.resolvePermit(toolCallId, decision) ?? false;
+  }
+
+  transcript(
+    sessionId: string,
+    afterSequence?: number,
+  ): { events: GameEvent[]; fromSequence: number; hasMore: boolean } | undefined {
+    if (!this.sessions.get(sessionId)) {
+      return undefined;
+    }
+    const page = this.store.readEventPage(sessionId, { afterSequence });
+    return {
+      events: page.events,
+      fromSequence: page.events[0]?.sequence ?? afterSequence ?? 0,
+      hasMore: page.hasMore,
+    };
   }
 
   async diff(cityId: CityId, path: string): Promise<string> {
@@ -790,7 +1172,9 @@ export class Workspace {
   }
 
   async dispose(): Promise<void> {
-    await this.registry.disposeAll();
+    await Promise.all(
+      this.sessions.list().map((session) => session.runner?.dispose()),
+    );
     this.store.close();
   }
 }

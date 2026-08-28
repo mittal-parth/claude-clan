@@ -340,37 +340,14 @@ export class WorldBuildingManager {
     this.dragPreviewOffset = undefined;
   }
 
-  beginDragPreview(building: Building, pointer: Phaser.Input.Pointer): void {
-    const view = this.views.get(building.path);
-    if (!view) {
-      return;
-    }
-
+  beginDragPreview(_building: Building, _pointer: Phaser.Input.Pointer): void {
+    // Drag preview is handled exclusively by the DOM layer (App.tsx) so that
+    // it seamlessly floats over both the canvas and HUD windows without rendering a duplicate sprite.
     this.clearDragPreview();
-    const pointerWorld = this.scene.cameras.main.getWorldPoint(pointer.x, pointer.y);
-    this.dragPreviewOffset = {
-      x: view.sprite.x - pointerWorld.x,
-      y: view.sprite.y - pointerWorld.y,
-    };
-    this.dragPreview = this.scene.add
-      .sprite(view.sprite.x, view.sprite.y, view.sprite.texture.key)
-      .setOrigin(view.sprite.originX, view.sprite.originY)
-      .setAlpha(0.48)
-      .setDepth(SKY_DEPTH + 1);
-    this.moveDragPreview(pointer);
   }
 
-  moveDragPreview(pointer: Phaser.Input.Pointer): void {
-    if (!this.dragPreview) {
-      return;
-    }
-
-    const pointerWorld = this.scene.cameras.main.getWorldPoint(pointer.x, pointer.y);
-    const offset = this.dragPreviewOffset ?? { x: 0, y: 0 };
-    this.dragPreview.setPosition(
-      pointerWorld.x + offset.x,
-      pointerWorld.y + offset.y,
-    );
+  moveDragPreview(_pointer: Phaser.Input.Pointer): void {
+    // Handled by DOM layer
   }
 
   clear(ambient?: AmbientLife): void {

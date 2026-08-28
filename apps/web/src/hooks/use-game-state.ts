@@ -1,10 +1,9 @@
-import { useState, useRef, useEffect, useMemo, FormEvent } from "react";
+import { useState, useRef, useEffect, useMemo, useCallback, FormEvent } from "react";
 import {
   type Building,
   type BudgetInfo,
   type CitySummary,
   type CrewPolicy,
-  type GameEvent,
   type Issue,
   type MayorCommand,
   type PermissionMode,
@@ -30,15 +29,10 @@ import {
   RESCAN_DEBOUNCE_MS,
   RECONNECT_BASE_DELAY_MS,
   RECONNECT_MAX_DELAY_MS,
-  EVENTS_PER_CITY_CAP,
-  loadStoredEvents,
-  clearStoredEvents,
-  eventsStorageKey,
   promptForIssue,
   pointIsInside,
 } from "@/lib/app-utils";
-import { createLocalPermitDismissal } from "@/lib/quest-utils";
-import { ConstructionTracker } from "@/lib/construction-tracker";
+import { ConstructionTracker, type ConstructionSitesBySession } from "@/lib/construction-tracker";
 import {
   readHudState,
   type HudPanelId,
@@ -53,6 +47,7 @@ import {
 } from "@/crew/catalog";
 import { type CrewSelection } from "@/components/CrewSelectDialog";
 import { demoGatedAction, type DemoAction } from "@/auth/demo-gate";
+import { useSessions } from "@/hooks/use-sessions";
 
 /** Everything on duty until the server's policy message says otherwise. */
 const UNRESTRICTED_POLICY: CrewPolicy = {
@@ -83,6 +78,7 @@ export function useGameState({
   const socketRef = useRef<WebSocket>(null);
   const canvasRef = useRef<GameCanvasHandle>(null);
   const orderFormRef = useRef<HTMLFormElement>(null);
+  const sessionModalRef = useRef<HTMLDivElement>(null);
   const initialRevealReadyRef = useRef(false);
   const initialRevealTimerRef = useRef<
     ReturnType<typeof setTimeout> | undefined
@@ -99,9 +95,6 @@ export function useGameState({
   const [budget, setBudget] = useState<BudgetInfo | null>(null);
   const [viewerLogin, setViewerLogin] = useState<string>();
   const [activeCityId, setActiveCityId] = useState("main");
-  const [eventsByCity, setEventsByCity] = useState<Record<string, GameEvent[]>>(
-    () => ({ main: loadStoredEvents(activeRepoKey, "main") }),
-  );
   const [worldByCity, setWorldByCity] = useState<Record<string, WorldSnapshot>>(
     {},
   );
@@ -120,6 +113,7 @@ export function useGameState({
   const [dragPreview, setDragPreview] = useState<CanvasDragPreview>();
   const [dragPosition, setDragPosition] = useState<CanvasPointerPosition>();
   const [contextPaths, setContextPaths] = useState<string[]>([]);
+  const [sessionContextPaths, setSessionContextPaths] = useState<string[]>([]);
   const [orderPermissionMode, setOrderPermissionMode] =
     useState<PermissionMode>("default");
   const [crewSelection, setCrewSelection] = useState<CrewSelection>({
@@ -127,12 +121,14 @@ export function useGameState({
     effort: DEFAULT_EFFORT,
   });
   const [crewDialogOpen, setCrewDialogOpen] = useState(false);
+  const [archivedSessionsOpen, setArchivedSessionsOpen] = useState(false);
   const [crewPolicy, setCrewPolicy] = useState<CrewPolicy>(UNRESTRICTED_POLICY);
   /** The action a visitor reached for in the demo city; opens the sign-in modal. */
   const [signInAction, setSignInAction] = useState<string>();
   const [hud, setHud] = useState(readHudState);
   const [fileChange, setFileChange] = useState<CanvasFileChange>();
-  const [buildingPaths, setBuildingPaths] = useState<string[]>([]);
+  const [constructionBySession, setConstructionBySession] =
+    useState<ConstructionSitesBySession>({});
   const [selected, setSelected] = useState<Building>();
   const [shipHover, setShipHover] = useState<ShipHoverInfo>();
   const [shipTravelTargetId, setShipTravelTargetId] = useState<string>();
@@ -143,6 +139,8 @@ export function useGameState({
   const [issueTravelRequest, setIssueTravelRequest] =
     useState<CanvasTravelRequest>();
   const [navyTravelRequest, setNavyTravelRequest] =
+    useState<CanvasTravelRequest>();
+  const [teleportTravelRequest, setTeleportTravelRequest] =
     useState<CanvasTravelRequest>();
   const [airportArrivalDelayed, setAirportArrivalDelayed] = useState(false);
   const [initialRevealReady, setInitialRevealReady] = useState(false);
@@ -172,7 +170,24 @@ export function useGameState({
   // prompt rather than sitting greyed out: someone reaching for the crew is
   // exactly who the account is for.
   const demoLocked = activeRepoKey === "demo" && !crewPolicy.demoInteractive;
-  const events = eventsByCity[activeCityId] ?? [];
+  const sendCommand = useCallback((command: MayorCommand): void => {
+    if (socketRef.current?.readyState === WebSocket.OPEN) {
+      socketRef.current.send(JSON.stringify(command));
+    }
+  }, []);
+  const sessions = useSessions({
+    send: sendCommand,
+    activeRepoKey,
+    connection,
+    demoLocked,
+    onDemoGate: (action) => {
+      setSignInAction(action === "permit" ? "stamp a permit" : "dispatch a crew");
+    },
+  });
+
+  useEffect(() => {
+    setSessionContextPaths([]);
+  }, [sessions.focusedSessionId]);
   const world =
     worldRepoKey === activeRepoKey ? worldByCity[activeCityId] : undefined;
   const overlay = overlayByCity[activeCityId];
@@ -221,7 +236,7 @@ export function useGameState({
     setSelected(undefined);
     setDiff(undefined);
     setFileChange(undefined);
-    setBuildingPaths([]);
+    setConstructionBySession({});
     setShipHover(undefined);
     setShipTravelTargetId(undefined);
     setIssueShopOpen(false);
@@ -232,7 +247,6 @@ export function useGameState({
     setDragPreview(undefined);
     setDragPosition(undefined);
     setContextPaths([]);
-    setEventsByCity({ main: loadStoredEvents(activeRepoKey, "main") });
     setConnection("connecting");
     setReconnectAttempt(0);
 
@@ -243,18 +257,8 @@ export function useGameState({
     const rescanTimers: Record<string, ReturnType<typeof setTimeout>> = {};
     const sites = new ConstructionTracker({
       graceMs: CONSTRUCTION_GRACE_MS,
-      onChange: setBuildingPaths,
+      onChange: (sitesBySession) => setConstructionBySession(sitesBySession),
     });
-
-    function appendEvent(cityId: string, event: GameEvent): void {
-      setEventsByCity((current) => {
-        const bucket = current[cityId] ?? [];
-        return {
-          ...current,
-          [cityId]: [...bucket.slice(-(EVENTS_PER_CITY_CAP - 1)), event],
-        };
-      });
-    }
 
     function connect(): void {
       if (torndown) {
@@ -348,6 +352,7 @@ export function useGameState({
         if (!decoded.success) {
           return;
         }
+        sessions.handleServerMessage(decoded.data);
 
         if (decoded.data.kind === "cities") {
           setCities(decoded.data.cities);
@@ -394,32 +399,6 @@ export function useGameState({
             setSignInAction((current) => current ?? "keep building");
             return;
           }
-          if (
-            decoded.data.code === "PERMIT_NOT_FOUND" &&
-            decoded.data.toolCallId
-          ) {
-            const toolCallId = decoded.data.toolCallId;
-            setEventsByCity((current) => {
-              for (const [cityId, bucket] of Object.entries(current)) {
-                if (
-                  bucket.some(
-                    (event) =>
-                      event.type === "permit.requested" &&
-                      event.toolCallId === toolCallId,
-                  )
-                ) {
-                  return {
-                    ...current,
-                    [cityId]: [
-                      ...bucket,
-                      createLocalPermitDismissal(cityId, toolCallId, bucket),
-                    ],
-                  };
-                }
-              }
-              return current;
-            });
-          }
           return;
         }
 
@@ -442,7 +421,6 @@ export function useGameState({
         }
 
         const event = decoded.data.event;
-        appendEvent(event.cityId, event);
         if (event.type === "world.ready") {
           setWorldByCity((current) => ({
             ...current,
@@ -457,14 +435,14 @@ export function useGameState({
             path: event.path,
             change: event.change,
           });
-          sites.start(event.path);
+          sites.start(event.sessionId, event.path);
           scheduleRescan(event.cityId);
         }
         if (event.type === "tool.started" && event.target) {
-          sites.start(event.target, event.toolCallId);
+          sites.start(event.sessionId, event.target, event.toolCallId);
         }
         if (event.type === "tool.completed") {
-          sites.finish(event.toolCallId);
+          sites.finish(event.sessionId, event.toolCallId);
         }
       });
     }
@@ -494,17 +472,6 @@ export function useGameState({
   }, [airportArrival, world]);
 
   useEffect(() => {
-    for (const [cityId, bucket] of Object.entries(eventsByCity)) {
-      try {
-        localStorage.setItem(
-          eventsStorageKey(activeRepoKey, cityId),
-          JSON.stringify(bucket),
-        );
-      } catch {}
-    }
-  }, [activeRepoKey, eventsByCity]);
-
-  useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
       if (event.key === "k" && (event.metaKey || event.ctrlKey)) {
         event.preventDefault();
@@ -525,14 +492,6 @@ export function useGameState({
     }
   }
 
-  function clearTransmissions(): void {
-    setEventsByCity((current) => ({
-      ...current,
-      [activeCityId]: [],
-    }));
-    clearStoredEvents(activeCityId);
-  }
-
   /** Opens the sign-in modal and reports whether the action should stop here. */
   function blockedByDemoGate(action: DemoAction): boolean {
     const gated = demoGatedAction({ ...action, demoLocked });
@@ -543,13 +502,6 @@ export function useGameState({
     return true;
   }
 
-  function resolvePermit(toolCallId: string, decision: "allow" | "deny"): void {
-    if (blockedByDemoGate({ action: "permit" })) {
-      return;
-    }
-    send({ type: "permit.resolve", toolCallId, decision });
-  }
-
   function travelTo(cityId: string): void {
     if (blockedByDemoGate({ action: "travel", cityId })) {
       return;
@@ -557,12 +509,20 @@ export function useGameState({
     setActiveCityId(cityId);
     setSelected(undefined);
     setDiff(undefined);
-    setEventsByCity((current) =>
-      cityId in current
-        ? current
-        : { ...current, [cityId]: loadStoredEvents(activeRepoKey, cityId) },
-    );
     send({ type: "city.travel", cityId });
+  }
+
+  function teleportToCity(cityId: string): void {
+    if (cityId === activeCityId || blockedByDemoGate({ action: "travel", cityId })) {
+      return;
+    }
+    setSelected(undefined);
+    setDiff(undefined);
+    setTeleportTravelRequest({
+      id: `teleport-${cityId}-${Date.now()}`,
+      cityId,
+      ship: "teleport",
+    });
   }
 
   function requestShipTravel(cityId: string): void {
@@ -572,11 +532,6 @@ export function useGameState({
     setShipTravelTargetId(cityId);
     setSelected(undefined);
     setDiff(undefined);
-    setEventsByCity((current) =>
-      cityId in current
-        ? current
-        : { ...current, [cityId]: loadStoredEvents(activeRepoKey, cityId) },
-    );
     send({ type: "city.travel", cityId });
   }
 
@@ -585,6 +540,7 @@ export function useGameState({
     setShipTravelTargetId(undefined);
     setIssueTravelRequest(undefined);
     setNavyTravelRequest(undefined);
+    setTeleportTravelRequest(undefined);
   }
 
   function takeIssueToFix(issue: Issue): void {
@@ -716,6 +672,12 @@ export function useGameState({
     setDraggingBuilding(undefined);
     setDragPreview(undefined);
     setDragPosition(undefined);
+    if (pointIsInside(sessionModalRef.current, position)) {
+      setSessionContextPaths((current) =>
+        current.includes(building.path) ? current : [...current, building.path],
+      );
+      return;
+    }
     if (!pointIsInside(orderFormRef.current, position)) {
       return;
     }
@@ -738,10 +700,7 @@ export function useGameState({
     if (blockedByDemoGate({ action: "dispatch" })) {
       return;
     }
-    send({
-      type: "session.prompt",
-      cityId: activeCityId,
-      prompt: nextPrompt,
+    sessions.openSession(activeCityId, nextPrompt, {
       permissionMode: orderPermissionMode,
       model: getCrewMember(crewSelection.crewId).model,
       effort: crewSelection.effort,
@@ -756,6 +715,7 @@ export function useGameState({
     socketRef,
     canvasRef,
     orderFormRef,
+    sessionModalRef,
     connection,
     reconnectAttempt,
     cities,
@@ -763,7 +723,8 @@ export function useGameState({
     budget,
     viewerLogin,
     activeCityId,
-    eventsByCity,
+    constructionBySession,
+    sessions,
     worldByCity,
     worldRepoKey,
     overlayByCity,
@@ -774,12 +735,14 @@ export function useGameState({
     dragPreview,
     dragPosition,
     contextPaths,
+    sessionContextPaths,
+    setSessionContextPaths,
     orderPermissionMode,
     crewSelection,
     crewDialogOpen,
+    archivedSessionsOpen,
     hud,
     fileChange,
-    buildingPaths,
     selected,
     shipHover,
     shipTravelTargetId,
@@ -796,7 +759,6 @@ export function useGameState({
     screenshotUrl,
     isCapturingSnapshot,
     isFlashingShutter,
-    events,
     world,
     overlay,
     ownWorkCities,
@@ -809,7 +771,6 @@ export function useGameState({
     setBudget,
     setViewerLogin,
     setActiveCityId,
-    setEventsByCity,
     setWorldByCity,
     setWorldRepoKey,
     setOverlayByCity,
@@ -823,9 +784,9 @@ export function useGameState({
     setOrderPermissionMode,
     setCrewSelection,
     setCrewDialogOpen,
+    setArchivedSessionsOpen,
     setHud,
     setFileChange,
-    setBuildingPaths,
     setSelected,
     setShipHover,
     setShipTravelTargetId,
@@ -835,6 +796,8 @@ export function useGameState({
     setWorktreeShopOpen,
     setIssueTravelRequest,
     setNavyTravelRequest,
+    teleportTravelRequest,
+    setTeleportTravelRequest,
     setAirportArrivalDelayed,
     setInitialRevealReady,
     setInitialRevealComplete,
@@ -846,8 +809,8 @@ export function useGameState({
     notifyInitialRevealReady,
     toggleHud,
     send,
-    clearTransmissions,
     travelTo,
+    teleportToCity,
     requestShipTravel,
     completeShipTravel,
     takeIssueToFix,
@@ -861,7 +824,6 @@ export function useGameState({
     handleBuildingDrop,
     removeContextPath,
     submitPrompt,
-    resolvePermit,
     crewPolicy,
     demoLocked,
     signInAction,

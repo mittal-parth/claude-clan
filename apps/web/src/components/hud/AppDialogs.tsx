@@ -13,8 +13,10 @@ import {
 } from "../ui/command";
 import { ShutterFlash } from "../ShutterFlash";
 import { ShareCityModal } from "../ShareCityModal";
-import { fileBasename, fileDirname, cityLabel } from "@/lib/app-utils";
+import { fileBasename, fileDirname, cityLabel, pointIsInside } from "@/lib/app-utils";
 import { useGameState } from "@/hooks/use-game-state";
+import { SessionModal } from "@/components/sessions/SessionModal";
+import { ArchivedSessionsModal } from "@/components/sessions/ArchivedSessionsModal";
 
 export interface AppDialogsProps {
   state: ReturnType<typeof useGameState>;
@@ -44,6 +46,9 @@ export function AppDialogs({ state, activeRepoKey }: AppDialogsProps) {
     crewSelection,
     setCrewSelection,
 
+    archivedSessionsOpen,
+    setArchivedSessionsOpen,
+
     commandOpen,
     setCommandOpen,
     world,
@@ -52,6 +57,12 @@ export function AppDialogs({ state, activeRepoKey }: AppDialogsProps) {
     send,
     cities,
     travelTo,
+    sessions,
+    sessionModalRef,
+    sessionContextPaths,
+    setSessionContextPaths,
+    draggingBuilding,
+    dragPosition,
 
     isFlashingShutter,
     setIsFlashingShutter,
@@ -60,6 +71,25 @@ export function AppDialogs({ state, activeRepoKey }: AppDialogsProps) {
     setShareModalOpen,
     screenshotUrl,
   } = state;
+
+  const focusedView = sessions.focusedSessionId
+    ? sessions.sessionsById[sessions.focusedSessionId]
+    : undefined;
+
+  const isModalDropTarget = Boolean(
+    draggingBuilding &&
+    dragPosition &&
+    pointIsInside(sessionModalRef.current, dragPosition),
+  );
+
+  function copyFocusedTranscript(): void {
+    if (!focusedView) return;
+    const transcript = focusedView.events
+      .filter((event) => event.type === "session.message")
+      .map((event) => `${event.role}: ${event.text}`)
+      .join("\n\n");
+    void navigator.clipboard?.writeText(transcript);
+  }
 
   return (
     <>
@@ -104,6 +134,58 @@ export function AppDialogs({ state, activeRepoKey }: AppDialogsProps) {
         }}
       />
 
+      <ArchivedSessionsModal
+        open={archivedSessionsOpen}
+        onOpenChange={setArchivedSessionsOpen}
+        sessions={sessions.archivedSessions}
+        activeCityId={activeCityId}
+        unreadFor={sessions.unreadFor}
+        onUnarchive={sessions.unarchiveSession}
+      />
+
+      <SessionModal
+        ref={sessionModalRef}
+        open={Boolean(sessions.focusedSessionId)}
+        view={focusedView}
+        activeCityId={activeCityId}
+        connection={state.connection}
+        crewPolicy={state.crewPolicy}
+        contextPaths={sessionContextPaths}
+        onContextPathsChange={setSessionContextPaths}
+        draggingBuilding={draggingBuilding}
+        isDropTarget={isModalDropTarget}
+        onClose={sessions.blurSession}
+        onRename={(title) => {
+          if (sessions.focusedSessionId) {
+            sessions.renameSession(sessions.focusedSessionId, title);
+          }
+        }}
+        onCopyTranscript={copyFocusedTranscript}
+        onPermit={(toolCallId, decision) => {
+          if (sessions.focusedSessionId) {
+            sessions.resolvePermit(sessions.focusedSessionId, toolCallId, decision);
+          }
+        }}
+        onSend={(prompt, contextPaths) => {
+          if (sessions.focusedSessionId) {
+            sessions.sendToSession(sessions.focusedSessionId, prompt, contextPaths);
+            setSessionContextPaths([]);
+          }
+        }}
+        onInterrupt={() => {
+          if (sessions.focusedSessionId) {
+            sessions.interruptSession(sessions.focusedSessionId);
+          }
+        }}
+        onConfigure={(changes) => {
+          if (sessions.focusedSessionId) {
+            sessions.configureSession(sessions.focusedSessionId, changes);
+          }
+        }}
+        onOpenFiles={() => setCommandOpen(true)}
+        onTravel={state.teleportToCity}
+      />
+
       <CommandDialog open={commandOpen} onOpenChange={setCommandOpen}>
         <CommandInput placeholder="Search files or mayor commands..." />
         <CommandList>
@@ -115,8 +197,16 @@ export function AppDialogs({ state, activeRepoKey }: AppDialogsProps) {
                   key={building.path}
                   value={building.path}
                   onSelect={() => {
-                    canvasRef.current?.focusBuilding(building.path);
-                    selectBuilding(building);
+                    if (sessions.focusedSessionId) {
+                      setSessionContextPaths((current) =>
+                        current.includes(building.path)
+                          ? current
+                          : [...current, building.path],
+                      );
+                    } else {
+                      canvasRef.current?.focusBuilding(building.path);
+                      selectBuilding(building);
+                    }
                     setCommandOpen(false);
                   }}
                 >
@@ -141,11 +231,13 @@ export function AppDialogs({ state, activeRepoKey }: AppDialogsProps) {
             </CommandItem>
             <CommandItem
               onSelect={() => {
-                send({ type: "session.interrupt", cityId: activeCityId });
+                if (sessions.focusedSessionId) {
+                  sessions.focusSession(sessions.focusedSessionId);
+                }
                 setCommandOpen(false);
               }}
             >
-              Halt construction
+              Open focused order
             </CommandItem>
             <CommandItem
               onSelect={() => {

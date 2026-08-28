@@ -4,7 +4,7 @@ import type { useGameState } from "@/hooks/use-game-state";
 import { HudWindow } from "./HudWindow";
 import { HudButton } from "./HudButton";
 import { paletteFor, colorToCss } from "@/game/math/palette";
-import { colorWithAlpha } from "@/lib/app-utils";
+import { colorWithAlpha, fileBasename } from "@/lib/app-utils";
 import { getCrewMember, effortLabel, crewSpriteUrl } from "@/crew/catalog";
 
 export interface AppHudOrderProps {
@@ -22,8 +22,6 @@ export function AppHudOrder({ state }: AppHudOrderProps) {
     prompt,
     setPrompt,
     connection,
-    send,
-    activeCityId,
     removeContextPath,
     world,
     crewSelection,
@@ -40,7 +38,7 @@ export function AppHudOrder({ state }: AppHudOrderProps) {
       ref={orderFormRef}
       onSubmit={submitPrompt}
       className={cn(
-        "hud-form w-[min(34rem,100%)]",
+        "hud-form relative z-10 w-[min(34rem,100%)]",
         draggingBuilding && "is-drop-target",
       )}
     >
@@ -50,7 +48,7 @@ export function AppHudOrder({ state }: AppHudOrderProps) {
         hint={draggingBuilding ? "drop to attach" : undefined}
         expanded={hud.order}
         onToggle={() => toggleHud("order")}
-        bodyClassName="grid gap-2 p-2.5"
+        bodyClassName="grid gap-2 p-2.5 overflow-visible"
         meta={
           contextPaths.length > 0 ? (
             <span className="hud-pill">{contextPaths.length} in context</span>
@@ -80,20 +78,6 @@ export function AppHudOrder({ state }: AppHudOrderProps) {
                 disabled={connection !== "online" || !prompt.trim()}
               >
                 Dispatch
-              </HudButton>
-              <HudButton
-                type="button"
-                size="md"
-                variant="outline"
-                onClick={() =>
-                  send({
-                    type: "session.interrupt",
-                    cityId: activeCityId,
-                  })
-                }
-                disabled={connection !== "online"}
-              >
-                Halt
               </HudButton>
             </div>
           </div>
@@ -130,7 +114,7 @@ export function AppHudOrder({ state }: AppHudOrderProps) {
         ) : null}
 
         {contextPaths.length > 0 ? (
-          <div className="flex flex-wrap items-center gap-1">
+          <div className="relative z-10 flex flex-wrap items-center gap-1">
             {contextPaths.map((path) => {
               const contextBuilding = world?.buildings.find(
                 (building) => building.path === path,
@@ -139,34 +123,41 @@ export function AppHudOrder({ state }: AppHudOrderProps) {
                 contextBuilding?.language ?? "unknown",
               );
               return (
-                <button
-                  key={path}
-                  type="button"
-                  title={`Remove ${path} from context`}
-                  onClick={() => removeContextPath(path)}
-                  className="retro inline-flex max-w-full items-center gap-1.5 border px-1.5 py-1 text-left text-[8px] transition-colors hover:border-primary"
-                  style={{
-                    backgroundColor: colorWithAlpha(palette.accent, 0.12),
-                    borderColor: colorWithAlpha(palette.accent, 0.6),
-                  }}
-                >
-                  <span
-                    className="hud-mark size-3.5 text-[7px]"
+                <div key={path} className="group relative z-10 inline-flex max-w-full">
+                  <button
+                    type="button"
+                    aria-label={`Remove ${fileBasename(path)} (${path})`}
+                    onClick={() => removeContextPath(path)}
+                    className="retro inline-flex max-w-full items-center gap-1.5 border px-1.5 py-1 text-left text-[8px] transition-colors hover:border-primary"
                     style={{
-                      backgroundColor: colorToCss(palette.accent),
-                      borderColor: colorToCss(palette.accentDark),
-                      color: colorToCss(palette.ink),
+                      backgroundColor: colorWithAlpha(palette.accent, 0.12),
+                      borderColor: colorWithAlpha(palette.accent, 0.6),
                     }}
                   >
-                    {palette.mark}
-                  </span>
-                  <span className="max-w-[14rem] truncate text-foreground">
-                    {path}
-                  </span>
-                  <span aria-hidden="true" className="text-muted-foreground">
-                    ×
-                  </span>
-                </button>
+                    <span
+                      className="hud-mark size-3.5 text-[7px]"
+                      style={{
+                        backgroundColor: colorToCss(palette.accent),
+                        borderColor: colorToCss(palette.accentDark),
+                        color: colorToCss(palette.ink),
+                      }}
+                    >
+                      {palette.mark}
+                    </span>
+                    <span className="max-w-[14rem] truncate text-foreground">
+                      {fileBasename(path)}
+                    </span>
+                    <span aria-hidden="true" className="text-muted-foreground">
+                      ×
+                    </span>
+                  </button>
+                  <div
+                    role="tooltip"
+                    className="pointer-events-none absolute bottom-full left-0 z-50 mb-1 hidden h-4 items-center justify-center whitespace-nowrap border border-white/20 bg-[#081923]/95 px-1.5 shadow-xl backdrop-blur-sm group-hover:inline-flex"
+                  >
+                    <span className="retro text-[8px] leading-none text-amber-200">{path}</span>
+                  </div>
+                </div>
               );
             })}
           </div>

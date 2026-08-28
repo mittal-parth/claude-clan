@@ -32,6 +32,7 @@ const CREW_BOB = 3;
 const CREW_BOB_PERIOD = 2_200;
 
 export interface ConstructionTarget {
+  sessionId: string;
   path: string;
   /** Screen position of the plot's bottom corner — where sprites anchor. */
   x: number;
@@ -40,6 +41,8 @@ export interface ConstructionTarget {
   depth: number;
   /** Pixel height of the building, used to size the scaffold. */
   height: number;
+  /** Loaded portrait texture for the session on this site. */
+  crewTexture?: string;
 }
 
 interface Site {
@@ -58,38 +61,21 @@ interface Site {
 
 export class ConstructionSites {
   private sites = new Map<string, Site>();
-  private crewTexture?: string;
 
   constructor(
     private readonly scene: Phaser.Scene,
     private readonly reducedMotion: boolean,
   ) {}
 
-  /**
-   * Who is on shift. The texture is loaded by the scene, so this only ever
-   * receives a key that is ready to draw. Sites already standing pick the new
-   * crew up immediately rather than waiting for the next file to be touched.
-   */
-  setCrewTexture(key?: string): void {
-    if (this.crewTexture === key) {
-      return;
-    }
-
-    this.crewTexture = key;
-    for (const site of this.sites.values()) {
-      this.dismissCrew(site);
-      this.attachCrew(site);
-    }
-  }
-
-  /** Stands a crew member on the plot, if we have a portrait for them yet. */
+  /** Stands the correct session portrait on every site it owns. */
   private attachCrew(site: Site): void {
-    if (!this.crewTexture) {
+    const crewTexture = site.target.crewTexture;
+    if (!crewTexture) {
       return;
     }
 
     const crew = this.scene.add
-      .sprite(0, 0, this.crewTexture)
+      .sprite(0, 0, crewTexture)
       .setOrigin(0.5, 1);
     crew.setScale(CREW_HEIGHT / crew.height);
     site.crew = crew;
@@ -135,23 +121,25 @@ export class ConstructionSites {
   /** Diffs the requested set against what is standing; leaves the rest alone. */
   sync(targets: readonly ConstructionTarget[]): void {
     const wanted = new Map(
-      targets.slice(0, MAX_SITES).map((target) => [target.path, target]),
+      targets
+        .slice(0, MAX_SITES)
+        .map((target) => [`${target.sessionId}\0${target.path}`, target]),
     );
 
-    for (const [path, site] of this.sites) {
-      if (!wanted.has(path)) {
+    for (const [key, site] of this.sites) {
+      if (!wanted.has(key)) {
         this.teardown(site);
-        this.sites.delete(path);
+        this.sites.delete(key);
       }
     }
 
-    for (const [path, target] of wanted) {
-      const existing = this.sites.get(path);
+    for (const [key, target] of wanted) {
+      const existing = this.sites.get(key);
       if (existing) {
         this.reposition(existing, target);
         continue;
       }
-      this.sites.set(path, this.build(target));
+      this.sites.set(key, this.build(target));
     }
   }
 
@@ -239,8 +227,12 @@ export class ConstructionSites {
       site.target.x !== target.x ||
       site.target.y !== target.y ||
       site.target.depth !== target.depth;
+    const crewChanged = site.target.crewTexture !== target.crewTexture;
     site.target = target;
-    if (moved) {
+    if (crewChanged) {
+      this.dismissCrew(site);
+      this.attachCrew(site);
+    } else if (moved) {
       this.placeCrew(site);
     }
 

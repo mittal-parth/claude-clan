@@ -1,7 +1,7 @@
 import { access, rm } from "node:fs/promises";
 import { join } from "node:path";
 import type { SandboxSettings } from "@sudo-city/agent";
-import type { BudgetInfo, CityId, GameEvent } from "@sudo-city/protocol";
+import type { BudgetInfo, CityId, GameEvent, SessionSummary } from "@sudo-city/protocol";
 import type { FastifyBaseLogger } from "fastify";
 import { cloneRepo } from "./clone.js";
 import { chooseEvictionVictim } from "./eviction.js";
@@ -12,7 +12,8 @@ const GLOBAL_WORKSPACE_CAP = 80;
 const PER_USER_WORKSPACE_CAP = 4;
 
 export interface WorkspaceEventSink {
-  onEvent: (workspaceKey: string, cityId: CityId, event: GameEvent) => void;
+  onEvent: (workspaceKey: string, cityId: CityId, sessionId: string, event: GameEvent) => void;
+  onSessionChanged: (workspaceKey: string, session: SessionSummary) => void;
   onCitiesChanged: (workspaceKey: string) => void;
   onIssuesChanged: (workspaceKey: string) => void;
 }
@@ -35,7 +36,7 @@ export interface UserSpendStore {
  * configured credentials. Everything else is a per-user clone under
  * cloneRoot, LRU-evicted once the process holds too many of them open at
  * once (Render's disk and memory are both finite, and each open Workspace
- * holds a live SQLite handle and at least one AgentSessionManager).
+ * holds a live SQLite handle and at least one SessionRunner).
  */
 export class WorkspaceManager {
   private readonly workspaces = new Map<string, Workspace>();
@@ -265,7 +266,8 @@ export class WorkspaceManager {
         userId === undefined
           ? undefined
           : (amountUsd) => this.recordSpend(userId, amountUsd),
-      onEvent: (cityId, event) => this.sink.onEvent(key, cityId, event),
+      onEvent: (cityId, sessionId, event) => this.sink.onEvent(key, cityId, sessionId, event),
+      onSessionChanged: (session) => this.sink.onSessionChanged(key, session),
       onCitiesChanged: () => this.sink.onCitiesChanged(key),
       onIssuesChanged: () => this.sink.onIssuesChanged(key),
     });

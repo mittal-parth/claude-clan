@@ -1,3 +1,4 @@
+import { DatabaseSync } from "node:sqlite";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -29,8 +30,11 @@ describe("SQLiteWorldStore", () => {
       sequence: 1,
       timestamp: "2026-08-08T00:00:00.000Z",
       type: "session.message",
+      messageId: "message_1",
       role: "system",
+      kind: "notice",
       text: "Ready",
+      contextPaths: [],
     };
     const snapshot: WorldSnapshot = {
       id: "world:one",
@@ -116,6 +120,208 @@ describe("SQLiteWorldStore", () => {
     expect(store.loadLatestSnapshot("pr-42")).toEqual(prSnapshot);
     expect(store.loadLatestSnapshot("pr-99")).toBeUndefined();
 
+    store.close();
+  });
+});
+
+
+describe("session persistence", () => {
+  function messageEvent(sessionId: string, sequence: number): GameEvent {
+    return {
+      id: `${sessionId}-event-${sequence}`,
+      cityId: "main",
+      sessionId,
+      sequence,
+      timestamp: "2026-08-08T00:00:00.000Z",
+      type: "session.message",
+      messageId: `${sessionId}-message-${sequence}`,
+      role: "agent",
+      kind: "text",
+      text: `message ${sequence}`,
+      contextPaths: [],
+    };
+  }
+
+  it("round-trips session records and filters them by city", () => {
+    const store = createStore();
+    const record = {
+      sessionId: "session-main",
+      cityId: "main",
+      title: "Main order",
+      autoTitled: false,
+      model: "sonnet",
+      effort: "high",
+      permissionMode: "default",
+      status: "idle",
+      lastTurnOutcome: "success",
+      createdAt: "2026-08-08T00:00:00.000Z",
+      updatedAt: "2026-08-08T00:01:00.000Z",
+      turnCount: 2,
+      costUsd: 0.25,
+      sequence: 8,
+      readOnly: true,
+      closedAt: "2026-08-08T00:02:00.000Z",
+    };
+    store.saveSession(record);
+    store.saveSession({
+      ...record,
+      sessionId: "session-pr",
+      cityId: "pr-51",
+      title: "Review order",
+      updatedAt: "2026-08-08T00:03:00.000Z",
+      closedAt: undefined,
+    });
+
+    expect(store.loadSessions()).toEqual([
+      { ...record, sessionId: "session-pr", cityId: "pr-51", title: "Review order", updatedAt: "2026-08-08T00:03:00.000Z", closedAt: undefined },
+      record,
+    ]);
+    expect(store.loadSessions("pr-51")).toEqual([
+      { ...record, sessionId: "session-pr", cityId: "pr-51", title: "Review order", updatedAt: "2026-08-08T00:03:00.000Z", closedAt: undefined },
+    ]);
+    store.close();
+  });
+
+  it("allows the same sequence in separate sessions", () => {
+    const store = createStore();
+    store.appendEvent(messageEvent("session-a", 0));
+    store.appendEvent(messageEvent("session-b", 0));
+
+    expect(store.readEvents("session-a")).toHaveLength(1);
+    expect(store.readEvents("session-b")).toHaveLength(1);
+    store.close();
+  });
+
+  it("deletes a session and its transcript without touching other events", () => {
+    const store = createStore();
+    store.saveSession({
+      sessionId: "session-delete",
+      cityId: "main",
+      title: "Delete me",
+      autoTitled: false,
+      model: "sonnet",
+      effort: "high",
+      permissionMode: "default",
+      status: "closed",
+      lastTurnOutcome: "success",
+      createdAt: "2026-08-08T00:00:00.000Z",
+      updatedAt: "2026-08-08T00:01:00.000Z",
+      turnCount: 1,
+      costUsd: 0.1,
+      sequence: 1,
+      readOnly: false,
+      closedAt: "2026-08-08T00:02:00.000Z",
+    });
+    store.appendEvent(messageEvent("session-delete", 0));
+    store.appendEvent(messageEvent("session-keep", 0));
+
+    store.deleteSession("session-delete");
+
+    expect(store.loadSessions()).toEqual([]);
+    expect(store.readEvents("session-delete")).toEqual([]);
+    expect(store.readEventPage("session-delete")).toEqual({
+      events: [],
+      hasMore: false,
+    });
+    expect(store.readEvents("session-keep")).toHaveLength(1);
+    store.close();
+  });
+
+  it("pages newest events by default and later events after a cursor", () => {
+    const store = createStore();
+    for (const sequence of [0, 1, 2, 3, 4]) {
+      store.appendEvent(messageEvent("session-page", sequence));
+    }
+
+    const newest = store.readEventPage("session-page", { limit: 2 });
+    expect(newest.events.map((event) => event.sequence)).toEqual([3, 4]);
+    expect(newest.hasMore).toBe(true);
+
+    const later = store.readEventPage("session-page", {
+      afterSequence: 1,
+      limit: 2,
+    });
+    expect(later.events.map((event) => event.sequence)).toEqual([2, 3]);
+    expect(later.hasMore).toBe(true);
+    store.close();
+  });
+
+  it("does not persist live session deltas", () => {
+    const store = createStore();
+    store.appendEvent({
+      ...messageEvent("session-delta", 0),
+      id: "delta-event",
+      type: "session.delta",
+      messageId: "message-delta",
+      kind: "text",
+      text: "partial",
+    });
+
+    expect(store.readEvents("session-delta")).toEqual([]);
+    store.close();
+  });
+
+  it("drops an old events table when the sessions migration marker is absent", () => {
+    const directory = mkdtempSync(join(tmpdir(), "sudo-city-world-legacy-"));
+    temporaryDirectories.push(directory);
+    const databasePath = join(directory, "world.db");
+    const legacy = new DatabaseSync(databasePath);
+    legacy.exec(`
+      CREATE TABLE events (
+        id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        sequence INTEGER NOT NULL,
+        timestamp TEXT NOT NULL,
+        type TEXT NOT NULL,
+        payload TEXT NOT NULL
+      );
+      INSERT INTO events VALUES ('legacy', 'main', 0, '2026-08-08T00:00:00.000Z', 'session.message', '{}');
+    `);
+    legacy.close();
+
+    const store = new SQLiteWorldStore(databasePath);
+    expect(store.readEvents("main")).toEqual([]);
+    store.close();
+  });
+
+  it("replaces an incompatible legacy sessions table", () => {
+    const directory = mkdtempSync(join(tmpdir(), "sudo-city-world-legacy-sessions-"));
+    temporaryDirectories.push(directory);
+    const databasePath = join(directory, "world.db");
+    const legacy = new DatabaseSync(databasePath);
+    legacy.exec(`
+      CREATE TABLE sessions (
+        id TEXT PRIMARY KEY,
+        city_id TEXT NOT NULL,
+        title TEXT NOT NULL,
+        status TEXT NOT NULL,
+        model TEXT NOT NULL,
+        effort TEXT NOT NULL,
+        sdk_session_id TEXT,
+        cost_usd REAL NOT NULL DEFAULT 0,
+        input_tokens INTEGER NOT NULL DEFAULT 0,
+        output_tokens INTEGER NOT NULL DEFAULT 0,
+        turn_count INTEGER NOT NULL DEFAULT 0,
+        message_count INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      INSERT INTO sessions VALUES ('legacy-session', 'main', 'Old order', 'idle', 'sonnet', 'high', NULL, 0, 0, 0, 0, 0, '2026-08-08T00:00:00.000Z', '2026-08-08T00:00:00.000Z');
+      CREATE TABLE events (
+        id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        sequence INTEGER NOT NULL,
+        timestamp TEXT NOT NULL,
+        type TEXT NOT NULL,
+        payload TEXT NOT NULL
+      );
+      INSERT INTO events VALUES ('legacy-event', 'legacy-session', 0, '2026-08-08T00:00:00.000Z', 'session.message', '{}');
+    `);
+    legacy.close();
+
+    const store = new SQLiteWorldStore(databasePath);
+    expect(store.loadSessions()).toEqual([]);
+    expect(store.readEvents("legacy-session")).toEqual([]);
     store.close();
   });
 });

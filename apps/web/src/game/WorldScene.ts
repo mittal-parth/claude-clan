@@ -45,6 +45,14 @@ export { variantFor };
 
 export type FileChange = "added" | "modified" | "deleted";
 
+export interface SceneCrew {
+  sessionId: string;
+  sprite: string;
+  paths: string[];
+}
+
+const SITE_KEY_SEPARATOR = "\0";
+
 export interface ShipHoverInfo {
   cityId: string;
   title: string;
@@ -83,13 +91,16 @@ export class WorldScene extends Phaser.Scene {
   private ambient?: AmbientLife;
   private construction?: ConstructionSites;
 
-  private buildingPaths: string[] = [];
+  private crews: SceneCrew[] = [];
   private sitedPaths = new Set<string>();
-  private crewUrl?: string;
+  private sitedSiteKeys = new Set<string>();
+  private readonly crewUrls = new Map<string, string>();
+  private readonly crewTextures = new Map<string, string>();
 
   private hasFitCamera = false;
   private currentCityId?: string;
   private currentWorldKey?: string;
+  private focusedSessionId?: string;
   private travelTransitionActive = false;
 
   constructor() {
@@ -121,7 +132,6 @@ export class WorldScene extends Phaser.Scene {
     });
     this.construction = new ConstructionSites(this, prefersReducedMotion());
 
-    this.loadCrewSprite(this.crewUrl);
     this.cameraController.bindCamera();
     this.events.once("shutdown", () => this.cancelBuildingDrag());
   }
@@ -230,37 +240,35 @@ export class WorldScene extends Phaser.Scene {
 
   setCities(_cities: readonly CitySummary[]): void {}
 
-  setBuildingPaths(paths: string[]): void {
-    this.buildingPaths = paths;
+  setCrews(crews: readonly SceneCrew[]): void {
+    this.crews = crews.map((crew) => ({ ...crew, paths: [...crew.paths] }));
+    for (const crew of this.crews) {
+      this.loadCrewSprite(crew.sessionId, crew.sprite);
+    }
     this.syncConstruction();
   }
 
-  setCrewSprite(url?: string): void {
-    if (url === this.crewUrl) {
-      return;
-    }
-    this.crewUrl = url;
-    if (this.construction) {
-      this.loadCrewSprite(url);
+  setFocusedSessionId(sessionId?: string): void {
+    this.focusedSessionId = sessionId;
+    if (sessionId) {
+      this.revealFocusedConstruction(sessionId);
     }
   }
 
-  private loadCrewSprite(url?: string): void {
-    if (!url) {
-      this.construction?.setCrewTexture(undefined);
-      return;
-    }
-
+  private loadCrewSprite(sessionId: string, url: string): void {
+    this.crewUrls.set(sessionId, url);
     const key = `crew:${url}`;
     if (this.textures.exists(key)) {
-      this.construction?.setCrewTexture(key);
+      this.crewTextures.set(sessionId, key);
+      this.syncConstruction();
       return;
     }
 
     this.load.image(key, url);
     this.load.once(Phaser.Loader.Events.COMPLETE, () => {
-      if (this.crewUrl === url && this.textures.exists(key)) {
-        this.construction?.setCrewTexture(key);
+      if (this.crewUrls.get(sessionId) === url && this.textures.exists(key)) {
+        this.crewTextures.set(sessionId, key);
+        this.syncConstruction();
       }
     });
     this.load.start();
@@ -273,21 +281,32 @@ export class WorldScene extends Phaser.Scene {
 
     const views = this.buildingManager.getViews();
     const targets: ConstructionTarget[] = [];
-    for (const path of this.buildingPaths) {
-      const view = views.get(path);
-      if (!view) {
-        continue;
+    for (const crew of this.crews) {
+      for (const path of crew.paths) {
+        const view = views.get(path);
+        if (!view) {
+          continue;
+        }
+        targets.push({
+          sessionId: crew.sessionId,
+          path,
+          x: view.sprite.x,
+          y: view.sprite.y,
+          depth: view.sprite.depth,
+          height: view.sprite.height,
+          crewTexture: this.crewTextures.get(crew.sessionId),
+        });
       }
-      targets.push({
-        path,
-        x: view.sprite.x,
-        y: view.sprite.y,
-        depth: view.sprite.depth,
-        height: view.sprite.height,
-      });
     }
 
-    const opened = targets.find((target) => !this.sitedPaths.has(target.path));
+    const opened = targets.find((target) => {
+      const key = `${target.sessionId}${SITE_KEY_SEPARATOR}${target.path}`;
+      return !this.sitedSiteKeys.has(key) &&
+        (this.focusedSessionId === undefined || target.sessionId === this.focusedSessionId);
+    });
+    this.sitedSiteKeys = new Set(
+      targets.map((target) => `${target.sessionId}${SITE_KEY_SEPARATOR}${target.path}`),
+    );
     this.sitedPaths = new Set(targets.map((target) => target.path));
 
     for (const path of this.sitedPaths) {
@@ -298,6 +317,27 @@ export class WorldScene extends Phaser.Scene {
 
     if (opened) {
       this.revealConstruction(opened);
+    }
+  }
+
+  private revealFocusedConstruction(sessionId: string): void {
+    const views = this.buildingManager.getViews();
+    for (const crew of this.crews) {
+      if (crew.sessionId !== sessionId) continue;
+      const path = crew.paths[0];
+      if (!path) continue;
+      const view = views.get(path);
+      if (!view) continue;
+      this.revealConstruction({
+        sessionId,
+        path,
+        x: view.sprite.x,
+        y: view.sprite.y,
+        depth: view.sprite.depth,
+        height: view.sprite.height,
+        crewTexture: this.crewTextures.get(sessionId),
+      });
+      return;
     }
   }
 
@@ -424,6 +464,7 @@ export class WorldScene extends Phaser.Scene {
   private resetWorld(): void {
     this.construction?.clear();
     this.sitedPaths.clear();
+    this.sitedSiteKeys.clear();
     this.cameraController.focusTween?.stop();
     this.cameraController.focusTween = undefined;
     this.cancelBuildingDrag();
@@ -490,6 +531,14 @@ export class WorldScene extends Phaser.Scene {
 
   async revealAfterTravel(): Promise<void> {
     await this.navyManager.revealAfterTravel(this.transitionManager);
+  }
+
+  async coverForTeleport(): Promise<void> {
+    await this.transitionManager.playCoverTransition();
+  }
+
+  async revealAfterTeleport(): Promise<void> {
+    await this.transitionManager.partCloudCover();
   }
 
   /**

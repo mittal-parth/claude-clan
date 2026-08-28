@@ -2,8 +2,8 @@
 
 Turn a codebase into an isometric city, then run it as the mayor: type a
 command, a Claude agent crew picks it up, and the city reacts live — cranes
-rise over files being edited, buildings grow with the code, and a quest log
-tracks what the crew is doing.
+rise over files being edited, buildings grow with the code, and a sessions list
+keeps every concurrent conversation visible.
 
 As agents take on more of the actual building, the bottleneck shifts from
 writing code to keeping track of what an agent is doing — which files it's
@@ -25,13 +25,16 @@ code feels like watching a construction site, not scrolling a log.
 The world fills the viewport and every panel is a floating HUD window you can
 collapse; the layout is remembered between sessions.
 
-- **Mayor's order** — type what the crew should build, then `DISPATCH` (or
-  `HALT` to interrupt). Permissions are per order: `ASK MAYOR` pauses on every
-  tool call for your approval, `DON'T DISTURB` lets the crew work unattended.
-  Buildings can be dragged into the order as context paths.
-- **Mayor console** — the crew on duty, a context stamina meter, the treasury
-  against the session budget, permits waiting for a `STAMP` or `DENY`, and the
-  transmissions log of the crew's transcript.
+- **Mayor's order** — type what a new crew should build, choose its model,
+  effort and permission mode, then `DISPATCH`. Each dispatch opens a separate
+  multi-turn session and opens its conversation immediately; follow-ups can be
+  sent from that session's modal while other crews continue working. Buildings
+  can be dragged into the order as context paths.
+- **Sessions console** — the live roster covers every city in the repository,
+  showing each crew's status, activity, cost and unread transcript count.
+  Open a row to continue its conversation, queue follow-ups, rename or close
+  it, halt only that session, and resolve permits in the transcript that raised
+  them. Queued follow-ups run one turn at a time and are discarded by HALT.
 - **City scan** — how many structures are mapped, broken down by language.
 - **Command palette** (`⌘K` / `Ctrl+K`) — fuzzy-search files; picking one flies
   the camera to its building.
@@ -87,7 +90,7 @@ alongside `main`. Ship travel takes you between them:
 | `packages/cities` | Lists open PRs and manages the `git worktree` + diff overlay behind each PR city. |
 | `packages/protocol` | Shared zod schemas/types for world state, game events, and mayor commands. |
 | `apps/server` | Fastify + WebSocket server: scans the repo, serves world snapshots per city, relays mayor commands to the agent, streams events. |
-| `apps/web` | Vite + React + Phaser client: renders the isometric city and the mayor HUD (chat, quest log, HUD stats). |
+| `apps/web` | Vite + React + Phaser client: renders the isometric city and the mayor HUD (session list, chat modals and HUD stats). |
 | `apps/cli` | `sudo-city <path>` — boots the server and web app together against a target repository and opens the browser. |
 
 ## Requirements
