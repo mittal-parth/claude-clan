@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   installUrl,
   needsRefresh,
+  isValidRepoFullName,
   parseInstallationsJson,
   parseRepoListJson,
   parseUserReposJson,
@@ -160,6 +161,27 @@ describe("installUrl", () => {
 describe("repoKeyFor", () => {
   it("lowercases the full name", () => {
     expect(repoKeyFor("Octocat/Hello-World")).toBe("octocat/hello-world");
+  });
+});
+
+describe("isValidRepoFullName", () => {
+  it("accepts valid GitHub repository names", () => {
+    expect(isValidRepoFullName("octocat/hello-world")).toBe(true);
+    expect(isValidRepoFullName("owner-123/repo.name_sub")).toBe(true);
+    expect(isValidRepoFullName("org/a")).toBe(true);
+  });
+
+  it("rejects path traversal attempts and invalid formats", () => {
+    expect(isValidRepoFullName("../../etc/passwd")).toBe(false);
+    expect(isValidRepoFullName("foo/../../bar")).toBe(false);
+    expect(isValidRepoFullName("owner/..")).toBe(false);
+    expect(isValidRepoFullName("../repo")).toBe(false);
+    expect(isValidRepoFullName("./repo")).toBe(false);
+    expect(isValidRepoFullName("repo")).toBe(false);
+    expect(isValidRepoFullName("owner/repo/extra")).toBe(false);
+    expect(isValidRepoFullName("")).toBe(false);
+    expect(isValidRepoFullName(null)).toBe(false);
+    expect(isValidRepoFullName(undefined)).toBe(false);
   });
 });
 

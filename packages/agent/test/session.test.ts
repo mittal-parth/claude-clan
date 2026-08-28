@@ -264,4 +264,29 @@ describe("SessionRunner", () => {
     expect(event.text).not.toContain("encrypted-secret");
     await instance.goCold();
   });
+
+  it("denies tool access to paths outside the workspace directory", async () => {
+    const instance = runner().instance;
+    await instance.send("read server env");
+    const canUseTool = queryMock.mock.calls[0]![0].options.canUseTool as any;
+
+    const deniedRead = await canUseTool("Read", { file_path: "/opt/claude-clan/.env" }, {
+      toolUseID: "tool-outside-1",
+      signal: new AbortController().signal,
+      requestId: "req-1",
+    });
+    expect(deniedRead).toMatchObject({
+      behavior: "deny",
+    });
+
+    const allowedRead = await canUseTool("Read", { file_path: "src/index.ts" }, {
+      toolUseID: "tool-inside-1",
+      signal: new AbortController().signal,
+      requestId: "req-2",
+    });
+    expect(allowedRead).toMatchObject({
+      behavior: "allow",
+    });
+    await instance.goCold();
+  });
 });

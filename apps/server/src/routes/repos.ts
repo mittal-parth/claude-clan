@@ -1,4 +1,4 @@
-import { repoKeyFor } from "@sudo-city/cities";
+import { isValidRepoFullName, repoKeyFor } from "@sudo-city/cities";
 import type { RepoSummary } from "@sudo-city/protocol";
 import type { FastifyReply, FastifyRequest, FastifyInstance } from "fastify";
 import type { AuthContext } from "../auth-context.js";
@@ -74,8 +74,8 @@ export function registerRepoRoutes(
         return;
       }
       const { fullName } = request.body ?? {};
-      if (!fullName?.includes("/")) {
-        await reply.code(400).send({ error: "fullName must be owner/name" });
+      if (!isValidRepoFullName(fullName)) {
+        await reply.code(400).send({ error: "fullName must be a valid owner/name" });
         return;
       }
       const [owner, name] = fullName.split("/") as [string, string];

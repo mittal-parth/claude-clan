@@ -12,6 +12,8 @@ export {
   type TranslatedAgentEvent,
 } from "./translate.js";
 export {
+  extractTargetPaths,
+  isInsideDirectory,
   isRecord,
   normalisePath,
   normalizePath,

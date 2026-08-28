@@ -71,6 +71,17 @@ describe("buildSandboxSettings", () => {
     expect(sandbox?.filesystem?.allowRead).toEqual([WORKSPACE.repoPath]);
   });
 
+  it("denies reading the server root when configured", () => {
+    const sandbox = buildSandboxSettings(
+      { ...WORKSPACE, serverRoot: "/opt/claude-clan" },
+      { SUDO_CITY_PUBLIC_DEPLOYMENT: "1" },
+    );
+    expect(sandbox?.filesystem?.denyRead).toEqual([
+      WORKSPACE.cloneRoot,
+      "/opt/claude-clan",
+    ]);
+  });
+
   it("unsets the server's secrets for sandboxed commands", () => {
     const denied = buildSandboxSettings(WORKSPACE, {
       SUDO_CITY_PUBLIC_DEPLOYMENT: "1",
@@ -148,4 +159,14 @@ describe("isPublicDeployment", () => {
       );
     },
   );
+
+  it("treats NODE_ENV=production as public unless explicitly disabled", () => {
+    expect(isPublicDeployment({ NODE_ENV: "production" })).toBe(true);
+    expect(
+      isPublicDeployment({
+        NODE_ENV: "production",
+        SUDO_CITY_PUBLIC_DEPLOYMENT: "0",
+      }),
+    ).toBe(false);
+  });
 });

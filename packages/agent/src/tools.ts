@@ -1,4 +1,4 @@
-import { isAbsolute, relative, sep } from "node:path";
+import { isAbsolute, relative, resolve, sep } from "node:path";
 import {
   TOOL_INPUT_PREVIEW_LIMIT,
   TOOL_RESULT_PREVIEW_LIMIT,
@@ -10,6 +10,35 @@ export function isRecord(value: unknown): value is Record<string, unknown> {
 
 export function normalisePath(path: string): string {
   return path.split(/[\\/]/u).join("/");
+}
+
+/**
+ * Checks whether a given path stays strictly inside baseDir (preventing directory traversal).
+ */
+export function isInsideDirectory(baseDir: string, targetPath: string): boolean {
+  const resolvedBase = resolve(baseDir);
+  const resolvedTarget = isAbsolute(targetPath)
+    ? resolve(targetPath)
+    : resolve(baseDir, targetPath);
+  const rel = relative(resolvedBase, resolvedTarget);
+  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+}
+
+/**
+ * Extracts candidate file/directory paths from tool input arguments.
+ */
+export function extractTargetPaths(input: unknown): string[] {
+  if (!isRecord(input)) {
+    return [];
+  }
+  const paths: string[] = [];
+  for (const key of ["file_path", "path"]) {
+    const value = input[key];
+    if (typeof value === "string" && value.trim()) {
+      paths.push(value.trim());
+    }
+  }
+  return paths;
 }
 
 /**
