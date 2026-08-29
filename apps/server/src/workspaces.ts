@@ -1,10 +1,18 @@
 import { access, rm } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import type { SandboxSettings } from "@sudo-city/agent";
-import type { BudgetInfo, CityId, GameEvent, SessionSummary } from "@sudo-city/protocol";
+import type { BudgetInfo, CityId, GameEvent, PlanUsageWindow, SessionSummary } from "@sudo-city/protocol";
 import type { FastifyBaseLogger } from "fastify";
 import { cloneRepo } from "./clone.js";
 import { chooseEvictionVictim } from "./eviction.js";
+import {
+  creditMode,
+  isLocalMode,
+  isLocalWorkspaceKey,
+  localCapUsd,
+  localOrderCapUsd,
+  localWorkspaceKey,
+} from "./local-mode.js";
 import { Workspace } from "./workspace.js";
 
 const DEMO_KEY = "demo";
@@ -16,6 +24,7 @@ export interface WorkspaceEventSink {
   onSessionChanged: (workspaceKey: string, session: SessionSummary) => void;
   onCitiesChanged: (workspaceKey: string) => void;
   onIssuesChanged: (workspaceKey: string) => void;
+  onBudgetChanged?: () => void;
 }
 
 /**
@@ -27,6 +36,28 @@ export interface WorkspaceEventSink {
 export interface UserSpendStore {
   spentUsd: (userId: number) => Promise<number>;
   addSpend: (userId: number, amountUsd: number) => Promise<number>;
+}
+
+export type BudgetPolicy =
+  | { kind: "hosted"; globalMaxUsd: number; perUserMaxUsd: number }
+  | { kind: "local-subscription" }
+  | { kind: "local-api-key"; capUsd?: number; orderCapUsd?: number };
+
+/** Build the process policy; local mode is the only path that can relax caps. */
+export function budgetPolicyFromEnv(
+  env: NodeJS.ProcessEnv,
+  hosted: { globalMaxUsd: number; perUserMaxUsd: number },
+): BudgetPolicy {
+  if (!isLocalMode(env)) {
+    return { kind: "hosted", ...hosted };
+  }
+  return creditMode(env) === "api-key"
+    ? {
+        kind: "local-api-key",
+        capUsd: localCapUsd(env),
+        orderCapUsd: localOrderCapUsd(env),
+      }
+    : { kind: "local-subscription" };
 }
 
 /**
@@ -43,47 +74,127 @@ export class WorkspaceManager {
   private readonly pendingOpens = new Map<string, Promise<Workspace>>();
   private readonly log: FastifyBaseLogger;
   private readonly cloneRoot: string;
-  private readonly globalMaxBudgetUsd: number;
-  private readonly perUserMaxBudgetUsd: number;
+  private readonly budgetPolicy: BudgetPolicy;
   private readonly sandboxFor: ((repoPath: string) => SandboxSettings | undefined) | undefined;
+  private readonly pathToClaudeCodeExecutable: string | undefined;
+  private readonly settingSources: readonly ("user" | "project" | "local")[] | undefined;
+  private readonly agentEnv: Record<string, string> | undefined;
   private readonly spendStore: UserSpendStore | undefined;
   /** Lifetime spend per signed-in user, read through from spendStore on first open and written back after every run. */
   private readonly userSpend = new Map<number, number>();
   private readonly sink: WorkspaceEventSink;
   private demoWorkspace: Workspace | undefined;
+  private fiveHourUsage?: PlanUsageWindow;
+  private weeklyUsage?: PlanUsageWindow;
+  private subscriptionFirstTurnAt?: number;
 
   constructor(options: {
     log: FastifyBaseLogger;
     cloneRoot: string;
-    globalMaxBudgetUsd: number;
-    perUserMaxBudgetUsd: number;
+    budgetPolicy?: BudgetPolicy;
+    /** Legacy hosted inputs retained for existing callers and regression tests. */
+    globalMaxBudgetUsd?: number;
+    perUserMaxBudgetUsd?: number;
     spendStore?: UserSpendStore;
     sandboxFor?: (repoPath: string) => SandboxSettings | undefined;
+    pathToClaudeCodeExecutable?: string;
+    settingSources?: readonly ("user" | "project" | "local")[];
+    agentEnv?: Record<string, string>;
     sink: WorkspaceEventSink;
   }) {
     this.log = options.log;
     this.cloneRoot = options.cloneRoot;
-    this.globalMaxBudgetUsd = options.globalMaxBudgetUsd;
-    this.perUserMaxBudgetUsd = options.perUserMaxBudgetUsd;
+    this.budgetPolicy = options.budgetPolicy ?? {
+      kind: "hosted",
+      globalMaxUsd: options.globalMaxBudgetUsd ?? 1,
+      perUserMaxUsd: options.perUserMaxBudgetUsd ?? 10,
+    };
     this.sandboxFor = options.sandboxFor;
+    this.pathToClaudeCodeExecutable = options.pathToClaudeCodeExecutable;
+    this.settingSources = options.settingSources;
+    this.agentEnv = options.agentEnv;
     this.spendStore = options.spendStore;
     this.sink = options.sink;
   }
 
-  /** Rationed across every open workspace's spend, not per-workspace -- see workspace.ts's WorkspaceOptions.remainingBudget doc. */
-  remainingBudget(): number {
-    const spent = [...this.workspaces.values()].reduce(
+  updateRateLimit(info: {
+    rateLimitType?: string;
+    status?: "allowed" | "allowed_warning" | "rejected";
+    resetsAt?: string;
+    utilization?: number;
+  }): void {
+    const type = info.rateLimitType ?? "five_hour";
+    const windowUpdate: PlanUsageWindow = {
+      status: info.status,
+      resetsAt: info.resetsAt,
+      utilization: info.utilization,
+    };
+    if (type === "five_hour") {
+      this.fiveHourUsage = { ...this.fiveHourUsage, ...windowUpdate };
+    } else if (
+      type === "seven_day" ||
+      type === "seven_day_opus" ||
+      type === "seven_day_sonnet" ||
+      type === "weekly"
+    ) {
+      this.weeklyUsage = { ...this.weeklyUsage, ...windowUpdate };
+    }
+    this.sink.onBudgetChanged?.();
+  }
+
+  private recordSubscriptionActivity(): void {
+    const now = Date.now();
+    const FIVE_HOURS_MS = 5 * 60 * 60 * 1000;
+    if (
+      !this.subscriptionFirstTurnAt ||
+      now - this.subscriptionFirstTurnAt > FIVE_HOURS_MS
+    ) {
+      this.subscriptionFirstTurnAt = now;
+    }
+  }
+
+  private get uncapped(): boolean {
+    return this.budgetPolicy.kind === "local-subscription"
+      || (this.budgetPolicy.kind === "local-api-key" &&
+        this.budgetPolicy.capUsd === undefined &&
+        this.budgetPolicy.orderCapUsd === undefined);
+  }
+
+  private get orderCapUsd(): number | undefined {
+    return this.budgetPolicy.kind === "local-api-key"
+      ? this.budgetPolicy.orderCapUsd
+      : undefined;
+  }
+
+  private totalSpent(): number {
+    return [...this.workspaces.values()].reduce(
       (total, workspace) => total + workspace.spentUsd(),
       0,
     );
-    return Math.max(0, this.globalMaxBudgetUsd - spent);
   }
 
-  /** What this user has left of their own lifetime cap, independent of the shared ceiling. */
+  /** Rationed across every open workspace's spend, not per-workspace. */
+  remainingBudget(): number {
+    if (this.uncapped) {
+      return Number.POSITIVE_INFINITY;
+    }
+    if (this.budgetPolicy.kind === "local-api-key") {
+      return Math.max(0, this.budgetPolicy.capUsd! - this.totalSpent());
+    }
+    if (this.budgetPolicy.kind === "hosted") {
+      return Math.max(0, this.budgetPolicy.globalMaxUsd - this.totalSpent());
+    }
+    return Number.POSITIVE_INFINITY;
+  }
+
+  /** What this user has left of the hosted lifetime cap. */
   remainingUserBudget(userId: number): number {
+    if (this.budgetPolicy.kind !== "hosted") {
+      return Number.POSITIVE_INFINITY;
+    }
     return Math.max(
       0,
-      this.perUserMaxBudgetUsd - (this.userSpend.get(userId) ?? 0),
+      this.budgetPolicy.perUserMaxUsd - (this.userSpend.get(userId) ?? 0),
     );
   }
 
@@ -92,34 +203,64 @@ export class WorkspaceManager {
   }
 
   budgetInfo(userId: number | undefined): BudgetInfo {
-    if (userId === undefined) {
-      const spent = [...this.workspaces.values()].reduce(
-        (total, workspace) => total + workspace.spentUsd(),
-        0,
-      );
-      const remaining = Math.max(0, this.globalMaxBudgetUsd - spent);
+    if (this.budgetPolicy.kind === "local-subscription") {
+      const FIVE_HOURS_MS = 5 * 60 * 60 * 1000;
+      const estimatedFiveHourReset =
+        this.fiveHourUsage?.resetsAt ??
+        (this.subscriptionFirstTurnAt
+          ? new Date(this.subscriptionFirstTurnAt + FIVE_HOURS_MS).toISOString()
+          : undefined);
+
       return {
-        totalBudgetUsd: this.globalMaxBudgetUsd,
+        mode: "subscription",
+        spentUsd: this.totalSpent(),
+        fiveHourLimit: {
+          status: this.fiveHourUsage?.status ?? "allowed",
+          utilization: this.fiveHourUsage?.utilization,
+          resetsAt: estimatedFiveHourReset,
+        },
+        weeklyLimit: {
+          status: this.weeklyUsage?.status ?? "allowed",
+          utilization: this.weeklyUsage?.utilization,
+          resetsAt: this.weeklyUsage?.resetsAt,
+        },
+      };
+    }
+    if (this.budgetPolicy.kind === "local-api-key") {
+      const spent = this.totalSpent();
+      const cap = this.budgetPolicy.capUsd;
+      return {
+        mode: "api-key",
         spentUsd: spent,
-        remainingBudgetUsd: remaining,
+        ...(cap === undefined
+          ? {}
+          : {
+              totalBudgetUsd: cap,
+              remainingBudgetUsd: Math.max(0, cap - spent),
+            }),
       };
     }
 
-    const spent = this.userSpentUsd(userId);
-    const remaining = this.remainingBudgetFor(userId);
+    // Do not add mode here: the locked hosted regression tests assert this
+    // exact three-field shape. Absent mode means api-key to protocol readers.
+    if (userId === undefined) {
+      const spent = this.totalSpent();
+      return {
+        totalBudgetUsd: this.budgetPolicy.globalMaxUsd,
+        spentUsd: spent,
+        remainingBudgetUsd: Math.max(0, this.budgetPolicy.globalMaxUsd - spent),
+      };
+    }
     return {
-      totalBudgetUsd: this.perUserMaxBudgetUsd,
-      spentUsd: spent,
-      remainingBudgetUsd: remaining,
+      totalBudgetUsd: this.budgetPolicy.perUserMaxUsd,
+      spentUsd: this.userSpentUsd(userId),
+      remainingBudgetUsd: this.remainingBudgetFor(userId),
     };
   }
 
-  /**
-   * A signed-in user's order is capped by whichever runs out first: the shared
-   * ceiling that funds the whole server, or their own lifetime allowance.
-   */
+  /** Hosted orders are capped by the shared ceiling and the user's lifetime cap. */
   private remainingBudgetFor(userId: number | undefined): number {
-    if (userId === undefined) {
+    if (userId === undefined || this.budgetPolicy.kind !== "hosted") {
       return this.remainingBudget();
     }
     return Math.min(this.remainingBudget(), this.remainingUserBudget(userId));
@@ -255,6 +396,55 @@ export class WorkspaceManager {
     return opening;
   }
 
+  /** Opens a user-owned folder; eviction must never delete its repository tree. */
+  async openLocalFolder(options: {
+    path: string;
+    githubToken?: string;
+    storeRoot?: string;
+  }): Promise<Workspace> {
+    const path = resolve(options.path);
+    const key = localWorkspaceKey(path);
+    const existing = this.workspaces.get(key);
+    if (existing) {
+      existing.touch();
+      return existing;
+    }
+    const pending = this.pendingOpens.get(key);
+    if (pending) {
+      return pending;
+    }
+
+    const opening = (async () => {
+      const workspace = await Workspace.open({
+        key,
+        repoPath: path,
+        githubToken: options.githubToken,
+        log: this.log,
+        sandbox: this.sandboxFor?.(path),
+        pathToClaudeCodeExecutable: this.pathToClaudeCodeExecutable,
+        settingSources: this.settingSources,
+        agentEnv: this.agentEnv,
+        storeRoot: options.storeRoot,
+        deletable: false,
+        uncappedBudget: this.uncapped,
+        orderCapUsd: this.orderCapUsd,
+        remainingBudget: () => this.remainingBudgetFor(undefined),
+        onEvent: (cityId, sessionId, event) =>
+          this.sink.onEvent(key, cityId, sessionId, event),
+        onSessionChanged: (session) => this.sink.onSessionChanged(key, session),
+        onCitiesChanged: () => this.sink.onCitiesChanged(key),
+        onIssuesChanged: () => this.sink.onIssuesChanged(key),
+        onRateLimit: (info) => this.updateRateLimit(info),
+      });
+      this.workspaces.set(key, workspace);
+      return workspace;
+    })().finally(() => {
+      this.pendingOpens.delete(key);
+    });
+    this.pendingOpens.set(key, opening);
+    return opening;
+  }
+
   private async buildWorkspace(
     key: string,
     repoPath: string,
@@ -267,6 +457,12 @@ export class WorkspaceManager {
       githubToken,
       log: this.log,
       sandbox: this.sandboxFor?.(repoPath),
+      pathToClaudeCodeExecutable: this.pathToClaudeCodeExecutable,
+      settingSources: this.settingSources,
+      agentEnv: this.agentEnv,
+      deletable: true,
+      uncappedBudget: this.uncapped,
+      orderCapUsd: this.orderCapUsd,
       remainingBudget: () => this.remainingBudgetFor(userId),
       onSpend:
         userId === undefined
@@ -276,6 +472,7 @@ export class WorkspaceManager {
       onSessionChanged: (session) => this.sink.onSessionChanged(key, session),
       onCitiesChanged: () => this.sink.onCitiesChanged(key),
       onIssuesChanged: () => this.sink.onIssuesChanged(key),
+      onRateLimit: (info) => this.updateRateLimit(info),
     });
   }
 
@@ -301,10 +498,12 @@ export class WorkspaceManager {
     if (userKeys.length >= PER_USER_WORKSPACE_CAP) {
       await this.evictLru(userKeys);
     }
-    const nonDemoCount = this.workspaces.size - (this.demoWorkspace ? 1 : 0);
+    const nonDemoCount = [...this.workspaces.keys()].filter(
+      (key) => key !== DEMO_KEY && !isLocalWorkspaceKey(key),
+    ).length;
     if (nonDemoCount >= GLOBAL_WORKSPACE_CAP) {
       const allNonDemoKeys = [...this.workspaces.keys()].filter(
-        (key) => key !== DEMO_KEY,
+        (key) => key !== DEMO_KEY && !isLocalWorkspaceKey(key),
       );
       await this.evictLru(allNonDemoKeys);
     }
@@ -344,6 +543,13 @@ export class WorkspaceManager {
     }
     this.workspaces.delete(key);
     await workspace.dispose();
+    if (!workspace.deletable) {
+      this.log.debug(
+        { key },
+        "Evicted a local workspace; leaving its directory on disk",
+      );
+      return;
+    }
     await rm(workspace.repoPath, { recursive: true, force: true }).catch((error: unknown) => {
       this.log.warn({ error, key }, "Failed to remove an evicted workspace's clone");
     });
