@@ -24,14 +24,16 @@ import type {
 import type { ShipHoverInfo } from "@/game/WorldScene";
 import {
   type ConnectionState,
-  websocketUrl,
+  resolveWebsocketUrl,
   CONSTRUCTION_GRACE_MS,
   RESCAN_DEBOUNCE_MS,
   RECONNECT_BASE_DELAY_MS,
   RECONNECT_MAX_DELAY_MS,
   promptForIssue,
   pointIsInside,
+  isLoginCommand,
 } from "@/lib/app-utils";
+import { isDesktop } from "@/lib/desktop";
 import { ConstructionTracker, type ConstructionSitesBySession } from "@/lib/construction-tracker";
 import {
   readHudState,
@@ -64,6 +66,7 @@ export interface GameStateProps {
   airportArrival?: CanvasAirportTravel;
   onInitialRevealReady?: () => void;
   onInitialRevealComplete?: () => void;
+  onOpenTerminal?: (command?: string) => void;
 }
 
 export function useGameState({
@@ -74,6 +77,7 @@ export function useGameState({
   airportArrival,
   onInitialRevealReady,
   onInitialRevealComplete,
+  onOpenTerminal,
 }: GameStateProps) {
   const socketRef = useRef<WebSocket>(null);
   const canvasRef = useRef<GameCanvasHandle>(null);
@@ -183,6 +187,7 @@ export function useGameState({
     onDemoGate: (action) => {
       setSignInAction(action === "permit" ? "stamp a permit" : "dispatch a crew");
     },
+    onOpenTerminal,
   });
 
   useEffect(() => {
@@ -264,7 +269,7 @@ export function useGameState({
       if (torndown) {
         return;
       }
-      const ws = new WebSocket(websocketUrl);
+      const ws = new WebSocket(resolveWebsocketUrl());
       socket = ws;
       socketRef.current = ws;
 
@@ -289,12 +294,13 @@ export function useGameState({
 
         function sendRepoSelect(): void {
           if (torndown || socket !== ws) return;
-          ws.send(
-            JSON.stringify({
-              type: "repo.select",
-              repoKey: activeRepoKey,
-            } satisfies MayorCommand),
-          );
+          const command: MayorCommand = activeRepoKey.startsWith("local:")
+            ? {
+                type: "repo.openLocal",
+                path: activeRepoKey.slice("local:".length),
+              }
+            : { type: "repo.select", repoKey: activeRepoKey };
+          ws.send(JSON.stringify(command));
         }
 
         if (user) {
@@ -697,6 +703,13 @@ export function useGameState({
     if (!nextPrompt) {
       return;
     }
+    if (isLoginCommand(nextPrompt)) {
+      if (onOpenTerminal && isDesktop()) {
+        onOpenTerminal("claude login");
+        setPrompt("");
+        return;
+      }
+    }
     if (blockedByDemoGate({ action: "dispatch" })) {
       return;
     }
@@ -726,6 +739,7 @@ export function useGameState({
     activeCityId,
     constructionBySession,
     sessions,
+    openTerminal: onOpenTerminal,
     worldByCity,
     worldRepoKey,
     overlayByCity,

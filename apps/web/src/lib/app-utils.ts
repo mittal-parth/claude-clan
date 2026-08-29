@@ -10,8 +10,20 @@ import { effortLabel, findCrewByModel } from "@/crew/catalog";
 
 export type ConnectionState = "connecting" | "online" | "offline";
 
-export const websocketUrl =
-  import.meta.env.VITE_WS_URL ?? "ws://127.0.0.1:4100/ws";
+import { desktop } from "./desktop";
+
+/** The desktop shell picks a free authenticated local port per launch. */
+export function resolveWebsocketUrl(): string {
+  const bridge = desktop();
+  if (bridge?.port) {
+    const query = bridge.token ? `?token=${encodeURIComponent(bridge.token)}` : "";
+    return `ws://127.0.0.1:${bridge.port}/ws${query}`;
+  }
+  return import.meta.env.VITE_WS_URL ?? "ws://127.0.0.1:4100/ws";
+}
+
+/** Kept as a binding for existing imports; preload runs before renderer code. */
+export const websocketUrl = resolveWebsocketUrl();
 
 /**
  * How long to wait for an edit burst to settle before asking the server to
@@ -145,6 +157,16 @@ export function statusLabel(
 
 export function permissionModeLabel(mode: PermissionMode): string {
   return mode === "auto" ? "Don’t Disturb Mayor" : "Mayor approval";
+}
+
+export function isLoginCommand(text: string): boolean {
+  const normalized = text.trim().toLowerCase();
+  return (
+    normalized === "/login" ||
+    normalized === "claude login" ||
+    normalized === "/login claude" ||
+    normalized === "claude auth login"
+  );
 }
 
 export function sessionCrewLabel(model: string, effort: any): string {

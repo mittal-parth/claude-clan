@@ -1,4 +1,5 @@
 import type { RepoSummary } from "@sudo-city/protocol";
+import { desktop } from "@/lib/desktop";
 
 /**
  * Relative by default: the API is reached through the web app's own origin
@@ -33,9 +34,16 @@ export interface SessionResponse {
  * making it look like auth is broken rather than just not being sent.
  */
 function authedFetch(path: string, init?: RequestInit): Promise<Response> {
-  return fetch(`${API_URL}${path}`, {
+  const bridge = desktop();
+  const headers = new Headers(init?.headers);
+  if (bridge?.token) {
+    headers.set("x-desktop-token", bridge.token);
+  }
+  const base = bridge?.port ? `http://127.0.0.1:${bridge.port}` : API_URL;
+  return fetch(`${base}${path}`, {
     ...init,
-    credentials: API_URL ? "include" : "same-origin",
+    headers,
+    credentials: base ? "include" : "same-origin",
   });
 }
 
@@ -117,4 +125,88 @@ export async function importRepo(fullName: string, onProgress?: (msg: string) =>
     throw new Error("Import failed: no workspace key returned");
   }
   return { workspaceKey };
+}
+
+
+export interface LocalGithubResponse {
+  available: boolean;
+  authenticated: boolean;
+  repos: RepoSummary[];
+  error?: string;
+}
+
+export interface LocalGithubUser {
+  login: string;
+  avatarUrl: string;
+  name?: string;
+}
+
+/**
+ * The gh account behind the desktop app, or undefined when gh is absent or
+ * logged out. Never throws: the HUD falls back to no avatar, which is a normal
+ * state rather than an error worth a banner.
+ */
+export async function fetchLocalGithubUser(): Promise<LocalGithubUser | undefined> {
+  try {
+    const response = await authedFetch("/api/local/github/user");
+    if (!response.ok) return undefined;
+    const body = (await response.json()) as { user?: LocalGithubUser };
+    return body.user;
+  } catch {
+    return undefined;
+  }
+}
+
+export async function fetchLocalGithubRepos(): Promise<LocalGithubResponse> {
+  const response = await authedFetch("/api/local/github/repos");
+  if (!response.ok) {
+    throw new Error(`Failed to check GitHub CLI (${response.status})`);
+  }
+  return (await response.json()) as LocalGithubResponse;
+}
+
+export async function cloneLocalGithubRepo(
+  fullName: string,
+  onProgress?: (message: string) => void,
+): Promise<{ workspaceKey: string; path: string }> {
+  const response = await authedFetch("/api/local/github/clone", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ fullName }),
+  });
+  if (!response.ok) {
+    const body = (await response.json().catch(() => ({}))) as { error?: string };
+    throw new Error(body.error ?? `Failed to clone ${fullName} (${response.status})`);
+  }
+  const reader = response.body?.getReader();
+  if (!reader) throw new Error("No response body to read");
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let result: { workspaceKey: string; path: string } | undefined;
+  const consume = (line: string): void => {
+    if (!line.trim()) return;
+    const data = JSON.parse(line) as {
+      phase?: string;
+      message?: string;
+      error?: string;
+      workspaceKey?: string;
+      path?: string;
+    };
+    if (data.error) throw new Error(data.error);
+    if (data.phase === "cloning" && data.message) onProgress?.(data.message);
+    if (data.phase === "ready" && data.workspaceKey && data.path) {
+      result = { workspaceKey: data.workspaceKey, path: data.path };
+    }
+  };
+  while (true) {
+    const { done, value } = await reader.read();
+    buffer += decoder.decode(value, { stream: !done });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() ?? "";
+    for (const line of lines) consume(line);
+    if (done) break;
+  }
+  if (buffer.trim()) consume(buffer);
+  if (!result) throw new Error("GitHub clone failed: no workspace returned");
+  return result;
 }

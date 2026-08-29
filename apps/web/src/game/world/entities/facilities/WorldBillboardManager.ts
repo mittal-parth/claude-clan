@@ -291,9 +291,8 @@ export class WorldBillboardManager {
             context.stroke();
           }
 
-          context.textBaseline = "alphabetic";
-
           if (owner) {
+            context.textBaseline = "alphabetic";
             context.textAlign = hasAvatar ? "left" : "center";
             const ownerAnchor = hasAvatar ? ownerLeft : area.width / 2;
             context.fillStyle = "#8fa3bf";
@@ -301,15 +300,20 @@ export class WorldBillboardManager {
             fitText(context, owner, hasAvatar ? ownerWidth : area.width - pad * 2);
             const ownerY = hasAvatar ? pad + portrait * 0.7 : area.height * 0.42;
             context.fillText(owner, ownerAnchor, ownerY);
-          }
 
-          context.textAlign = "center";
-          context.fillStyle = "#ffd166";
-          const nameScale = owner ? 0.28 : 0.36;
-          context.font = `700 ${Math.round(area.height * nameScale)}px ${font}`;
-          fitText(context, name, area.width - pad * 2);
-          const nameY = owner ? area.height * 0.82 : area.height * 0.62;
-          context.fillText(name, area.width / 2, nameY);
+            context.textAlign = "center";
+            context.fillStyle = "#ffd166";
+            context.font = `700 ${Math.round(area.height * 0.28)}px ${font}`;
+            fitText(context, name, area.width - pad * 2);
+            context.fillText(name, area.width / 2, area.height * 0.82);
+          } else {
+            context.textAlign = "center";
+            context.textBaseline = "middle";
+            context.fillStyle = "#ffd166";
+            context.font = `700 ${Math.round(area.height * 0.36)}px ${font}`;
+            fitText(context, name, area.width - pad * 2);
+            context.fillText(name, area.width / 2, area.height / 2);
+          }
         },
       );
       this.attachBillboardPanel("repo", key);

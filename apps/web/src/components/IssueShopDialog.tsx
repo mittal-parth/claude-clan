@@ -75,7 +75,7 @@ function IssueRow({
         }
       }}
       className={cn(
-        "airport-destination group relative grid w-full cursor-pointer grid-cols-[auto_1fr_auto] items-center gap-3 overflow-hidden border border-white/10 bg-white/[0.035] p-3 text-left transition-colors hover:border-amber-300/40 hover:bg-amber-400/[0.08]",
+        "airport-destination group relative grid w-full cursor-pointer grid-cols-[auto_1fr_auto] items-center gap-3 overflow-hidden border border-white/10 bg-white/[0.035] px-3 py-1.5 text-left transition-colors hover:border-amber-300/40 hover:bg-amber-400/[0.08]",
       )}
     >
       <span className="airport-destination-code retro text-amber-300" aria-hidden="true">
