@@ -52,9 +52,16 @@ export interface SessionRunnerOptions {
   disallowedTools?: readonly string[];
   systemPromptAppend?: string;
   sandbox?: SandboxSettings;
+  /** User-selected Claude Code binary, primarily for desktop Keychain continuity. */
+  pathToClaudeCodeExecutable?: string;
+  /** Filesystem setting sources to honour; omitted preserves hosted behaviour. */
+  settingSources?: readonly ("user" | "project" | "local")[];
+  /** Extra environment handed only to the spawned Claude process. */
+  agentEnv?: Record<string, string>;
   maxTurns?: number;
   budget: {
-    reserve: (sessionId: string) => number;
+    /** Undefined means no dollar ceiling and must omit maxBudgetUsd entirely. */
+    reserve: (sessionId: string) => number | undefined;
     settle: (sessionId: string, actualUsd: number) => void;
   };
   idleCloseMs?: number;
@@ -62,6 +69,13 @@ export interface SessionRunnerOptions {
   resume?: boolean;
   title?: string;
   onContextUsage?: (percentage: number) => void;
+  onAuthInfo?: (info: { apiKeySource?: string; apiProvider?: string }) => void;
+  onRateLimit?: (info: {
+    rateLimitType?: string;
+    status?: "allowed" | "allowed_warning" | "rejected";
+    resetsAt?: string;
+    utilization?: number;
+  }) => void;
 }
 
 interface PendingPermit {
@@ -83,11 +97,16 @@ export class SessionRunner {
   private readonly disallowedTools?: readonly string[];
   private readonly systemPromptAppend?: string;
   private readonly sandbox?: SandboxSettings;
+  private readonly pathToClaudeCodeExecutable?: string;
+  private readonly settingSources?: readonly ("user" | "project" | "local")[];
+  private readonly agentEnv?: Record<string, string>;
   private readonly maxTurns: number;
   private readonly budget: SessionRunnerOptions["budget"];
   private readonly idleCloseMs: number;
   private readonly title?: string;
   private readonly onContextUsage?: (percentage: number) => void;
+  private readonly onAuthInfo?: SessionRunnerOptions["onAuthInfo"];
+  private readonly onRateLimit?: SessionRunnerOptions["onRateLimit"];
 
   private model: string;
   private effort: EffortLevel;
@@ -107,6 +126,7 @@ export class SessionRunner {
   private currentMessageId?: string;
   private interruptRequested = false;
   private contextPercent?: number;
+  private authInfo?: { apiKeySource?: string; apiProvider?: string };
 
   constructor(options: SessionRunnerOptions) {
     this.sessionId = options.sessionId;
@@ -119,12 +139,17 @@ export class SessionRunner {
     this.disallowedTools = options.disallowedTools;
     this.systemPromptAppend = options.systemPromptAppend;
     this.sandbox = options.sandbox;
+    this.pathToClaudeCodeExecutable = options.pathToClaudeCodeExecutable;
+    this.settingSources = options.settingSources;
+    this.agentEnv = options.agentEnv;
     this.maxTurns = options.maxTurns ?? DEFAULT_MAX_TURNS;
     this.budget = options.budget;
     this.idleCloseMs = options.idleCloseMs ?? SESSION_IDLE_CLOSE_MS;
     this.started = options.resume ?? false;
     this.title = options.title;
     this.onContextUsage = options.onContextUsage;
+    this.onAuthInfo = options.onAuthInfo;
+    this.onRateLimit = options.onRateLimit;
   }
 
   get sessionKey(): string {
@@ -137,6 +162,10 @@ export class SessionRunner {
 
   get contextUsagePercent(): number | undefined {
     return this.contextPercent;
+  }
+
+  get credentialInfo(): { apiKeySource?: string; apiProvider?: string } | undefined {
+    return this.authInfo;
   }
 
   get pendingPermitCount(): number {
@@ -189,6 +218,7 @@ export class SessionRunner {
     this.queryCostUsd = 0;
 
     const resumeKey = this.sdkSessionId ?? this.sessionId;
+    const reservedUsd = this.budget.reserve(this.sessionId);
     const activeQuery = query({
       prompt: queue,
       options: {
@@ -201,11 +231,26 @@ export class SessionRunner {
         effort: this.effort,
         hooks: this.createHooks(),
         includePartialMessages: true,
-        maxBudgetUsd: this.budget.reserve(this.sessionId),
         maxTurns: this.maxTurns,
         model: this.model,
         permissionMode: this.permissionMode,
         sandbox: this.sandbox,
+        ...(reservedUsd === undefined ? {} : { maxBudgetUsd: reservedUsd }),
+        ...(this.pathToClaudeCodeExecutable
+          ? { pathToClaudeCodeExecutable: this.pathToClaudeCodeExecutable }
+          : {}),
+        ...(this.settingSources
+          ? { settingSources: [...this.settingSources] }
+          : {}),
+        ...(this.agentEnv
+          ? {
+              env: Object.fromEntries(
+                Object.entries({ ...process.env, ...this.agentEnv }).filter(
+                  (entry): entry is [string, string] => typeof entry[1] === "string",
+                ),
+              ),
+            }
+          : {}),
         ...(this.started ? { resume: resumeKey } : { sessionId: this.sessionId }),
         systemPrompt: this.systemPromptAppend
           ? {
@@ -247,7 +292,61 @@ export class SessionRunner {
   }
 
   private handleMessage(message: SDKMessage): void {
+    if (message.type === "rate_limit_event") {
+      const event = message as unknown as {
+        rate_limit_info?: {
+          status?: "allowed" | "allowed_warning" | "rejected";
+          resetsAt?: number | string;
+          rateLimitType?: string;
+          utilization?: number;
+        };
+      };
+      const info = event.rate_limit_info;
+      if (info) {
+        let resetsAtIso: string | undefined;
+        if (typeof info.resetsAt === "number") {
+          resetsAtIso = new Date(
+            info.resetsAt > 1e11 ? info.resetsAt : info.resetsAt * 1000,
+          ).toISOString();
+        } else if (typeof info.resetsAt === "string") {
+          resetsAtIso = info.resetsAt;
+        }
+
+        const rawUtil = info.utilization;
+        const normalizedUtil =
+          typeof rawUtil === "number"
+            ? rawUtil <= 1 && rawUtil > 0
+              ? Math.round(rawUtil * 100)
+              : Math.round(rawUtil)
+            : undefined;
+
+        this.onRateLimit?.({
+          rateLimitType: info.rateLimitType,
+          status: info.status,
+          utilization: normalizedUtil,
+          resetsAt: resetsAtIso,
+        });
+      }
+      return;
+    }
+
     if (message.type === "system" && message.subtype === "init") {
+      const initMessage = message as unknown as {
+        session_id: string;
+        apiKeySource?: unknown;
+        apiProvider?: unknown;
+      };
+      this.authInfo = {
+        apiKeySource:
+          typeof initMessage.apiKeySource === "string"
+            ? initMessage.apiKeySource
+            : undefined,
+        apiProvider:
+          typeof initMessage.apiProvider === "string"
+            ? initMessage.apiProvider
+            : undefined,
+      };
+      this.onAuthInfo?.(this.authInfo);
       if (message.session_id !== this.sessionId) {
         // The local row is already keyed by our UUID, but resuming with the
         // SDK's actual id is the only way to avoid a convincing amnesiac chat.
