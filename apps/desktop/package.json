@@ -1,0 +1,39 @@
+{
+  "name": "@sudo-city/desktop",
+  "private": true,
+  "version": "0.1.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mittal-parth/claude-clan.git"
+  },
+  "description": "Claude City for macOS",
+  "main": "dist/main.js",
+  "type": "commonjs",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "rebuild": "electron-rebuild -f -w node-pty",
+    "assemble": "bash scripts/assemble.sh",
+    "dev": "pnpm --filter @sudo-city/server build && pnpm --filter @sudo-city/web build && pnpm run assemble && pnpm run bundle-server && pnpm run build && electron .",
+    "bundle-server": "node scripts/bundle-server.mjs",
+    "package": "pnpm --filter @sudo-city/server build && pnpm --filter @sudo-city/web build && pnpm run assemble && pnpm run bundle-server && pnpm run build && electron-builder --mac --publish never"
+  },
+  "devDependencies": {
+    "@electron/rebuild": "^3.7.1",
+    "@types/node": "24.13.3",
+    "electron": "43.0.0",
+    "electron-builder": "26.0.12",
+    "esbuild": "0.28.1",
+    "typescript": "5.9.3"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "0.3.224",
+    "acorn": "8.15.0",
+    "ajv": "8.20.0",
+    "ajv-formats": "3.0.1",
+    "dependency-cruiser": "18.1.1",
+    "electron-updater": "6.6.2",
+    "node-pty": "^1.1.0",
+    "pg": "8.22.0"
+  }
+}

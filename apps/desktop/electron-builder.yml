@@ -1,0 +1,50 @@
+appId: dev.claudecity.desktop
+productName: Claude City
+copyright: Copyright © 2026 Claude City
+
+directories:
+  output: release
+  buildResources: build
+
+files:
+  - dist/**/*
+  - server/**/*
+  - web/**/*
+  - package.json
+
+asarUnpack:
+  - server/**/*
+  - node_modules/@anthropic-ai/**/*
+  - node_modules/node-pty/**/*
+  - node_modules/pg/**/*
+
+mac:
+  icon: build/icon.icns
+  category: public.app-category.developer-tools
+  target:
+    - target: dmg
+      arch: [arm64, x64]
+    - target: zip
+      arch: [arm64, x64]
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
+  notarize: true
+  extendInfo:
+    NSDocumentsFolderUsageDescription: >-
+      Claude City renders the projects you open as cities and lets Claude crews
+      read and edit them.
+    NSDesktopFolderUsageDescription: >-
+      Claude City renders the projects you open as cities and lets Claude crews
+      read and edit them.
+    NSDownloadsFolderUsageDescription: >-
+      Claude City renders the projects you open as cities and lets Claude crews
+      read and edit them.
+
+dmg:
+  artifactName: ${productName}-${version}-${arch}.dmg
+
+publish:
+  provider: github
+  releaseType: release

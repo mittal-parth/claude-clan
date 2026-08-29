@@ -15,3 +15,10 @@ supabase/.temp/
 # Dev-only harnesses for eyeballing baked props. Handy locally, not shipped.
 apps/web/navy-preview.html
 apps/web/src/dev/
+
+# Electron desktop generated assets and local runtime state.
+apps/desktop/server/
+apps/desktop/web/
+apps/desktop/release/
+apps/desktop/dist/
+apps/desktop/.sudocity/
