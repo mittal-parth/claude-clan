@@ -18,7 +18,15 @@ export interface AppHudProps {
   targetFps?: TargetFps;
   toggleTargetFps?: () => void;
   user?: { login: string; avatarUrl: string };
+  /**
+   * The gh account, on desktop only. Kept separate from `user` because that is
+   * a hosted OAuth session with a server-side id, and inventing one here would
+   * leak a fake id into the per-user storage keys.
+   */
+  localUser?: { login: string; avatarUrl: string; name?: string };
   activeRepoKey: string;
+  terminalOpen?: boolean;
+  onToggleTerminal?: () => void;
 }
 
 export function AppHud(props: AppHudProps) {

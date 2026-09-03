@@ -9,6 +9,7 @@
   "scripts": {
     "build": "pnpm -r build",
     "dev": "pnpm --parallel --filter @sudo-city/server --filter @sudo-city/web dev",
+    "app": "pnpm --filter @sudo-city/desktop dev",
     "test": "pnpm -r --if-present test",
     "typecheck": "pnpm -r --if-present typecheck"
   },

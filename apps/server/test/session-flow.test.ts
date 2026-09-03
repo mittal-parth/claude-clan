@@ -9,6 +9,7 @@ import { shouldDeliverEvent } from "../src/event-routing.js";
 const fake = vi.hoisted(() => {
   class FakeSessionRunner {
     readonly sessionId: string;
+    readonly budget: { reserve: (sessionId: string) => number | undefined };
     readonly sendCalls: Array<{ prompt: string; contextPaths: string[] }> = [];
     readonly resolvedPermits: Array<{
       toolCallId: string;
@@ -21,8 +22,13 @@ const fake = vi.hoisted(() => {
     private live = true;
     private readonly emit: (event: unknown) => void;
 
-    constructor(options: { sessionId: string; emit: (event: unknown) => void }) {
+    constructor(options: {
+      sessionId: string;
+      emit: (event: unknown) => void;
+      budget: { reserve: (sessionId: string) => number | undefined };
+    }) {
       this.sessionId = options.sessionId;
+      this.budget = options.budget;
       this.emit = options.emit;
       runners.push(this);
     }
@@ -121,7 +127,11 @@ const snapshot: WorldSnapshot = {
   buildings: [],
 };
 
-function workspaceOptions(repoPath: string, onEvent: WorkspaceOptions["onEvent"]): WorkspaceOptions {
+function workspaceOptions(
+  repoPath: string,
+  onEvent: WorkspaceOptions["onEvent"],
+  overrides: Partial<WorkspaceOptions> = {},
+): WorkspaceOptions {
   return {
     key: "test-workspace",
     repoPath,
@@ -132,15 +142,17 @@ function workspaceOptions(repoPath: string, onEvent: WorkspaceOptions["onEvent"]
     onSessionChanged: vi.fn(),
     onCitiesChanged: vi.fn(),
     onIssuesChanged: vi.fn(),
+    ...overrides,
   };
 }
 
 function constructWorkspace(
   repoPath: string,
   onEvent: WorkspaceOptions["onEvent"] = vi.fn(),
+  overrides: Partial<WorkspaceOptions> = {},
 ): Workspace {
   const Constructor = Workspace as unknown as new (options: WorkspaceOptions) => Workspace;
-  const workspace = new Constructor(workspaceOptions(repoPath, onEvent));
+  const workspace = new Constructor(workspaceOptions(repoPath, onEvent, overrides));
   const registry = (workspace as unknown as {
     registry: { add: (city: { id: CityId; cwd: string; readOnly: boolean; snapshot: WorldSnapshot }) => void };
   }).registry;
@@ -171,14 +183,27 @@ afterEach(async () => {
   temporaryDirectories = [];
 });
 
-async function createWorkspace(onEvent?: WorkspaceOptions["onEvent"]): Promise<Workspace> {
+async function createWorkspace(
+  onEvent?: WorkspaceOptions["onEvent"],
+  overrides: Partial<WorkspaceOptions> = {},
+): Promise<Workspace> {
   const directory = await mkdtemp(join(tmpdir(), "sudocity-session-flow-"));
   temporaryDirectories.push(directory);
-  workspace = constructWorkspace(directory, onEvent);
+  workspace = constructWorkspace(directory, onEvent, overrides);
   return workspace;
 }
 
 describe("Workspace session flow", () => {
+  it("reserves local BYOK work at the configured per-order cap", async () => {
+    const current = await createWorkspace(undefined, {
+      remainingBudget: () => 10,
+      orderCapUsd: 0.25,
+    });
+    await openSession(current, "main", "capped order");
+
+    expect(fake.runners[0]?.budget.reserve("probe")).toBe(0.25);
+  });
+
   it("opens concurrent sessions without interrupting either runner", async () => {
     const current = await createWorkspace();
     const first = await openSession(current, "main", "first order");

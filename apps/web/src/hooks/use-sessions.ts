@@ -8,7 +8,8 @@ import type {
   ServerMessage,
   SessionSummary,
 } from "@sudo-city/protocol";
-import type { ConnectionState } from "@/lib/app-utils";
+import { isLoginCommand, type ConnectionState } from "@/lib/app-utils";
+import { isDesktop } from "@/lib/desktop";
 import {
   initialSessionsState,
   sessionsReducer,
@@ -23,6 +24,7 @@ export interface UseSessionsOptions {
   connection: ConnectionState;
   demoLocked?: boolean;
   onDemoGate?: (action: "dispatch" | "permit") => void;
+  onOpenTerminal?: (command?: string) => void;
 }
 
 export function useSessions({
@@ -31,6 +33,7 @@ export function useSessions({
   connection,
   demoLocked = false,
   onDemoGate,
+  onOpenTerminal,
 }: UseSessionsOptions) {
   const [state, dispatch] = useReducer(sessionsReducer, initialSessionsState);
   const focusNextOpenedSessionRef = useRef(false);
@@ -155,19 +158,31 @@ export function useSessions({
       title?: string;
     } = {},
   ): void => {
+    if (isLoginCommand(prompt)) {
+      if (onOpenTerminal && isDesktop()) {
+        onOpenTerminal("claude login");
+        return;
+      }
+    }
     if (demoLocked) {
       onDemoGate?.("dispatch");
       return;
     }
     focusNextOpenedSessionRef.current = true;
     send({ type: "session.open", cityId, prompt, ...options });
-  }, [demoLocked, onDemoGate, send]);
+  }, [demoLocked, onDemoGate, onOpenTerminal, send]);
 
   const sendToSession = useCallback((
     sessionId: string,
     prompt: string,
     contextPaths: string[] = [],
   ): void => {
+    if (isLoginCommand(prompt)) {
+      if (onOpenTerminal && isDesktop()) {
+        onOpenTerminal("claude login");
+        return;
+      }
+    }
     dispatch({
       type: "optimistic",
       sessionId,
@@ -176,7 +191,7 @@ export function useSessions({
       contextPaths,
     });
     send({ type: "session.send", sessionId, prompt, contextPaths });
-  }, [send]);
+  }, [onOpenTerminal, send]);
 
   const interruptSession = useCallback((sessionId: string): void => {
     send({ type: "session.interrupt", sessionId });

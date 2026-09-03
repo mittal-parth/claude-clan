@@ -13,9 +13,14 @@ const PIN_THRESHOLD_PX = 48;
 export interface SessionTranscriptProps {
   view: SessionView;
   onPermit: (toolCallId: string, decision: "allow" | "allow-always" | "deny") => void;
+  onOpenTerminal?: (command?: string) => void;
 }
 
-export function SessionTranscript({ view, onPermit }: SessionTranscriptProps) {
+export function SessionTranscript({
+  view,
+  onPermit,
+  onOpenTerminal,
+}: SessionTranscriptProps) {
   const rootRef = useRef<HTMLDivElement>(null);
   const [pinned, setPinned] = useState(true);
   const items = useMemo(() => toChatItems(view), [view]);
@@ -69,7 +74,13 @@ export function SessionTranscript({ view, onPermit }: SessionTranscriptProps) {
             switch (item.kind) {
               case "mayor":
               case "crew":
-                return <ChatMessage key={item.id} item={item} />;
+                return (
+                  <ChatMessage
+                    key={item.id}
+                    item={item}
+                    onOpenTerminal={onOpenTerminal}
+                  />
+                );
               case "thinking":
                 return <ThinkingStrip key={item.id} item={item} />;
               case "tool":
