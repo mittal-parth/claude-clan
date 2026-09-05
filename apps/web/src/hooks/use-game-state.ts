@@ -50,6 +50,7 @@ import { demoGatedAction, type DemoAction } from "@/auth/demo-gate";
 import { useSessions } from "@/hooks/use-sessions";
 import {
   trackBuildingInspected,
+  trackBuildingAttached,
   trackMayorOrderDispatched,
   trackMayorOrderHalted,
   trackPermitDecision,
@@ -63,6 +64,15 @@ import {
   trackWorktreeShopOpened,
   trackPrShopOpened,
   trackDemoSignInPrompted,
+  trackPrDeployed,
+  trackWorktreeDeployed,
+  trackSessionArchived,
+  trackSessionUnarchived,
+  trackSessionRenamed,
+  trackSessionConfigured,
+  trackDistrictRescanned,
+  trackPrListRefreshed,
+  type TravelSkipContext,
 } from "@/lib/analytics";
 
 /** Everything on duty until the server's policy message says otherwise. */
@@ -77,6 +87,7 @@ export interface GameStateProps {
   user?: AuthUser;
   repoConnectionGeneration: number;
   initialReveal?: boolean;
+  airportTravel?: CanvasAirportTravel;
   airportArrival?: CanvasAirportTravel;
   onInitialRevealReady?: () => void;
   onInitialRevealComplete?: () => void;
@@ -87,6 +98,7 @@ export function useGameState({
   user,
   repoConnectionGeneration,
   initialReveal = false,
+  airportTravel,
   airportArrival,
   onInitialRevealReady,
   onInitialRevealComplete,
@@ -158,7 +170,23 @@ export function useGameState({
     useState<CanvasTravelRequest>();
   const [teleportTravelRequest, setTeleportTravelRequest] =
     useState<CanvasTravelRequest>();
+  const [activeTravelInfo, setActiveTravelInfo] = useState<{
+    context: TravelSkipContext;
+    destinationCityId?: string;
+    destinationRepoKey?: string;
+    travelRequestId?: string;
+  } | undefined>(undefined);
   const [airportArrivalDelayed, setAirportArrivalDelayed] = useState(false);
+
+  useEffect(() => {
+    if (airportTravel || airportArrival) {
+      setActiveTravelInfo({
+        context: "repo_switch",
+        destinationRepoKey: airportTravel?.destinationKey ?? airportArrival?.destinationKey,
+        travelRequestId: airportTravel?.id ?? airportArrival?.id,
+      });
+    }
+  }, [airportTravel, airportArrival]);
   const [initialRevealReady, setInitialRevealReady] = useState(false);
   const [initialRevealComplete, setInitialRevealComplete] = useState(false);
   const [shareModalOpen, setShareModalOpen] = useState(false);
@@ -208,22 +236,50 @@ export function useGameState({
       });
     } else if (command.type === "session.send") {
       trackMayorOrderDispatched({
+        sessionId: command.sessionId,
         promptLength: command.prompt.length,
         contextPathCount: command.contextPaths?.length,
         repoKey: activeRepoKeyRef.current,
         cityId: activeCityIdRef.current,
       });
     } else if (command.type === "session.interrupt") {
-      trackMayorOrderHalted({ repoKey: activeRepoKeyRef.current, cityId: activeCityIdRef.current });
+      trackMayorOrderHalted({
+        sessionId: command.sessionId,
+        repoKey: activeRepoKeyRef.current,
+        cityId: activeCityIdRef.current,
+      });
     } else if (command.type === "permit.resolve") {
       trackPermitDecision({
+        sessionId: command.sessionId,
         decision: command.decision,
         toolCallId: command.toolCallId,
         repoKey: activeRepoKeyRef.current,
         cityId: activeCityIdRef.current,
       });
+    } else if (command.type === "session.close") {
+      trackSessionArchived({ sessionId: command.sessionId, repoKey: activeRepoKeyRef.current });
+    } else if (command.type === "session.unarchive") {
+      trackSessionUnarchived({ sessionId: command.sessionId, repoKey: activeRepoKeyRef.current });
+    } else if (command.type === "session.rename") {
+      trackSessionRenamed({
+        sessionId: command.sessionId,
+        title: command.title,
+        repoKey: activeRepoKeyRef.current,
+      });
+    } else if (command.type === "session.configure") {
+      trackSessionConfigured({
+        sessionId: command.sessionId,
+        model: command.model,
+        effort: command.effort,
+        permissionMode: command.permissionMode,
+        repoKey: activeRepoKeyRef.current,
+      });
     } else if (command.type === "repo.select") {
       trackRepoSelected({ repoKey: command.repoKey });
+    } else if (command.type === "world.request") {
+      trackDistrictRescanned({ cityId: command.cityId, repoKey: activeRepoKeyRef.current });
+    } else if (command.type === "city.refresh") {
+      trackPrListRefreshed({ cityId: activeCityIdRef.current, repoKey: activeRepoKeyRef.current });
     }
   }, []);
   const sessions = useSessions({
@@ -576,10 +632,17 @@ export function useGameState({
     if (cityId === activeCityId || blockedByDemoGate({ action: "travel", cityId })) {
       return;
     }
+    trackFastTravelInitiated({ destinationCityId: cityId, via: "teleport" });
+    const id = `teleport-${cityId}-${Date.now()}`;
+    setActiveTravelInfo({
+      context: "teleport",
+      destinationCityId: cityId,
+      travelRequestId: id,
+    });
     setSelected(undefined);
     setDiff(undefined);
     setTeleportTravelRequest({
-      id: `teleport-${cityId}-${Date.now()}`,
+      id,
       cityId,
       ship: "teleport",
     });
@@ -590,6 +653,10 @@ export function useGameState({
       return;
     }
     trackFastTravelInitiated({ destinationCityId: cityId, via: "ship" });
+    setActiveTravelInfo({
+      context: "ship_travel",
+      destinationCityId: cityId,
+    });
     setShipTravelTargetId(cityId);
     setSelected(undefined);
     setDiff(undefined);
@@ -602,6 +669,7 @@ export function useGameState({
     setIssueTravelRequest(undefined);
     setNavyTravelRequest(undefined);
     setTeleportTravelRequest(undefined);
+    setActiveTravelInfo(undefined);
   }
 
   function takeIssueToFix(issue: Issue): void {
@@ -652,8 +720,14 @@ export function useGameState({
       setWorktreeShopOpen(true);
       return;
     }
+    const id = `home-${activeCityId}-${Date.now()}`;
+    setActiveTravelInfo({
+      context: "return_home",
+      destinationCityId: "main",
+      travelRequestId: id,
+    });
     setIssueTravelRequest({
-      id: `home-${activeCityId}-${Date.now()}`,
+      id,
       cityId: "main",
       ship: "container",
       carriesContainer: false,
@@ -669,8 +743,14 @@ export function useGameState({
       setPrShopOpen(true);
       return;
     }
+    const id = `navy-home-${activeCityId}-${Date.now()}`;
+    setActiveTravelInfo({
+      context: "return_home",
+      destinationCityId: "main",
+      travelRequestId: id,
+    });
     setNavyTravelRequest({
-      id: `navy-home-${activeCityId}-${Date.now()}`,
+      id,
       cityId: "main",
       ship: "navy",
       carriesContainer: false,
@@ -682,11 +762,18 @@ export function useGameState({
       setWorktreeShopOpen(false);
       return;
     }
+    trackWorktreeDeployed({ worktreeCityId: item.id, repoKey: activeRepoKey });
     setWorktreeShopOpen(false);
     setSelected(undefined);
     setDiff(undefined);
+    const id = `worktree-${item.id}-${Date.now()}`;
+    setActiveTravelInfo({
+      context: "worktree",
+      destinationCityId: item.id,
+      travelRequestId: id,
+    });
     setIssueTravelRequest({
-      id: `worktree-${item.id}-${Date.now()}`,
+      id,
       cityId: item.id,
       ship: "container",
       carriesContainer: true,
@@ -698,11 +785,18 @@ export function useGameState({
       setPrShopOpen(false);
       return;
     }
+    trackPrDeployed({ prCityId: pr.id, repoKey: activeRepoKey });
     setPrShopOpen(false);
     setSelected(undefined);
     setDiff(undefined);
+    const id = `navy-pr-${pr.id}-${Date.now()}`;
+    setActiveTravelInfo({
+      context: "pr_attack",
+      destinationCityId: pr.id,
+      travelRequestId: id,
+    });
     setNavyTravelRequest({
-      id: `navy-pr-${pr.id}-${Date.now()}`,
+      id,
       cityId: pr.id,
       ship: "navy",
       carriesContainer: false,
@@ -748,6 +842,11 @@ export function useGameState({
     setDragPreview(undefined);
     setDragPosition(undefined);
     if (pointIsInside(sessionModalRef.current, position)) {
+      trackBuildingAttached({
+        path: building.path,
+        target: "session",
+        repoKey: activeRepoKeyRef.current,
+      });
       setSessionContextPaths((current) =>
         current.includes(building.path) ? current : [...current, building.path],
       );
@@ -757,6 +856,11 @@ export function useGameState({
       return;
     }
 
+    trackBuildingAttached({
+      path: building.path,
+      target: "order",
+      repoKey: activeRepoKeyRef.current,
+    });
     setContextPaths((current) =>
       current.includes(building.path) ? current : [...current, building.path],
     );
@@ -810,6 +914,7 @@ export function useGameState({
     draggingBuilding,
     dragPreview,
     dragPosition,
+    activeRepoKey,
     contextPaths,
     sessionContextPaths,
     setSessionContextPaths,
@@ -839,7 +944,9 @@ export function useGameState({
     overlay,
     ownWorkCities,
     reviewPrCities,
+    airportTravel,
     airportArrival,
+    activeTravelInfo,
     setConnection,
     setReconnectAttempt,
     setCities,

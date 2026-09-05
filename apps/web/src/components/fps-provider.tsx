@@ -12,6 +12,7 @@ import {
   writeTargetFps,
   type TargetFps,
 } from "@/lib/fps-preferences";
+import { trackFpsToggled } from "@/lib/analytics";
 
 interface FpsContextValue {
   targetFps: TargetFps;
@@ -29,12 +30,14 @@ export function FpsProvider({ children }: { children: ReactNode }) {
   const setTargetFps = useCallback((fps: TargetFps) => {
     setTargetFpsState(fps);
     writeTargetFps(fps);
+    trackFpsToggled({ targetFps: fps });
   }, []);
 
   const toggleTargetFps = useCallback(() => {
     setTargetFpsState((current) => {
       const next: TargetFps = current === 30 ? 60 : 30;
       writeTargetFps(next);
+      trackFpsToggled({ targetFps: next });
       return next;
     });
   }, []);

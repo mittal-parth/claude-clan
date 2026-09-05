@@ -16,6 +16,7 @@ import {
   type SessionsState,
 } from "@/sessions/store";
 import { loadStoredSession, storeSessionTail } from "@/sessions/storage";
+import { trackSessionFocused, trackSessionBlurred } from "@/lib/analytics";
 
 export interface UseSessionsOptions {
   send: (command: MayorCommand) => void;
@@ -125,6 +126,7 @@ export function useSessions({
     if (!view) {
       return;
     }
+    trackSessionFocused({ sessionId, repoKey: activeRepoKey });
     dispatch({ type: "focus", sessionId });
     dispatch({ type: "seen", sessionId });
     send({
@@ -132,17 +134,18 @@ export function useSessions({
       sessionId,
       afterSequence: view.events.at(-1)?.sequence,
     });
-  }, [send, state.byId]);
+  }, [activeRepoKey, send, state.byId]);
 
   const blurSession = useCallback((): void => {
     const sessionId = state.focusedSessionId;
     if (!sessionId) {
       return;
     }
+    trackSessionBlurred({ sessionId, repoKey: activeRepoKey });
     send({ type: "session.unsubscribe", sessionId });
     dispatch({ type: "seen", sessionId });
     dispatch({ type: "focus" });
-  }, [send, state.focusedSessionId]);
+  }, [activeRepoKey, send, state.focusedSessionId]);
 
   const openSession = useCallback((
     cityId: CityId,

@@ -16,7 +16,7 @@ import {
 import { useEffect, useMemo, useState } from "react";
 
 import { githubInstallUrl } from "@/auth/api";
-import { trackRepoListRefreshed } from "@/lib/analytics";
+import { trackRepoListRefreshed, trackGithubInstallClicked, trackLoginStarted } from "@/lib/analytics";
 import HudButton from "@/components/hud/HudButton";
 import {
   Dialog,
@@ -247,7 +247,7 @@ function RepoPickerBody({
             <p className="retro text-[9px] text-muted-foreground">
               You haven't granted this App access to any repositories yet.
             </p>
-            <a href={githubInstallUrl()}>
+            <a href={githubInstallUrl()} onClick={() => trackGithubInstallClicked()}>
               <HudButton type="button" size="sm">GRANT REPOSITORY ACCESS</HudButton>
             </a>
           </div>
@@ -356,7 +356,13 @@ export default function RepoPicker(props: RepoPickerProps) {
                   </p>
                 </div>
               </div>
-              <HudButton type="button" onClick={props.onSignIn}>
+              <HudButton
+                type="button"
+                onClick={() => {
+                  trackLoginStarted();
+                  props.onSignIn?.();
+                }}
+              >
                 <Command className="mr-1.5 size-3.5" aria-hidden="true" /> SIGN IN TO BOARD
               </HudButton>
             </div>

@@ -6,6 +6,7 @@ import { HudMeter } from "./HudMeter";
 import { statusLabel, titleFromRepoPath, repoRootPath } from "@/lib/app-utils";
 import { getCrewMember, effortLabel, crewSpriteUrl, findCrewByModel } from "@/crew/catalog";
 import { useUiClick } from "@/hooks/use-ui-click";
+import { trackCommandPaletteOpened } from "@/lib/analytics";
 import type { AppHudProps } from "./AppHud";
 import { SessionListPanel } from "@/components/sessions/SessionListPanel";
 
@@ -86,7 +87,7 @@ export function AppHudConsole({
             <button type="button" className="hud-icon-button" aria-label={sfxEnabled ? "Mute sound" : "Unmute sound"} aria-pressed={!sfxEnabled} title={sfxEnabled ? "Mute sound" : "Unmute sound"} onClick={toggleSfx}>
               {sfxEnabled ? <Volume2 className="size-3" aria-hidden="true" /> : <VolumeX className="size-3" aria-hidden="true" />}
             </button>
-            <button type="button" className="hud-icon-button retro gap-0.5 px-1 text-[8px]" aria-label="Open the command palette" title="Command palette (⌘K)" onClick={() => setCommandOpen(true)}>
+            <button type="button" className="hud-icon-button retro gap-0.5 px-1 text-[8px]" aria-label="Open the command palette" title="Command palette (⌘K)" onClick={() => { trackCommandPaletteOpened(); setCommandOpen(true); }}>
               <Command className="size-2.5" aria-hidden="true" />K
             </button>
             {targetFps && toggleTargetFps ? (

@@ -19,6 +19,9 @@ import {
   resetUser,
   trackPageView,
   trackRepoImported,
+  trackRepoImportSucceeded,
+  trackRepoImportFailed,
+  trackRepoImportRejected,
   trackRepoSelected,
   trackLogout,
   trackAirportOpened,
@@ -234,6 +237,11 @@ export default function Root() {
     if (!session.authenticated) return;
 
     if (maxRepoSizeMb !== undefined && repo.size !== undefined && repo.size / 1024 > maxRepoSizeMb) {
+      trackRepoImportRejected({
+        fullName: repo.fullName,
+        maxRepoSizeMb,
+        sizeMb: repo.size / 1024,
+      });
       setReposError(`sorry we currently only allow importing under ${maxRepoSizeMb} mb repos`);
       return;
     }
@@ -254,6 +262,7 @@ export default function Root() {
     })
       .then(() => {
         if (!importIsCurrent()) return;
+        trackRepoImportSucceeded({ fullName: repo.fullName, repoKey: repo.key });
         repoLoadRequestRef.current += 1;
         repoLoadInFlightRef.current = undefined;
         importingRef.current = undefined;
@@ -267,9 +276,11 @@ export default function Root() {
       })
       .catch((error: unknown) => {
         if (!importIsCurrent()) return;
+        const errorMessage = error instanceof Error ? error.message : "Import failed";
+        trackRepoImportFailed({ fullName: repo.fullName, error: errorMessage });
         importingRef.current = undefined;
         setImporting(undefined);
-        setReposError(error instanceof Error ? error.message : "Import failed");
+        setReposError(errorMessage);
       });
   }
 

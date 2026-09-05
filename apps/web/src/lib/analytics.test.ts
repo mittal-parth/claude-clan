@@ -20,6 +20,25 @@ import {
   trackAirportOpened,
   trackCityShared,
   trackFastTravelInitiated,
+  trackFastTravelSkipped,
+  trackRepoImportSucceeded,
+  trackRepoImportFailed,
+  trackRepoImportRejected,
+  trackPrDeployed,
+  trackWorktreeDeployed,
+  trackSessionArchived,
+  trackSessionUnarchived,
+  trackSessionRenamed,
+  trackSessionConfigured,
+  trackSessionTranscriptCopied,
+  trackArchivedSessionsOpened,
+  trackSessionFocused,
+  trackSessionBlurred,
+  trackBuildingAttached,
+  trackDistrictRescanned,
+  trackPrListRefreshed,
+  trackFpsToggled,
+  trackGithubInstallClicked,
   _resetAnalyticsForTesting,
 } from "./analytics.js";
 
@@ -97,22 +116,25 @@ describe("analytics helper", () => {
     });
 
     // Domain events
-    trackMayorOrderDispatched({ promptLength: 42, effort: "high" });
+    trackMayorOrderDispatched({ promptLength: 42, effort: "high", sessionId: "sess-1" });
     expect(posthog.capture).toHaveBeenCalledWith("mayor_order_dispatched", {
       promptLength: 42,
       effort: "high",
+      sessionId: "sess-1",
     });
 
-    trackMayorOrderHalted({ repoKey: "demo", cityId: "main" });
+    trackMayorOrderHalted({ repoKey: "demo", cityId: "main", sessionId: "sess-1" });
     expect(posthog.capture).toHaveBeenCalledWith("mayor_order_halted", {
       repoKey: "demo",
       cityId: "main",
+      sessionId: "sess-1",
     });
 
-    trackPermitDecision({ decision: "allow-always", toolCallId: "permit-1" });
+    trackPermitDecision({ decision: "allow-always", toolCallId: "permit-1", sessionId: "sess-1" });
     expect(posthog.capture).toHaveBeenCalledWith("permit_decided", {
       decision: "allow-always",
       toolCallId: "permit-1",
+      sessionId: "sess-1",
     });
 
     trackRepoSelected({ repoKey: "octocat/repo" });
@@ -159,5 +181,133 @@ describe("analytics helper", () => {
       destinationCityId: "pr-1",
       via: "ship",
     });
+
+    trackFastTravelSkipped({
+      context: "pr_attack",
+      destinationCityId: "pr-1",
+      currentCityId: "main",
+      repoKey: "demo",
+    });
+    expect(posthog.capture).toHaveBeenCalledWith("fast_travel_skipped", {
+      context: "pr_attack",
+      destinationCityId: "pr-1",
+      currentCityId: "main",
+      repoKey: "demo",
+    });
+
+    trackRepoImportSucceeded({ fullName: "octocat/repo", repoKey: "octocat/repo" });
+    expect(posthog.capture).toHaveBeenCalledWith("repo_import_succeeded", {
+      fullName: "octocat/repo",
+      repoKey: "octocat/repo",
+    });
+
+    trackRepoImportFailed({ fullName: "octocat/repo", error: "Timeout" });
+    expect(posthog.capture).toHaveBeenCalledWith("repo_import_failed", {
+      fullName: "octocat/repo",
+      error: "Timeout",
+    });
+
+    trackRepoImportRejected({ fullName: "octocat/repo", maxRepoSizeMb: 150, sizeMb: 200 });
+    expect(posthog.capture).toHaveBeenCalledWith("repo_import_rejected", {
+      fullName: "octocat/repo",
+      maxRepoSizeMb: 150,
+      sizeMb: 200,
+    });
+
+    trackPrDeployed({ prCityId: "pr-2", repoKey: "octocat/repo" });
+    expect(posthog.capture).toHaveBeenCalledWith("pr_deployed", {
+      prCityId: "pr-2",
+      repoKey: "octocat/repo",
+    });
+
+    trackWorktreeDeployed({ worktreeCityId: "worktree-1", repoKey: "octocat/repo" });
+    expect(posthog.capture).toHaveBeenCalledWith("worktree_deployed", {
+      worktreeCityId: "worktree-1",
+      repoKey: "octocat/repo",
+    });
+
+    trackSessionArchived({ sessionId: "sess-1", repoKey: "demo" });
+    expect(posthog.capture).toHaveBeenCalledWith("session_archived", {
+      sessionId: "sess-1",
+      repoKey: "demo",
+    });
+
+    trackSessionUnarchived({ sessionId: "sess-1", repoKey: "demo" });
+    expect(posthog.capture).toHaveBeenCalledWith("session_unarchived", {
+      sessionId: "sess-1",
+      repoKey: "demo",
+    });
+
+    trackSessionRenamed({ sessionId: "sess-1", title: "New title", repoKey: "demo" });
+    expect(posthog.capture).toHaveBeenCalledWith("session_renamed", {
+      sessionId: "sess-1",
+      title: "New title",
+      repoKey: "demo",
+    });
+
+    trackSessionConfigured({
+      sessionId: "sess-1",
+      model: "claude-3-7-sonnet",
+      effort: "high",
+      permissionMode: "auto",
+      repoKey: "demo",
+    });
+    expect(posthog.capture).toHaveBeenCalledWith("session_configured", {
+      sessionId: "sess-1",
+      model: "claude-3-7-sonnet",
+      effort: "high",
+      permissionMode: "auto",
+      repoKey: "demo",
+    });
+
+    trackSessionTranscriptCopied({ sessionId: "sess-1", repoKey: "demo" });
+    expect(posthog.capture).toHaveBeenCalledWith("session_transcript_copied", {
+      sessionId: "sess-1",
+      repoKey: "demo",
+    });
+
+    trackArchivedSessionsOpened({ repoKey: "demo" });
+    expect(posthog.capture).toHaveBeenCalledWith("archived_sessions_opened", {
+      repoKey: "demo",
+    });
+
+    trackSessionFocused({ sessionId: "sess-1", repoKey: "demo" });
+    expect(posthog.capture).toHaveBeenCalledWith("session_focused", {
+      sessionId: "sess-1",
+      repoKey: "demo",
+    });
+
+    trackSessionBlurred({ sessionId: "sess-1", repoKey: "demo" });
+    expect(posthog.capture).toHaveBeenCalledWith("session_blurred", {
+      sessionId: "sess-1",
+      repoKey: "demo",
+    });
+
+    trackBuildingAttached({ path: "src/main.ts", target: "session", repoKey: "demo" });
+    expect(posthog.capture).toHaveBeenCalledWith("building_attached", {
+      path: "src/main.ts",
+      target: "session",
+      repoKey: "demo",
+    });
+
+    trackDistrictRescanned({ cityId: "main", repoKey: "demo" });
+    expect(posthog.capture).toHaveBeenCalledWith("district_rescanned", {
+      cityId: "main",
+      repoKey: "demo",
+    });
+
+    trackPrListRefreshed({ cityId: "main", repoKey: "demo" });
+    expect(posthog.capture).toHaveBeenCalledWith("pr_list_refreshed", {
+      cityId: "main",
+      repoKey: "demo",
+    });
+
+    trackFpsToggled({ targetFps: 60 });
+    expect(posthog.capture).toHaveBeenCalledWith("fps_toggled", {
+      targetFps: 60,
+    });
+
+    trackGithubInstallClicked();
+    expect(posthog.capture).toHaveBeenCalledWith("github_install_clicked", undefined);
   });
 });

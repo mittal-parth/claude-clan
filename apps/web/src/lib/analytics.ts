@@ -81,12 +81,13 @@ export function trackMayorOrderDispatched(properties: {
   contextPathCount?: number;
   repoKey?: string;
   cityId?: string;
+  sessionId?: string;
 }): void {
   trackEvent("mayor_order_dispatched", properties);
 }
 
 /** Track mayor order halt actions. */
-export function trackMayorOrderHalted(properties?: { repoKey?: string; cityId?: string }): void {
+export function trackMayorOrderHalted(properties?: { repoKey?: string; cityId?: string; sessionId?: string }): void {
   trackEvent("mayor_order_halted", properties);
 }
 
@@ -96,6 +97,7 @@ export function trackPermitDecision(properties: {
   toolCallId?: string;
   repoKey?: string;
   cityId?: string;
+  sessionId?: string;
 }): void {
   trackEvent("permit_decided", properties);
 }
@@ -204,7 +206,7 @@ export function trackRepoListRefreshed(): void {
   trackEvent("repo_list_refreshed");
 }
 
-export type FastTravelVia = "command_palette" | "ship";
+export type FastTravelVia = "command_palette" | "ship" | "teleport";
 
 /** Track when the user initiates fast travel to a different city. */
 export function trackFastTravelInitiated(properties: {
@@ -212,6 +214,126 @@ export function trackFastTravelInitiated(properties: {
   via?: FastTravelVia;
 }): void {
   trackEvent("fast_travel_initiated", properties);
+}
+
+export type TravelSkipContext =
+  | "pr_attack"
+  | "worktree"
+  | "return_home"
+  | "repo_switch"
+  | "teleport"
+  | "ship_travel";
+
+export type FastTravelSkippedProperties = {
+  context: TravelSkipContext;
+  destinationCityId?: string;
+  currentCityId?: string;
+  repoKey?: string;
+  destinationRepoKey?: string;
+  travelRequestId?: string;
+};
+
+/** Track when travel transition is skipped via instant teleport. */
+export function trackFastTravelSkipped(properties: FastTravelSkippedProperties): void {
+  trackEvent("fast_travel_skipped", properties);
+}
+
+/** Track successful completion of repository import. */
+export function trackRepoImportSucceeded(properties: { fullName: string; repoKey: string }): void {
+  trackEvent("repo_import_succeeded", properties);
+}
+
+/** Track failure during repository import. */
+export function trackRepoImportFailed(properties: { fullName: string; error: string }): void {
+  trackEvent("repo_import_failed", properties);
+}
+
+/** Track repository import rejection (e.g. repo size limit exceeded). */
+export function trackRepoImportRejected(properties: {
+  fullName: string;
+  maxRepoSizeMb?: number;
+  sizeMb?: number;
+}): void {
+  trackEvent("repo_import_rejected", properties);
+}
+
+/** Track when a PR city is selected for deployment / review. */
+export function trackPrDeployed(properties: { prCityId: string; repoKey?: string }): void {
+  trackEvent("pr_deployed", properties);
+}
+
+/** Track when an own-work worktree city is selected for deployment. */
+export function trackWorktreeDeployed(properties: { worktreeCityId: string; repoKey?: string }): void {
+  trackEvent("worktree_deployed", properties);
+}
+
+/** Track when an active session order is archived/closed. */
+export function trackSessionArchived(properties: { sessionId: string; repoKey?: string }): void {
+  trackEvent("session_archived", properties);
+}
+
+/** Track when an archived session order is restored. */
+export function trackSessionUnarchived(properties: { sessionId: string; repoKey?: string }): void {
+  trackEvent("session_unarchived", properties);
+}
+
+/** Track when a session order is renamed. */
+export function trackSessionRenamed(properties: {
+  sessionId: string;
+  title?: string;
+  repoKey?: string;
+}): void {
+  trackEvent("session_renamed", properties);
+}
+
+/** Track when a session order is reconfigured (model, effort, permission mode). */
+export function trackSessionConfigured(properties: {
+  sessionId: string;
+  model?: string;
+  effort?: string;
+  permissionMode?: string;
+  repoKey?: string;
+}): void {
+  trackEvent("session_configured", properties);
+}
+
+/** Track when a session transcript is copied to clipboard. */
+export function trackSessionTranscriptCopied(properties: { sessionId: string; repoKey?: string }): void {
+  trackEvent("session_transcript_copied", properties);
+}
+
+/** Track when the archived sessions modal is opened. */
+export function trackArchivedSessionsOpened(properties?: { repoKey?: string }): void {
+  trackEvent("archived_sessions_opened", properties);
+}
+
+/** Track when a session is focused in the HUD or modal. */
+export function trackSessionFocused(properties: { sessionId: string; repoKey?: string }): void {
+  trackEvent("session_focused", properties);
+}
+
+/** Track when a session is unfocused / blurred. */
+export function trackSessionBlurred(properties: { sessionId: string; repoKey?: string }): void {
+  trackEvent("session_blurred", properties);
+}
+
+/** Track when a building / file is attached as context to a session or order. */
+export function trackBuildingAttached(properties: {
+  path: string;
+  target: "session" | "order";
+  repoKey?: string;
+}): void {
+  trackEvent("building_attached", properties);
+}
+
+/** Track when target framerate (FPS) is toggled. */
+export function trackFpsToggled(properties: { targetFps: number }): void {
+  trackEvent("fps_toggled", properties);
+}
+
+/** Track click to grant repository access via GitHub app installation. */
+export function trackGithubInstallClicked(): void {
+  trackEvent("github_install_clicked");
 }
 
 /**
@@ -235,4 +357,14 @@ export function trackDemoSignInPrompted(properties: { action: string }): void {
 /** Track when the airport repo picker opens from inside a city. */
 export function trackAirportOpened(properties?: { repoKey?: string }): void {
   trackEvent("airport_opened", properties);
+}
+
+/** Track when the mayor triggers a rescan of a district. */
+export function trackDistrictRescanned(properties?: { cityId?: string; repoKey?: string }): void {
+  trackEvent("district_rescanned", properties);
+}
+
+/** Track when the mayor refreshes the open pull request cities. */
+export function trackPrListRefreshed(properties?: { cityId?: string; repoKey?: string }): void {
+  trackEvent("pr_list_refreshed", properties);
 }
