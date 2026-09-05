@@ -1,4 +1,5 @@
 import { githubStartUrl } from "@/auth/api";
+import { trackLoginStarted } from "@/lib/analytics";
 import HudButton from "@/components/hud/HudButton";
 import {
   Dialog,
@@ -80,7 +81,11 @@ export default function SignInDialog({
               {content.buttonLabel}
             </HudButton>
           ) : (
-            <a href={githubStartUrl()} className="block">
+            <a
+              href={githubStartUrl()}
+              className="block"
+              onClick={() => trackLoginStarted()}
+            >
               <HudButton type="button" className="w-full" size="md">
                 {content.buttonLabel}
               </HudButton>

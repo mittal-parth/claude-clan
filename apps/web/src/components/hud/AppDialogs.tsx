@@ -2,6 +2,13 @@ import IssueShopDialog from "../IssueShopDialog";
 import PrShopDialog from "../PrShopDialog";
 import WorktreeShopDialog from "../WorktreeShopDialog";
 import CrewSelectDialog from "@/components/CrewSelectDialog";
+import {
+  trackCrewChanged,
+  trackSessionTranscriptCopied,
+  trackArchivedSessionsOpened,
+  trackBuildingAttached,
+  trackCommandPaletteOpened,
+} from "@/lib/analytics";
 import SignInDialog from "@/components/SignInDialog";
 import {
   CommandDialog,
@@ -96,6 +103,10 @@ export function AppDialogs({
       .filter((event) => event.type === "session.message")
       .map((event) => `${event.role}: ${event.text}`)
       .join("\n\n");
+    trackSessionTranscriptCopied({
+      sessionId: focusedView.summary.sessionId,
+      repoKey: activeRepoKey,
+    });
     void navigator.clipboard?.writeText(transcript);
   }
 
@@ -130,7 +141,12 @@ export function AppDialogs({
         onOpenChange={setCrewDialogOpen}
         value={crewSelection}
         policy={state.crewPolicy}
-        onConfirm={setCrewSelection}
+        onConfirm={(selection) => {
+          if (selection.crewId !== crewSelection.crewId) {
+            trackCrewChanged({ model: selection.crewId, prevModel: crewSelection.crewId, repoKey: activeRepoKey });
+          }
+          setCrewSelection(selection);
+        }}
       />
 
       <SignInDialog
@@ -149,7 +165,10 @@ export function AppDialogs({
 
       <ArchivedSessionsModal
         open={archivedSessionsOpen}
-        onOpenChange={setArchivedSessionsOpen}
+        onOpenChange={(open) => {
+          if (open) trackArchivedSessionsOpened({ repoKey: activeRepoKey });
+          setArchivedSessionsOpen(open);
+        }}
         sessions={sessions.archivedSessions}
         activeCityId={activeCityId}
         unreadFor={sessions.unreadFor}
@@ -195,7 +214,10 @@ export function AppDialogs({
             sessions.configureSession(sessions.focusedSessionId, changes);
           }
         }}
-        onOpenFiles={() => setCommandOpen(true)}
+        onOpenFiles={() => {
+          trackCommandPaletteOpened();
+          setCommandOpen(true);
+        }}
         onTravel={state.teleportToCity}
       />
 
@@ -211,6 +233,11 @@ export function AppDialogs({
                   value={building.path}
                   onSelect={() => {
                     if (sessions.focusedSessionId) {
+                      trackBuildingAttached({
+                        path: building.path,
+                        target: "session",
+                        repoKey: activeRepoKey,
+                      });
                       setSessionContextPaths((current) =>
                         current.includes(building.path)
                           ? current
