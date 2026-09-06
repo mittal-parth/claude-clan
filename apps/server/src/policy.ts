@@ -48,10 +48,18 @@ export function isPublicDeployment(
  * is a security control that silently isn't there. Failing the run is the
  * correct trade. It needs `bubblewrap` installed on Linux hosts.
  *
- * Network egress is left open unless SUDO_CITY_SANDBOX_ALLOWED_DOMAINS is set,
- * because a wrong allowlist breaks every crew that installs a dependency or
- * runs a test suite. Tune it against a real dispatch, then set it and get
- * deterministic denial of everything else.
+ * Network egress is an allowlist, always. Enabling the sandbox without a
+ * `network` config does not leave egress open -- the effective allowlist is
+ * empty, so the crew reports "network restrictions (allowedHosts: [])" and
+ * every `git push`, `gh` call and package install fails while the sandbox
+ * itself looks healthy. That is how a mayor's order to commit and push came
+ * back blocked on the deployed server and worked locally, where the sandbox
+ * is off entirely.
+ *
+ * So SANDBOX_BASELINE_DOMAINS is always allowed: it is what this app's own
+ * workflow needs to function at all. SUDO_CITY_SANDBOX_ALLOWED_DOMAINS
+ * extends it -- deliberately not replaces it, so tuning the list for one
+ * repo's package registry cannot cut every crew off from GitHub.
  */
 export const SYSTEM_SECRET_PATHS = [
   "/run",
@@ -73,10 +81,13 @@ export function buildSandboxSettings(
   if (!isPublicDeployment(env)) {
     return undefined;
   }
-  const allowedDomains = (env.SUDO_CITY_SANDBOX_ALLOWED_DOMAINS ?? "")
+  const extraDomains = (env.SUDO_CITY_SANDBOX_ALLOWED_DOMAINS ?? "")
     .split(",")
     .map((domain) => domain.trim())
     .filter(Boolean);
+  const allowedDomains = Array.from(
+    new Set([...SANDBOX_BASELINE_DOMAINS, ...extraDomains]),
+  );
 
   const serverRoot = workspace.serverRoot ?? env.SUDO_CITY_REPO;
   const denyRead = Array.from(
@@ -109,11 +120,23 @@ export function buildSandboxSettings(
       // sandbox, so denying ANTHROPIC_API_KEY here costs nothing.
       envVars: SECRET_ENV_VARS.map((name) => ({ name, mode: "deny" as const })),
     },
-    ...(allowedDomains.length > 0
-      ? { network: { allowedDomains, strictAllowlist: true } }
-      : {}),
+    network: { allowedDomains, strictAllowlist: true },
   };
 }
+
+/**
+ * The domains a crew cannot work without: cloning, fetching, pushing, and the
+ * `gh` calls that back PR and issue cities. Package registries are absent on
+ * purpose -- which registry a repo needs depends on its language, so that is
+ * per-deployment tuning through SUDO_CITY_SANDBOX_ALLOWED_DOMAINS rather than
+ * a guess baked in here.
+ */
+export const SANDBOX_BASELINE_DOMAINS = [
+  "github.com",
+  "api.github.com",
+  "codeload.github.com",
+  "objects.githubusercontent.com",
+] as const;
 
 export const SECRET_ENV_VARS = [
   "ANTHROPIC_API_KEY",

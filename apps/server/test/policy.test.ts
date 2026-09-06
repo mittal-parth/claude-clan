@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  SANDBOX_BASELINE_DOMAINS,
   SYSTEM_SECRET_PATHS,
   buildCrewPolicy,
   buildSandboxSettings,
@@ -120,25 +121,42 @@ describe("buildSandboxSettings", () => {
     expect(sandbox?.failIfUnavailable).toBe(true);
   });
 
-  it("leaves egress open until an allowlist is configured", () => {
-    // A wrong allowlist breaks every crew that installs a dependency or runs
-    // a test suite, so this is opt-in rather than guessed at.
-    expect(
-      buildSandboxSettings(WORKSPACE, { SUDO_CITY_PUBLIC_DEPLOYMENT: "1" }).network,
-    ).toBeUndefined();
+  it("allows GitHub with no allowlist configured", () => {
+    // An enabled sandbox with no network config is not open egress, it is an
+    // empty allowlist -- which blocked a crew from pushing a commit on the
+    // deployed server while local dispatches, where the sandbox is off,
+    // worked. The baseline is what this app's own workflow needs.
+    const network = buildSandboxSettings(WORKSPACE, {
+      SUDO_CITY_PUBLIC_DEPLOYMENT: "1",
+    })?.network;
+
+    expect(network?.allowedDomains).toEqual([...SANDBOX_BASELINE_DOMAINS]);
+    expect(network?.strictAllowlist).toBe(true);
   });
 
-  it("denies everything outside the allowlist once one is set", () => {
+  it("extends the baseline with a configured allowlist rather than replacing it", () => {
     const sandbox = buildSandboxSettings(WORKSPACE, {
       SUDO_CITY_PUBLIC_DEPLOYMENT: "1",
-      SUDO_CITY_SANDBOX_ALLOWED_DOMAINS: "github.com, api.github.com ,,registry.npmjs.org",
+      SUDO_CITY_SANDBOX_ALLOWED_DOMAINS: "registry.npmjs.org, github.com ,,pypi.org",
     });
 
+    // github.com is in both and must not appear twice; tuning the list for one
+    // repo's registry must not be able to cut a crew off from GitHub.
     expect(sandbox?.network?.allowedDomains).toEqual([
-      "github.com",
-      "api.github.com",
+      ...SANDBOX_BASELINE_DOMAINS,
       "registry.npmjs.org",
+      "pypi.org",
     ]);
+    expect(sandbox?.network?.strictAllowlist).toBe(true);
+  });
+
+  it("denies everything outside the allowlist", () => {
+    const sandbox = buildSandboxSettings(WORKSPACE, {
+      SUDO_CITY_PUBLIC_DEPLOYMENT: "1",
+      SUDO_CITY_SANDBOX_ALLOWED_DOMAINS: "registry.npmjs.org",
+    });
+
+    expect(sandbox?.network?.allowedDomains).not.toContain("example.com");
     expect(sandbox?.network?.strictAllowlist).toBe(true);
   });
 
