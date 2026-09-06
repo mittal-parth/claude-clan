@@ -16,6 +16,7 @@ export interface WorkspaceEventSink {
   onSessionChanged: (workspaceKey: string, session: SessionSummary) => void;
   onCitiesChanged: (workspaceKey: string) => void;
   onIssuesChanged: (workspaceKey: string) => void;
+  onError?: (workspaceKey: string, error: { code: string; message: string; sessionId?: string }) => void;
 }
 
 /**
@@ -265,6 +266,7 @@ export class WorkspaceManager {
       key,
       repoPath,
       githubToken,
+      userId,
       log: this.log,
       sandbox: this.sandboxFor?.(repoPath),
       remainingBudget: () => this.remainingBudgetFor(userId),
@@ -276,6 +278,7 @@ export class WorkspaceManager {
       onSessionChanged: (session) => this.sink.onSessionChanged(key, session),
       onCitiesChanged: () => this.sink.onCitiesChanged(key),
       onIssuesChanged: () => this.sink.onIssuesChanged(key),
+      onError: (error) => this.sink.onError?.(key, error),
     });
   }
 

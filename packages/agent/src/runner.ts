@@ -62,6 +62,7 @@ export interface SessionRunnerOptions {
   resume?: boolean;
   title?: string;
   onContextUsage?: (percentage: number) => void;
+  env?: Record<string, string | undefined>;
 }
 
 interface PendingPermit {
@@ -88,6 +89,7 @@ export class SessionRunner {
   private readonly idleCloseMs: number;
   private readonly title?: string;
   private readonly onContextUsage?: (percentage: number) => void;
+  private readonly env?: Record<string, string | undefined>;
 
   private model: string;
   private effort: EffortLevel;
@@ -125,6 +127,7 @@ export class SessionRunner {
     this.started = options.resume ?? false;
     this.title = options.title;
     this.onContextUsage = options.onContextUsage;
+    this.env = options.env;
   }
 
   get sessionKey(): string {
@@ -206,6 +209,7 @@ export class SessionRunner {
         model: this.model,
         permissionMode: this.permissionMode,
         sandbox: this.sandbox,
+        env: this.env ? { ...process.env, ...this.env } : undefined,
         ...(this.started ? { resume: resumeKey } : { sessionId: this.sessionId }),
         systemPrompt: this.systemPromptAppend
           ? {

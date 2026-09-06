@@ -10,6 +10,8 @@ import {
   type PullRequestOverlay,
   type WorldSnapshot,
   ServerMessageSchema,
+  isPushOrPrCommand,
+  isWriteAccessError,
 } from "@sudo-city/protocol";
 import type { AuthUser } from "@/auth/gate";
 import { fetchWsTicket } from "@/auth/api";
@@ -149,6 +151,16 @@ export function useGameState({
   const [screenshotUrl, setScreenshotUrl] = useState<string | null>(null);
   const [isCapturingSnapshot, setIsCapturingSnapshot] = useState(false);
   const [isFlashingShutter, setIsFlashingShutter] = useState(false);
+  const [writeAccessWarning, setWriteAccessWarning] = useState<string | null>(null);
+  const recentBashCommandsRef = useRef<Map<string, string>>(new Map());
+  const prevRepoKeyRef = useRef(activeRepoKey);
+
+  useEffect(() => {
+    if (prevRepoKeyRef.current !== activeRepoKey) {
+      prevRepoKeyRef.current = activeRepoKey;
+      setWriteAccessWarning(null);
+    }
+  }, [activeRepoKey]);
 
   const handleTakeSnapshot = async () => {
     if (isCapturingSnapshot || !canvasRef.current) return;
@@ -399,6 +411,13 @@ export function useGameState({
             setSignInAction((current) => current ?? "keep building");
             return;
           }
+          if (decoded.data.code === "WRITE_ACCESS_REQUIRED") {
+            setWriteAccessWarning(
+              decoded.data.message ??
+                "GitHub write access is required to push changes or create pull requests. Ensure your GitHub App has 'Contents: Read and write' permissions.",
+            );
+            return;
+          }
           return;
         }
 
@@ -438,11 +457,27 @@ export function useGameState({
           sites.start(event.sessionId, event.path);
           scheduleRescan(event.cityId);
         }
-        if (event.type === "tool.started" && event.target) {
-          sites.start(event.sessionId, event.target, event.toolCallId);
+        if (event.type === "tool.started") {
+          if (event.tool === "Bash" && typeof event.input?.command === "string") {
+            recentBashCommandsRef.current.set(event.toolCallId, event.input.command);
+          }
+          if (event.target) {
+            sites.start(event.sessionId, event.target, event.toolCallId);
+          }
         }
         if (event.type === "tool.completed") {
           sites.finish(event.sessionId, event.toolCallId);
+          const lastCmd = recentBashCommandsRef.current.get(event.toolCallId);
+          recentBashCommandsRef.current.delete(event.toolCallId);
+          if (
+            event.outcome === "error" &&
+            (isPushOrPrCommand(lastCmd) || isPushOrPrCommand(event.resultPreview)) &&
+            isWriteAccessError(event.resultPreview)
+          ) {
+            setWriteAccessWarning(
+              "GitHub write access is required to push changes or create pull requests. Ensure your GitHub App has 'Contents: Read and write' permissions and you have collaborator write access.",
+            );
+          }
         }
       });
     }
@@ -829,5 +864,7 @@ export function useGameState({
     demoLocked,
     signInAction,
     setSignInAction,
+    writeAccessWarning,
+    setWriteAccessWarning,
   };
 }

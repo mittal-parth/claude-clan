@@ -17,13 +17,15 @@ const fake = vi.hoisted(() => {
     readonly pendingPermits = new Set<string>();
     interruptCalls = 0;
     disposeCalls = 0;
+    readonly options: Record<string, unknown>;
     private running = false;
     private live = true;
     private readonly emit: (event: unknown) => void;
 
-    constructor(options: { sessionId: string; emit: (event: unknown) => void }) {
+    constructor(options: { sessionId: string; emit: (event: unknown) => void } & Record<string, unknown>) {
       this.sessionId = options.sessionId;
       this.emit = options.emit;
+      this.options = options;
       runners.push(this);
     }
 
@@ -355,5 +357,98 @@ describe("Workspace session flow", () => {
     expect(shouldDeliverEvent(unsubscribed, "workspace", "pr-51", "pr-session", delta)).toBe(false);
     expect(shouldDeliverEvent(unsubscribed, "workspace", "main", "other-session", delta)).toBe(false);
     expect(shouldDeliverEvent(subscribed, "other-workspace", "pr-51", "pr-session", pullRequestMessage)).toBe(false);
+  });
+
+  it("injects GH_TOKEN into runner env when workspace has githubToken", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "sudocity-token-test-"));
+    temporaryDirectories.push(directory);
+    const Constructor = Workspace as unknown as new (options: WorkspaceOptions) => Workspace;
+    const current = new Constructor({
+      ...workspaceOptions(directory, vi.fn()),
+      key: "token-workspace",
+      githubToken: "ghs_user_session_token_xyz",
+      userId: 42,
+    });
+    const registry = (current as unknown as {
+      registry: { add: (city: { id: CityId; cwd: string; readOnly: boolean; snapshot: WorldSnapshot }) => void };
+    }).registry;
+    registry.add({ id: "main", cwd: directory, readOnly: false, snapshot });
+
+    const session = await openSession(current, "main", "push branch");
+    const runner = fake.runners.find((r) => r.sessionId === session.sessionId)!;
+    expect(runner.options.env).toEqual(
+      expect.objectContaining({
+        GH_TOKEN: "ghs_user_session_token_xyz",
+      }),
+    );
+  });
+
+  it("emits WRITE_ACCESS_REQUIRED when tool.completed reports 403 permission error on git push", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "sudocity-write-access-test-"));
+    temporaryDirectories.push(directory);
+    const onError = vi.fn();
+    const Constructor = Workspace as unknown as new (options: WorkspaceOptions) => Workspace;
+    const current = new Constructor({
+      ...workspaceOptions(directory, vi.fn()),
+      key: "write-error-workspace",
+      onError,
+    });
+    const registry = (current as unknown as {
+      registry: { add: (city: { id: CityId; cwd: string; readOnly: boolean; snapshot: WorldSnapshot }) => void };
+    }).registry;
+    registry.add({ id: "main", cwd: directory, readOnly: false, snapshot });
+
+    const session = await openSession(current, "main", "fix issue");
+    const emitAgentEvent = (current as unknown as {
+      emitAgentEvent: (sessionId: string, event: unknown) => void;
+    }).emitAgentEvent.bind(current);
+
+    // Simulate tool start for git push
+    emitAgentEvent(session.sessionId, {
+      type: "tool.started",
+      toolCallId: "call_1",
+      tool: "Bash",
+      input: { command: "git push -u origin feature" },
+    });
+
+    // Simulate tool completion failing with 403
+    emitAgentEvent(session.sessionId, {
+      type: "tool.completed",
+      toolCallId: "call_1",
+      outcome: "error",
+      resultPreview: "fatal: unable to access 'https://github.com/org/repo.git/': The requested URL returned error: 403",
+    });
+
+    expect(onError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        code: "WRITE_ACCESS_REQUIRED",
+        sessionId: session.sessionId,
+      }),
+    );
+  });
+
+  it("emits WRITE_ACCESS_REQUIRED when hasWriteAccess is false and user prompts to push/pr", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "sudocity-write-access-readonly-test-"));
+    temporaryDirectories.push(directory);
+    const onError = vi.fn();
+    const Constructor = Workspace as unknown as new (options: WorkspaceOptions) => Workspace;
+    const current = new Constructor({
+      ...workspaceOptions(directory, vi.fn()),
+      key: "write-readonly-workspace",
+      onError,
+    });
+    current.hasWriteAccess = false;
+    const registry = (current as unknown as {
+      registry: { add: (city: { id: CityId; cwd: string; readOnly: boolean; snapshot: WorldSnapshot }) => void };
+    }).registry;
+    registry.add({ id: "main", cwd: directory, readOnly: false, snapshot });
+
+    await openSession(current, "main", "please push and open pr");
+
+    expect(onError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        code: "WRITE_ACCESS_REQUIRED",
+      }),
+    );
   });
 });

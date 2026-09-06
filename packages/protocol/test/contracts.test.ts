@@ -7,6 +7,8 @@ import {
   ServerMessageSchema,
   SessionStatusSchema,
   TurnOutcomeSchema,
+  isWriteAccessError,
+  isPushOrPrCommand,
 } from "../src/index.js";
 
 const base = {
@@ -519,4 +521,50 @@ describe("protocol contracts", () => {
       kind: "session",
       session: { ...summary, contextPercent: 101 },
     })).toThrow();
+  });
+
+  describe("write access and git command helpers", () => {
+    it("detects write access permission errors correctly", () => {
+      expect(
+        isWriteAccessError(
+          "fatal: unable to access 'https://github.com/org/repo.git/': The requested URL returned error: 403",
+        ),
+      ).toBe(true);
+      expect(
+        isWriteAccessError(
+          "remote: Permission to org/repo.git denied to user.",
+        ),
+      ).toBe(true);
+      expect(
+        isWriteAccessError(
+          "GraphQL: Resource not accessible by integration (createPullRequest)",
+        ),
+      ).toBe(true);
+      expect(
+        isWriteAccessError("remote: error: GH006: Protected branch hook declined"),
+      ).toBe(true);
+      expect(isWriteAccessError("push declined due to repo permissions")).toBe(true);
+
+      // Non-permission errors should not match
+      expect(isWriteAccessError("fatal: repository not found")).toBe(false);
+      expect(isWriteAccessError("Auto-merging file.txt CONFLICT (content)")).toBe(false);
+      expect(isWriteAccessError("")).toBe(false);
+      expect(isWriteAccessError(undefined)).toBe(false);
+    });
+
+    it("detects push and pull request creation commands and prompts", () => {
+      expect(isPushOrPrCommand("git push -u origin feature-branch")).toBe(true);
+      expect(isPushOrPrCommand("git push origin main")).toBe(true);
+      expect(isPushOrPrCommand("gh pr create --title 'Fix' --body 'Desc'")).toBe(true);
+      expect(isPushOrPrCommand("push and open pr")).toBe(true);
+      expect(isPushOrPrCommand("push to origin and create a pull request")).toBe(true);
+      expect(isPushOrPrCommand("open a pr for this issue")).toBe(true);
+
+      // Unrelated commands should not match
+      expect(isPushOrPrCommand("git status")).toBe(false);
+      expect(isPushOrPrCommand("git checkout -b feature")).toBe(false);
+      expect(isPushOrPrCommand("npm run test")).toBe(false);
+      expect(isPushOrPrCommand(123)).toBe(false);
+      expect(isPushOrPrCommand(undefined)).toBe(false);
+    });
   });

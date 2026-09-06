@@ -715,3 +715,32 @@ export type TurnOutcome = z.infer<typeof TurnOutcomeSchema>;
 export type WorldMap = z.infer<typeof WorldMapSchema>;
 export type WorldSize = z.infer<typeof WorldSizeSchema>;
 export type WorldSnapshot = z.infer<typeof WorldSnapshotSchema>;
+
+/**
+ * Detects whether a git or gh CLI error output is caused by missing write/push permissions.
+ */
+export function isWriteAccessError(text?: string): boolean {
+  if (!text) return false;
+  return (
+    /\b403\b/.test(text) ||
+    /permission.*denied/i.test(text) ||
+    /resource not accessible by integration/i.test(text) ||
+    /push declined due to repo permissions/i.test(text) ||
+    /write access/i.test(text) ||
+    /not authorized/i.test(text) ||
+    /must have write access/i.test(text) ||
+    /protected branch/i.test(text)
+  );
+}
+
+/**
+ * Detects whether a command or prompt is attempting to push code or create a pull request.
+ */
+export function isPushOrPrCommand(command?: unknown): boolean {
+  if (typeof command !== "string") return false;
+  return (
+    /\b(?:git\s+push|gh\s+pr\s+create)\b/i.test(command) ||
+    /\bpush\b.*\b(?:pr|pull\s*request|origin|branch|remote|github)\b/i.test(command) ||
+    /\b(?:create|open)\b.*\b(?:pr|pull\s*request)\b/i.test(command)
+  );
+}

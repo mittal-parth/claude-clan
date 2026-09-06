@@ -239,6 +239,14 @@ const workspaces = new WorkspaceManager({
         }
       }
     },
+    onError(workspaceKey, error) {
+      const message = JSON.stringify({ kind: "error", ...error } satisfies ServerMessage);
+      for (const [socket, state] of clients) {
+        if (state.workspaceKey === workspaceKey && socket.readyState === WebSocket.OPEN) {
+          socket.send(message);
+        }
+      }
+    },
   },
 });
 

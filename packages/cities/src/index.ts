@@ -48,6 +48,7 @@ export interface GitHubClient {
    * PR's author. Undefined when there's no credential to ask.
    */
   viewerLogin(overrideToken?: string): Promise<string | undefined>;
+  hasWriteAccess(repoPath: string, overrideToken?: string): Promise<boolean | undefined>;
 }
 
 interface RawPullRequest {
@@ -329,9 +330,39 @@ export class GitHubApiClient implements GitHubClient {
 
     return undefined;
   }
+
+  async hasWriteAccess(
+    repoPath: string,
+    overrideToken?: string,
+  ): Promise<boolean | undefined> {
+    const slug = await this.slugFor(repoPath);
+    if (!slug) {
+      return undefined;
+    }
+    const token = overrideToken ?? this.token;
+    if (!token) {
+      return undefined;
+    }
+    try {
+      const response = await fetch(`https://api.github.com/repos/${slug}`, {
+        headers: this.headers(overrideToken),
+      });
+      if (!response.ok) {
+        return undefined;
+      }
+      const data = (await response.json()) as { permissions?: { push?: boolean } };
+      return data.permissions?.push;
+    } catch {
+      return undefined;
+    }
+  }
 }
 
 export class GhCliClient implements GitHubClient {
+  async hasWriteAccess(): Promise<boolean | undefined> {
+    return undefined;
+  }
+
   async listOpenPullRequests(repoPath: string): Promise<PullRequestRef[]> {
     const { stdout } = await execFileAsync(
       "gh",

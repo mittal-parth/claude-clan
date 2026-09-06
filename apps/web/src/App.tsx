@@ -8,6 +8,7 @@ import { useFps } from "@/components/fps-provider";
 import { useGameState } from "@/hooks/use-game-state";
 import { AppHud } from "@/components/hud/AppHud";
 import { AppDialogs } from "@/components/hud/AppDialogs";
+import { WriteAccessBanner } from "@/components/WriteAccessBanner";
 import { crewSpriteUrl, findCrewByModel, getCrewMember } from "@/crew/catalog";
 import type { BillboardRepo, BillboardTarget } from "@/game/layouts/billboards";
 
@@ -133,6 +134,13 @@ export default function App(props: AppProps) {
             height: "auto",
             imageRendering: "pixelated",
           }}
+        />
+      ) : null}
+
+      {state.writeAccessWarning ? (
+        <WriteAccessBanner
+          message={state.writeAccessWarning}
+          onDismiss={() => state.setWriteAccessWarning(null)}
         />
       ) : null}
 
