@@ -239,6 +239,14 @@ const workspaces = new WorkspaceManager({
         }
       }
     },
+    onError(workspaceKey, error) {
+      const message = JSON.stringify({ kind: "error", ...error } satisfies ServerMessage);
+      for (const [socket, state] of clients) {
+        if (state.workspaceKey === workspaceKey && socket.readyState === WebSocket.OPEN) {
+          socket.send(message);
+        }
+      }
+    },
   },
 });
 
@@ -422,6 +430,9 @@ app.get("/ws", { websocket: true }, (socket) => {
       // has the bearer token) unless the workspace is already open.
       const existingKey = `${currentState.userId}:${data.repoKey}`;
       let existing = workspaces.get(existingKey);
+      if (existing && currentState.githubToken) {
+        void existing.updateGithubToken(currentState.githubToken);
+      }
       
       if (!existing && currentState.githubToken && authContext) {
         const clonePath = await authContext.db.clonePathFor(currentState.userId, data.repoKey);

@@ -9,6 +9,7 @@ import {
   type AgentEvent,
   type SandboxSettings,
 } from "@sudo-city/agent";
+import { configureGitIdentity, setupGitCredentials } from "./clone.js";
 import {
   GitHubApiClient,
   changedFiles,
@@ -25,19 +26,21 @@ import {
   type PullRequestRef,
 } from "@sudo-city/cities";
 import { layoutWorld } from "@sudo-city/layout";
-import type {
-  ChangedFile,
-  CityId,
-  CitySummary,
-  EffortLevel,
-  GameEvent,
-  Issue,
-  PermissionMode,
-  PullRequestOverlay,
-  SessionStatus,
-  SessionSummary,
-  TurnOutcome,
-  WorldSnapshot,
+import {
+  isPushOrPrCommand,
+  isWriteAccessError,
+  type ChangedFile,
+  type CityId,
+  type CitySummary,
+  type EffortLevel,
+  type GameEvent,
+  type Issue,
+  type PermissionMode,
+  type PullRequestOverlay,
+  type SessionStatus,
+  type SessionSummary,
+  type TurnOutcome,
+  type WorldSnapshot,
 } from "@sudo-city/protocol";
 import { SQLiteWorldStore } from "@sudo-city/world";
 import { scanRepository } from "@sudo-city/worldgen";
@@ -107,6 +110,13 @@ class CityRegistry {
 
   remove(id: CityId): void {
     this.cities.delete(id);
+  }
+
+  updateSystemPromptAppend(id: CityId, systemPromptAppend: string): void {
+    const city = this.cities.get(id);
+    if (city) {
+      this.cities.set(id, { ...city, systemPromptAppend });
+    }
   }
 
   get(id: CityId): City | undefined {
@@ -255,12 +265,17 @@ function mayorMessage(prompt: string, contextPaths: readonly string[]): string {
   ].join("\n");
 }
 
+const GIT_PERMISSION_INSTRUCTIONS = [
+  "If git push or gh pr create fails with permission denied or HTTP 403, inform the user clearly: 'Git push was denied (HTTP 403). Write access is required to push changes or create pull requests. To fix this: 1. Ensure you have collaborator write permissions on the repository. 2. Verify that the GitHub App installation has \"Contents: Read and write\" permissions at https://github.com/settings/installations.'",
+].join("\n");
+
 export interface WorkspaceOptions {
   /** "demo", or `${userId}:${repoKeyFor(fullName)}` -- unique across the whole process, opaque to callers otherwise. */
   key: string;
   repoPath: string;
   /** The signed-in user's installation token; absent for the shared demo workspace, which falls back to GitHubApiClient's own GITHUB_TOKEN env var. */
   githubToken?: string;
+  userId?: number;
   log: FastifyBaseLogger;
   /** Rationed from a ledger the WorkspaceManager sums across every open workspace, not just this one -- see index.ts. */
   remainingBudget: () => number;
@@ -272,6 +287,7 @@ export interface WorkspaceOptions {
   onSessionChanged: (session: SessionSummary) => void;
   onCitiesChanged: () => void;
   onIssuesChanged: () => void;
+  onError?: (error: { code: string; message: string; sessionId?: string }) => void;
 }
 
 /**
@@ -287,7 +303,8 @@ export class Workspace {
   private readonly store: SQLiteWorldStore;
   private readonly registry = new CityRegistry();
   private readonly githubClient: GitHubClient;
-  private readonly githubToken: string | undefined;
+  private githubToken: string | undefined;
+  private readonly userId: number | undefined;
   private viewerLoginValue: string | undefined;
   private readonly remainingBudget: () => number;
   private readonly sandbox: WorkspaceOptions["sandbox"];
@@ -296,6 +313,9 @@ export class Workspace {
   private readonly onSessionChanged: WorkspaceOptions["onSessionChanged"];
   private readonly onCitiesChanged: WorkspaceOptions["onCitiesChanged"];
   private readonly onIssuesChanged: WorkspaceOptions["onIssuesChanged"];
+  private readonly onError: WorkspaceOptions["onError"];
+  private readonly pendingToolCommands = new Map<string, string>();
+  hasWriteAccess: boolean | undefined = undefined;
   private readonly sessions = new SessionRegistry();
   private readonly ledger: BudgetLedger;
   private readonly worldSequences = new Map<CityId, number>();
@@ -307,6 +327,7 @@ export class Workspace {
     this.repoPath = resolve(options.repoPath);
     this.log = options.log;
     this.githubToken = options.githubToken;
+    this.userId = options.userId;
     this.remainingBudget = options.remainingBudget;
     this.sandbox = options.sandbox;
     this.onSpend = options.onSpend;
@@ -314,6 +335,7 @@ export class Workspace {
     this.onSessionChanged = options.onSessionChanged;
     this.onCitiesChanged = options.onCitiesChanged;
     this.onIssuesChanged = options.onIssuesChanged;
+    this.onError = options.onError;
     this.ledger = new BudgetLedger(
       this.remainingBudget,
       (amountUsd) => this.onSpend?.(amountUsd),
@@ -322,21 +344,99 @@ export class Workspace {
     this.githubClient = new GitHubApiClient();
   }
 
+  private setPendingToolCommand(id: string, command: string): void {
+    if (this.pendingToolCommands.size >= 100) {
+      const oldest = this.pendingToolCommands.keys().next().value;
+      if (oldest) this.pendingToolCommands.delete(oldest);
+    }
+    this.pendingToolCommands.set(id, command);
+  }
+
+  private buildSystemPromptAppend(basePrompt?: string): string {
+    const parts = [
+      ...(basePrompt ? [basePrompt] : []),
+      GIT_PERMISSION_INSTRUCTIONS,
+    ];
+    if (this.hasWriteAccess === false) {
+      parts.push(
+        "IMPORTANT: You DO NOT have write permissions to push to this remote repository. Do not attempt to run 'git push' or 'gh pr create'. Commit your changes locally only and explain to the user that write access is required to push to GitHub.",
+      );
+    }
+    return parts.join("\n\n");
+  }
+
+  private updateCitySystemPrompts(): void {
+    const main = this.registry.get("main");
+    if (main) {
+      this.registry.updateSystemPromptAppend("main", this.buildSystemPromptAppend());
+    }
+    for (const city of this.registry.list()) {
+      if (city.id !== "main") {
+        const issue = this.registry.issueFor(city.id);
+        if (issue) {
+          this.registry.updateSystemPromptAppend(
+            city.id,
+            this.buildSystemPromptAppend(
+              [
+                `You are fixing GitHub issue #${issue.number}, "${issue.title}".`,
+                "This city is a writable detached worktree based on main. Implement and verify the fix here; do not change the primary checkout.",
+                issue.body ? `Issue details:\n${issue.body}` : "No issue description was provided.",
+              ].join("\n\n"),
+            ),
+          );
+        }
+      }
+    }
+  }
+
+  /**
+   * Updates the GitHub token on reconnect / repo.select and re-evaluates write permissions.
+   */
+  async updateGithubToken(token?: string): Promise<void> {
+    this.githubToken = token;
+    if (token) {
+      const writeAccess = await this.githubClient
+        .hasWriteAccess(this.repoPath, token)
+        .catch(() => undefined);
+      if (writeAccess !== undefined) {
+        this.hasWriteAccess = writeAccess;
+        this.updateCitySystemPrompts();
+      }
+    }
+  }
+
   static async open(options: WorkspaceOptions): Promise<Workspace> {
     const workspace = new Workspace(options);
     await workspace.hideWorldStoreFromGit();
+    await setupGitCredentials(workspace.repoPath).catch(() => undefined);
+    workspace.viewerLoginValue = await workspace.githubClient
+      .viewerLogin(workspace.githubToken)
+      .catch(() => undefined);
+    if (workspace.githubToken) {
+      workspace.hasWriteAccess = await workspace.githubClient
+        .hasWriteAccess(workspace.repoPath, workspace.githubToken)
+        .catch(() => undefined);
+    }
     const snapshot = await workspace.generateWorld("main", workspace.repoPath);
     workspace.registry.add({
       id: "main",
       cwd: workspace.repoPath,
       readOnly: false,
+      systemPromptAppend: workspace.buildSystemPromptAppend(),
       snapshot,
     });
     await workspace.refreshRoster();
     workspace.restoreSessions();
-    workspace.viewerLoginValue = await workspace.githubClient
-      .viewerLogin(workspace.githubToken)
-      .catch(() => undefined);
+    if (workspace.viewerLoginValue) {
+      const email = workspace.userId
+        ? `${workspace.userId}+${workspace.viewerLoginValue}@users.noreply.github.com`
+        : `${workspace.viewerLoginValue}@users.noreply.github.com`;
+      await configureGitIdentity(
+        workspace.repoPath,
+        workspace.viewerLoginValue,
+        email,
+      ).catch(() => undefined);
+    }
     return workspace;
   }
 
@@ -610,13 +710,45 @@ export class Workspace {
         break;
       case "permit.requested":
         session.pendingPermits.add(event.toolCallId);
+        if (
+          this.hasWriteAccess === false &&
+          event.tool === "Bash" &&
+          isPushOrPrCommand(event.input?.command)
+        ) {
+          this.onError?.({
+            code: "WRITE_ACCESS_REQUIRED",
+            message:
+              "GitHub write access is required to push changes or create pull requests. Ensure your GitHub App has 'Contents: Read and write' permissions and you have collaborator write access.",
+            sessionId: session.sessionId,
+          });
+        }
         break;
       case "permit.resolved":
         session.pendingPermits.delete(event.toolCallId);
         break;
       case "tool.started":
+        if (event.tool === "Bash" && typeof event.input?.command === "string") {
+          this.setPendingToolCommand(event.toolCallId, event.input.command);
+        }
         session.activityLine = `${event.tool}${event.target ? ` · ${event.target}` : ""}`;
         break;
+      case "tool.completed": {
+        const lastCmd = this.pendingToolCommands.get(event.toolCallId);
+        this.pendingToolCommands.delete(event.toolCallId);
+        if (
+          event.outcome === "error" &&
+          (isPushOrPrCommand(lastCmd) || isPushOrPrCommand(event.resultPreview)) &&
+          isWriteAccessError(event.resultPreview)
+        ) {
+          this.onError?.({
+            code: "WRITE_ACCESS_REQUIRED",
+            message:
+              "GitHub write access is required to push changes or create pull requests. Ensure your GitHub App has 'Contents: Read and write' permissions and you have collaborator write access.",
+            sessionId: session.sessionId,
+          });
+        }
+        break;
+      }
       case "session.message":
         if (event.role === "agent" && event.kind === "text") {
           session.activityLine = event.text.split("\n", 1)[0]?.trim().slice(0, 200);
@@ -682,6 +814,23 @@ export class Workspace {
       sandbox: this.sandbox,
       resume: session.turnCount > 0,
       title: session.title,
+      env: this.githubToken
+        ? {
+            GH_TOKEN: this.githubToken,
+            ...(this.viewerLoginValue
+              ? {
+                  GIT_AUTHOR_NAME: this.viewerLoginValue,
+                  GIT_COMMITTER_NAME: this.viewerLoginValue,
+                  GIT_AUTHOR_EMAIL: this.userId
+                    ? `${this.userId}+${this.viewerLoginValue}@users.noreply.github.com`
+                    : `${this.viewerLoginValue}@users.noreply.github.com`,
+                  GIT_COMMITTER_EMAIL: this.userId
+                    ? `${this.userId}+${this.viewerLoginValue}@users.noreply.github.com`
+                    : `${this.viewerLoginValue}@users.noreply.github.com`,
+                }
+              : {}),
+          }
+        : undefined,
       budget: {
         reserve: (sessionId) => this.ledger.reserve(sessionId),
         settle: (sessionId, actualUsd) => this.ledger.settle(sessionId, actualUsd),
@@ -849,11 +998,13 @@ export class Workspace {
       id: cityId,
       cwd: worktree,
       readOnly: false,
-      systemPromptAppend: [
-        `You are fixing GitHub issue #${issue.number}, "${issue.title}".`,
-        "This city is a writable detached worktree based on main. Implement and verify the fix here; do not change the primary checkout.",
-        issue.body ? `Issue details:\n${issue.body}` : "No issue description was provided.",
-      ].join("\n\n"),
+      systemPromptAppend: this.buildSystemPromptAppend(
+        [
+          `You are fixing GitHub issue #${issue.number}, "${issue.title}".`,
+          "This city is a writable detached worktree based on main. Implement and verify the fix here; do not change the primary checkout.",
+          issue.body ? `Issue details:\n${issue.body}` : "No issue description was provided.",
+        ].join("\n\n"),
+      ),
       snapshot,
     };
   }
@@ -968,6 +1119,18 @@ export class Workspace {
       contextPaths,
     });
 
+    // If the repository is known to be read-only and the prompt requests push / PR operations,
+    // broadcast an early WRITE_ACCESS_REQUIRED advisory warning to display the banner in the UI.
+    // We allow the runner to proceed with local work, guided by system prompt instructions.
+    if (this.hasWriteAccess === false && isPushOrPrCommand(options.prompt)) {
+      this.onError?.({
+        code: "WRITE_ACCESS_REQUIRED",
+        message:
+          "GitHub write access is required to push changes or create pull requests. Ensure your GitHub App has 'Contents: Read and write' permissions and you have collaborator write access.",
+        sessionId,
+      });
+    }
+
     const runner = this.ensureRunner(session);
     void runner.send(options.prompt, contextPaths).catch((error: unknown) => {
       this.emitAgentEvent(sessionId, {
@@ -1000,6 +1163,17 @@ export class Workspace {
       return { error: { code: "CITY_NOT_FOUND" } };
     }
     const safeContextPaths = this.sanitizeContextPaths(contextPaths);
+    // If the repository is known to be read-only and the prompt requests push / PR operations,
+    // broadcast an early WRITE_ACCESS_REQUIRED advisory warning to display the banner in the UI.
+    // We allow the runner to proceed with local work, guided by system prompt instructions.
+    if (this.hasWriteAccess === false && isPushOrPrCommand(prompt)) {
+      this.onError?.({
+        code: "WRITE_ACCESS_REQUIRED",
+        message:
+          "GitHub write access is required to push changes or create pull requests. Ensure your GitHub App has 'Contents: Read and write' permissions and you have collaborator write access.",
+        sessionId,
+      });
+    }
     const running = ["starting", "thinking", "working", "awaiting-permit", "compacting"].includes(session.status)
       || (session.runner?.isRunning() ?? false);
     if (running) {

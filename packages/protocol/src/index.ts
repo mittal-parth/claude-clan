@@ -715,3 +715,50 @@ export type TurnOutcome = z.infer<typeof TurnOutcomeSchema>;
 export type WorldMap = z.infer<typeof WorldMapSchema>;
 export type WorldSize = z.infer<typeof WorldSizeSchema>;
 export type WorldSnapshot = z.infer<typeof WorldSnapshotSchema>;
+
+/**
+ * Detects whether a git or gh CLI error output is caused by missing write/push permissions.
+ */
+export function isWriteAccessError(text?: string): boolean {
+  if (!text) return false;
+  return (
+    /\b403\b/.test(text) ||
+    /permission.*denied/i.test(text) ||
+    /resource not accessible by integration/i.test(text) ||
+    /push declined due to repo permissions/i.test(text) ||
+    /write access/i.test(text) ||
+    /not authorized/i.test(text) ||
+    /must have write access/i.test(text)
+  );
+}
+
+/**
+ * Detects whether a command or prompt is attempting to push code or create a pull request.
+ */
+export function isPushOrPrCommand(command?: unknown): boolean {
+  if (typeof command !== "string") return false;
+  const trimmed = command.trim();
+  // Git CLI push command (e.g. `git push`, `git -C repo push -u origin main`), excluding `git stash push` or `git subtree push`
+  if (/\bgit\b(?!\s+(?:stash|subtree)\b).*\bpush\b/i.test(trimmed)) {
+    return true;
+  }
+  // GitHub CLI PR create command
+  if (/\bgh\s+pr\s+create\b/i.test(trimmed)) {
+    return true;
+  }
+  // Conversational prompt to push
+  if (/\b(?:git\s+)?push\s+(?:the\s+changes\s+)?to\s+(?:origin|remote|github|main|master|\S+)\b/i.test(trimmed)) {
+    return true;
+  }
+  if (/\bpush\s+(?:and\s+)?(?:create|open)\s+(?:a\s+)?pr\b/i.test(trimmed)) {
+    return true;
+  }
+  // Conversational prompt to open/create a PR (ignoring documentation/templates)
+  if (
+    /\b(?:create|open)\s+(?:a\s+)?(?:new\s+)?(?:pr|pull\s*request)\b/i.test(trimmed) &&
+    !/\b(?:template|doc|workflow|guideline)/i.test(trimmed)
+  ) {
+    return true;
+  }
+  return false;
+}

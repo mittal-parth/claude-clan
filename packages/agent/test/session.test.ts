@@ -87,6 +87,27 @@ describe("SessionRunner", () => {
     await instance.goCold();
   });
 
+  it("passes environment variables to query options", async () => {
+    const emit = vi.fn();
+    const instance = new SessionRunner({
+      sessionId: SESSION_ID,
+      cwd: process.cwd(),
+      emit,
+      model: "sonnet",
+      effort: "high",
+      permissionMode: "default",
+      budget: budget(),
+      env: { GH_TOKEN: "test_github_token_123" },
+    });
+
+    await instance.send("run with env");
+    expect(queryMock).toHaveBeenCalledTimes(1);
+    const options = queryMock.mock.calls[0]![0].options;
+    expect(options.env).toBeDefined();
+    expect(options.env?.GH_TOKEN).toBe("test_github_token_123");
+    await instance.goCold();
+  });
+
   it("keeps two sends in one warm query", async () => {
     const instance = runner().instance;
     await instance.send("one");

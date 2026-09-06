@@ -136,4 +136,57 @@ export async function stripRemoteCredentials(
   await execFileAsync("git", ["remote", "set-url", "origin", cleanRemote], {
     cwd: repoPath,
   });
+  await setupGitCredentials(repoPath);
+}
+
+/**
+ * Configures git to use an in-memory credential helper that resolves credentials
+ * from the ephemeral $GH_TOKEN in the environment. This keeps tokens off disk in
+ * .git/config while allowing `git push` to authenticate.
+ */
+export async function setupGitCredentials(repoPath: string): Promise<void> {
+  // Clear any existing local credential helpers idempotently
+  await execFileAsync(
+    "git",
+    ["config", "--local", "--unset-all", "credential.helper"],
+    { cwd: repoPath },
+  ).catch(() => undefined);
+  await execFileAsync(
+    "git",
+    ["config", "--local", "--unset-all", "credential.https://github.com.helper"],
+    { cwd: repoPath },
+  ).catch(() => undefined);
+
+  // Blank credential.helper resets and disables any inherited global/system helpers (e.g. osxkeychain)
+  await execFileAsync(
+    "git",
+    ["config", "--local", "credential.helper", ""],
+    { cwd: repoPath },
+  );
+
+  // Bind helper strictly to github.com so only GitHub requests receive GH_TOKEN
+  await execFileAsync(
+    "git",
+    [
+      "config",
+      "--local",
+      "--add",
+      "credential.https://github.com.helper",
+      '!f() { if [ "$1" = "get" ] && [ -n "$GH_TOKEN" ]; then printf "username=x-access-token\\npassword=%s\\n" "$GH_TOKEN"; fi; }; f',
+    ],
+    { cwd: repoPath },
+  );
+}
+
+/**
+ * Configures author/committer identity locally for this clone so git commits
+ * have a valid identity matching the authenticated GitHub user.
+ */
+export async function configureGitIdentity(
+  repoPath: string,
+  name: string,
+  email: string,
+): Promise<void> {
+  await execFileAsync("git", ["config", "user.name", name], { cwd: repoPath });
+  await execFileAsync("git", ["config", "user.email", email], { cwd: repoPath });
 }

@@ -1,10 +1,14 @@
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { stripRemoteCredentials } from "../src/clone.js";
+import {
+  configureGitIdentity,
+  setupGitCredentials,
+  stripRemoteCredentials,
+} from "../src/clone.js";
 
 const execFileAsync = promisify(execFile);
 const TOKEN = "ghs_ThisWouldBeARealInstallationToken";
@@ -88,5 +92,109 @@ describe("stripRemoteCredentials", () => {
     expect(await configuredRemote()).toMatch(
       /github\.com\/octocat\/hello-world/,
     );
+  });
+
+  it("configures credential.helper to resolve GH_TOKEN dynamically", async () => {
+    await stripRemoteCredentials(
+      repoPath,
+      "https://github.com/octocat/hello-world.git",
+    );
+
+    const child = spawn("git", ["credential", "fill"], {
+      cwd: repoPath,
+      env: {
+        ...process.env,
+        GH_TOKEN: "ghs_dynamic_runtime_token_999",
+      },
+    });
+
+    let stdout = "";
+    child.stdout.on("data", (chunk: Buffer) => {
+      stdout += chunk.toString();
+    });
+    child.stdin.write("protocol=https\nhost=github.com\n\n");
+    child.stdin.end();
+
+    await new Promise<void>((resolve, reject) => {
+      child.on("error", reject);
+      child.on("close", () => resolve());
+    });
+
+    expect(stdout).toContain("username=x-access-token");
+    expect(stdout).toContain("password=ghs_dynamic_runtime_token_999");
+  });
+
+  it("does not leak GH_TOKEN to non-GitHub remotes", async () => {
+    await stripRemoteCredentials(
+      repoPath,
+      "https://github.com/octocat/hello-world.git",
+    );
+
+    const child = spawn("git", ["credential", "fill"], {
+      cwd: repoPath,
+      env: {
+        ...process.env,
+        GH_TOKEN: "ghs_dynamic_runtime_token_999",
+        GIT_TERMINAL_PROMPT: "0",
+        GIT_ASKPASS: "true",
+      },
+    });
+
+    let stdout = "";
+    child.stdout.on("data", (chunk: Buffer) => {
+      stdout += chunk.toString();
+    });
+    // Request credentials for an attacker-controlled external host
+    child.stdin.write("protocol=https\nhost=attacker-controlled-server.com\n\n");
+    child.stdin.end();
+
+    await new Promise<void>((resolve, reject) => {
+      child.on("error", reject);
+      child.on("close", () => resolve());
+    });
+
+    // Must NOT contain the GitHub token
+    expect(stdout).not.toContain("password=ghs_dynamic_runtime_token_999");
+  });
+
+  it("is idempotent and succeeds when called multiple times on the same repository", async () => {
+    // Calling setupGitCredentials twice must not fail with git exit code 5 (cannot overwrite multiple values)
+    await expect(stripRemoteCredentials(repoPath, "https://github.com/octocat/hello-world.git")).resolves.not.toThrow();
+    await expect(stripRemoteCredentials(repoPath, "https://github.com/octocat/hello-world.git")).resolves.not.toThrow();
+  });
+});
+
+describe("configureGitIdentity", () => {
+  let repoPath: string;
+
+  beforeEach(async () => {
+    repoPath = await mkdtemp(join(tmpdir(), "sudocity-identity-test-"));
+    await execFileAsync("git", ["init", "-q", repoPath]);
+  });
+
+  afterEach(async () => {
+    await rm(repoPath, { recursive: true, force: true });
+  });
+
+  it("configures local user.name and user.email", async () => {
+    await configureGitIdentity(
+      repoPath,
+      "test-user",
+      "12345+test-user@users.noreply.github.com",
+    );
+
+    const { stdout: name } = await execFileAsync(
+      "git",
+      ["config", "--local", "user.name"],
+      { cwd: repoPath },
+    );
+    const { stdout: email } = await execFileAsync(
+      "git",
+      ["config", "--local", "user.email"],
+      { cwd: repoPath },
+    );
+
+    expect(name.trim()).toBe("test-user");
+    expect(email.trim()).toBe("12345+test-user@users.noreply.github.com");
   });
 });
