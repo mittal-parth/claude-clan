@@ -145,16 +145,34 @@ export async function stripRemoteCredentials(
  * .git/config while allowing `git push` to authenticate.
  */
 export async function setupGitCredentials(repoPath: string): Promise<void> {
-  await execFileAsync("git", ["config", "credential.helper", ""], {
-    cwd: repoPath,
-  });
+  // Clear any existing local credential helpers idempotently
+  await execFileAsync(
+    "git",
+    ["config", "--local", "--unset-all", "credential.helper"],
+    { cwd: repoPath },
+  ).catch(() => undefined);
+  await execFileAsync(
+    "git",
+    ["config", "--local", "--unset-all", "credential.https://github.com.helper"],
+    { cwd: repoPath },
+  ).catch(() => undefined);
+
+  // Blank credential.helper resets and disables any inherited global/system helpers (e.g. osxkeychain)
+  await execFileAsync(
+    "git",
+    ["config", "--local", "credential.helper", ""],
+    { cwd: repoPath },
+  );
+
+  // Bind helper strictly to github.com so only GitHub requests receive GH_TOKEN
   await execFileAsync(
     "git",
     [
       "config",
+      "--local",
       "--add",
-      "credential.helper",
-      '!f() { if [ "$1" = "get" ] && [ -n "$GH_TOKEN" ]; then echo "username=x-access-token"; echo "password=$GH_TOKEN"; fi; }; f',
+      "credential.https://github.com.helper",
+      '!f() { if [ "$1" = "get" ] && [ -n "$GH_TOKEN" ]; then printf "username=x-access-token\\npassword=%s\\n" "$GH_TOKEN"; fi; }; f',
     ],
     { cwd: repoPath },
   );

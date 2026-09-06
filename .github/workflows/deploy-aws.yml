@@ -100,7 +100,13 @@ jobs:
 
           # Ensure GitHub CLI (gh) is installed on the host for crew sessions
           if ! command -v gh >/dev/null 2>&1; then
-            sudo -n apt-get update -y && sudo -n apt-get install -y gh || true
+            (type -p wget >/dev/null || (sudo -n apt-get update -y && sudo -n apt-get install -y wget)) \
+              && sudo -n mkdir -p -m 755 /etc/apt/keyrings \
+              && wget -qO- https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo -n tee /etc/apt/keyrings/githubcli-archive-keyring.gpg > /dev/null \
+              && sudo -n chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg \
+              && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo -n tee /etc/apt/sources.list.d/github-cli.list > /dev/null \
+              && sudo -n apt-get update -y \
+              && sudo -n apt-get install -y gh || true
           fi
 
           sudo -n systemctl restart sudo-city.service

@@ -13,10 +13,15 @@ export function formatWriteAccessMessage(detail?: string): string {
 
 export interface WriteAccessBannerProps {
   message?: string;
+  repoOwner?: string;
   onDismiss: () => void;
 }
 
-export function WriteAccessBanner({ message, onDismiss }: WriteAccessBannerProps) {
+export function WriteAccessBanner({
+  message,
+  repoOwner,
+  onDismiss,
+}: WriteAccessBannerProps) {
   const displayMessage = formatWriteAccessMessage(message);
   return (
     <div
@@ -39,6 +44,11 @@ export function WriteAccessBanner({ message, onDismiss }: WriteAccessBannerProps
           href="https://github.com/settings/installations"
           target="_blank"
           rel="noreferrer"
+          title={
+            repoOwner
+              ? `Manage permissions for ${repoOwner} or personal account`
+              : "Manage GitHub App installation permissions"
+          }
           className="retro inline-flex items-center gap-1 border border-sky-400/50 bg-sky-500/20 px-2.5 py-1 text-[9px] text-sky-200 hover:border-sky-300 hover:bg-sky-500/30 hover:text-white transition-colors"
         >
           <span>MANAGE ACCESS</span>

@@ -155,6 +155,14 @@ export function useGameState({
   const recentBashCommandsRef = useRef<Map<string, string>>(new Map());
   const prevRepoKeyRef = useRef(activeRepoKey);
 
+  const recordRecentBashCommand = useCallback((toolCallId: string, command: string) => {
+    if (recentBashCommandsRef.current.size >= 100) {
+      const oldest = recentBashCommandsRef.current.keys().next().value;
+      if (oldest) recentBashCommandsRef.current.delete(oldest);
+    }
+    recentBashCommandsRef.current.set(toolCallId, command);
+  }, []);
+
   useEffect(() => {
     if (prevRepoKeyRef.current !== activeRepoKey) {
       prevRepoKeyRef.current = activeRepoKey;
@@ -459,7 +467,7 @@ export function useGameState({
         }
         if (event.type === "tool.started") {
           if (event.tool === "Bash" && typeof event.input?.command === "string") {
-            recentBashCommandsRef.current.set(event.toolCallId, event.input.command);
+            recordRecentBashCommand(event.toolCallId, event.input.command);
           }
           if (event.target) {
             sites.start(event.sessionId, event.target, event.toolCallId);

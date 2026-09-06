@@ -112,6 +112,13 @@ class CityRegistry {
     this.cities.delete(id);
   }
 
+  updateSystemPromptAppend(id: CityId, systemPromptAppend: string): void {
+    const city = this.cities.get(id);
+    if (city) {
+      this.cities.set(id, { ...city, systemPromptAppend });
+    }
+  }
+
   get(id: CityId): City | undefined {
     return this.cities.get(id);
   }
@@ -296,7 +303,7 @@ export class Workspace {
   private readonly store: SQLiteWorldStore;
   private readonly registry = new CityRegistry();
   private readonly githubClient: GitHubClient;
-  private readonly githubToken: string | undefined;
+  private githubToken: string | undefined;
   private readonly userId: number | undefined;
   private viewerLoginValue: string | undefined;
   private readonly remainingBudget: () => number;
@@ -337,20 +344,71 @@ export class Workspace {
     this.githubClient = new GitHubApiClient();
   }
 
+  private setPendingToolCommand(id: string, command: string): void {
+    if (this.pendingToolCommands.size >= 100) {
+      const oldest = this.pendingToolCommands.keys().next().value;
+      if (oldest) this.pendingToolCommands.delete(oldest);
+    }
+    this.pendingToolCommands.set(id, command);
+  }
+
+  private buildSystemPromptAppend(basePrompt?: string): string {
+    const parts = [
+      ...(basePrompt ? [basePrompt] : []),
+      GIT_PERMISSION_INSTRUCTIONS,
+    ];
+    if (this.hasWriteAccess === false) {
+      parts.push(
+        "IMPORTANT: You DO NOT have write permissions to push to this remote repository. Do not attempt to run 'git push' or 'gh pr create'. Commit your changes locally only and explain to the user that write access is required to push to GitHub.",
+      );
+    }
+    return parts.join("\n\n");
+  }
+
+  private updateCitySystemPrompts(): void {
+    const main = this.registry.get("main");
+    if (main) {
+      this.registry.updateSystemPromptAppend("main", this.buildSystemPromptAppend());
+    }
+    for (const city of this.registry.list()) {
+      if (city.id !== "main") {
+        const issue = this.registry.issueFor(city.id);
+        if (issue) {
+          this.registry.updateSystemPromptAppend(
+            city.id,
+            this.buildSystemPromptAppend(
+              [
+                `You are fixing GitHub issue #${issue.number}, "${issue.title}".`,
+                "This city is a writable detached worktree based on main. Implement and verify the fix here; do not change the primary checkout.",
+                issue.body ? `Issue details:\n${issue.body}` : "No issue description was provided.",
+              ].join("\n\n"),
+            ),
+          );
+        }
+      }
+    }
+  }
+
+  /**
+   * Updates the GitHub token on reconnect / repo.select and re-evaluates write permissions.
+   */
+  async updateGithubToken(token?: string): Promise<void> {
+    this.githubToken = token;
+    if (token) {
+      const writeAccess = await this.githubClient
+        .hasWriteAccess(this.repoPath, token)
+        .catch(() => undefined);
+      if (writeAccess !== undefined) {
+        this.hasWriteAccess = writeAccess;
+        this.updateCitySystemPrompts();
+      }
+    }
+  }
+
   static async open(options: WorkspaceOptions): Promise<Workspace> {
     const workspace = new Workspace(options);
     await workspace.hideWorldStoreFromGit();
     await setupGitCredentials(workspace.repoPath).catch(() => undefined);
-    const snapshot = await workspace.generateWorld("main", workspace.repoPath);
-    workspace.registry.add({
-      id: "main",
-      cwd: workspace.repoPath,
-      readOnly: false,
-      systemPromptAppend: GIT_PERMISSION_INSTRUCTIONS,
-      snapshot,
-    });
-    await workspace.refreshRoster();
-    workspace.restoreSessions();
     workspace.viewerLoginValue = await workspace.githubClient
       .viewerLogin(workspace.githubToken)
       .catch(() => undefined);
@@ -359,6 +417,16 @@ export class Workspace {
         .hasWriteAccess(workspace.repoPath, workspace.githubToken)
         .catch(() => undefined);
     }
+    const snapshot = await workspace.generateWorld("main", workspace.repoPath);
+    workspace.registry.add({
+      id: "main",
+      cwd: workspace.repoPath,
+      readOnly: false,
+      systemPromptAppend: workspace.buildSystemPromptAppend(),
+      snapshot,
+    });
+    await workspace.refreshRoster();
+    workspace.restoreSessions();
     if (workspace.viewerLoginValue) {
       const email = workspace.userId
         ? `${workspace.userId}+${workspace.viewerLoginValue}@users.noreply.github.com`
@@ -660,7 +728,7 @@ export class Workspace {
         break;
       case "tool.started":
         if (event.tool === "Bash" && typeof event.input?.command === "string") {
-          this.pendingToolCommands.set(event.toolCallId, event.input.command);
+          this.setPendingToolCommand(event.toolCallId, event.input.command);
         }
         session.activityLine = `${event.tool}${event.target ? ` · ${event.target}` : ""}`;
         break;
@@ -930,12 +998,13 @@ export class Workspace {
       id: cityId,
       cwd: worktree,
       readOnly: false,
-      systemPromptAppend: [
-        `You are fixing GitHub issue #${issue.number}, "${issue.title}".`,
-        "This city is a writable detached worktree based on main. Implement and verify the fix here; do not change the primary checkout.",
-        issue.body ? `Issue details:\n${issue.body}` : "No issue description was provided.",
-        GIT_PERMISSION_INSTRUCTIONS,
-      ].join("\n\n"),
+      systemPromptAppend: this.buildSystemPromptAppend(
+        [
+          `You are fixing GitHub issue #${issue.number}, "${issue.title}".`,
+          "This city is a writable detached worktree based on main. Implement and verify the fix here; do not change the primary checkout.",
+          issue.body ? `Issue details:\n${issue.body}` : "No issue description was provided.",
+        ].join("\n\n"),
+      ),
       snapshot,
     };
   }
@@ -1050,6 +1119,9 @@ export class Workspace {
       contextPaths,
     });
 
+    // If the repository is known to be read-only and the prompt requests push / PR operations,
+    // broadcast an early WRITE_ACCESS_REQUIRED advisory warning to display the banner in the UI.
+    // We allow the runner to proceed with local work, guided by system prompt instructions.
     if (this.hasWriteAccess === false && isPushOrPrCommand(options.prompt)) {
       this.onError?.({
         code: "WRITE_ACCESS_REQUIRED",
@@ -1091,6 +1163,9 @@ export class Workspace {
       return { error: { code: "CITY_NOT_FOUND" } };
     }
     const safeContextPaths = this.sanitizeContextPaths(contextPaths);
+    // If the repository is known to be read-only and the prompt requests push / PR operations,
+    // broadcast an early WRITE_ACCESS_REQUIRED advisory warning to display the banner in the UI.
+    // We allow the runner to proceed with local work, guided by system prompt instructions.
     if (this.hasWriteAccess === false && isPushOrPrCommand(prompt)) {
       this.onError?.({
         code: "WRITE_ACCESS_REQUIRED",

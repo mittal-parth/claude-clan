@@ -430,6 +430,9 @@ app.get("/ws", { websocket: true }, (socket) => {
       // has the bearer token) unless the workspace is already open.
       const existingKey = `${currentState.userId}:${data.repoKey}`;
       let existing = workspaces.get(existingKey);
+      if (existing && currentState.githubToken) {
+        void existing.updateGithubToken(currentState.githubToken);
+      }
       
       if (!existing && currentState.githubToken && authContext) {
         const clonePath = await authContext.db.clonePathFor(currentState.userId, data.repoKey);

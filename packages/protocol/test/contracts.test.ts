@@ -540,10 +540,12 @@ describe("protocol contracts", () => {
           "GraphQL: Resource not accessible by integration (createPullRequest)",
         ),
       ).toBe(true);
+      expect(isWriteAccessError("push declined due to repo permissions")).toBe(true);
+
+      // Branch protection rejection (GH006) should not be reported as missing write access
       expect(
         isWriteAccessError("remote: error: GH006: Protected branch hook declined"),
-      ).toBe(true);
-      expect(isWriteAccessError("push declined due to repo permissions")).toBe(true);
+      ).toBe(false);
 
       // Non-permission errors should not match
       expect(isWriteAccessError("fatal: repository not found")).toBe(false);
@@ -555,12 +557,16 @@ describe("protocol contracts", () => {
     it("detects push and pull request creation commands and prompts", () => {
       expect(isPushOrPrCommand("git push -u origin feature-branch")).toBe(true);
       expect(isPushOrPrCommand("git push origin main")).toBe(true);
+      expect(isPushOrPrCommand("git -C repo push")).toBe(true);
       expect(isPushOrPrCommand("gh pr create --title 'Fix' --body 'Desc'")).toBe(true);
       expect(isPushOrPrCommand("push and open pr")).toBe(true);
       expect(isPushOrPrCommand("push to origin and create a pull request")).toBe(true);
       expect(isPushOrPrCommand("open a pr for this issue")).toBe(true);
 
-      // Unrelated commands should not match
+      // Edge cases that should NOT match
+      expect(isPushOrPrCommand('git stash push -m "work on branch"')).toBe(false);
+      expect(isPushOrPrCommand("array.push(branch)")).toBe(false);
+      expect(isPushOrPrCommand("create a PR template for contributors")).toBe(false);
       expect(isPushOrPrCommand("git status")).toBe(false);
       expect(isPushOrPrCommand("git checkout -b feature")).toBe(false);
       expect(isPushOrPrCommand("npm run test")).toBe(false);

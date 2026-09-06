@@ -140,6 +140,7 @@ export default function App(props: AppProps) {
       {state.writeAccessWarning ? (
         <WriteAccessBanner
           message={state.writeAccessWarning}
+          repoOwner={billboardRepo.owner}
           onDismiss={() => state.setWriteAccessWarning(null)}
         />
       ) : null}

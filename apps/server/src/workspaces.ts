@@ -211,6 +211,9 @@ export class WorkspaceManager {
     const existing = this.workspaces.get(key);
     if (existing) {
       existing.touch();
+      if (options.githubToken) {
+        void existing.updateGithubToken(options.githubToken);
+      }
       return existing;
     }
     const pending = this.pendingOpens.get(key);

@@ -123,6 +123,45 @@ describe("stripRemoteCredentials", () => {
     expect(stdout).toContain("username=x-access-token");
     expect(stdout).toContain("password=ghs_dynamic_runtime_token_999");
   });
+
+  it("does not leak GH_TOKEN to non-GitHub remotes", async () => {
+    await stripRemoteCredentials(
+      repoPath,
+      "https://github.com/octocat/hello-world.git",
+    );
+
+    const child = spawn("git", ["credential", "fill"], {
+      cwd: repoPath,
+      env: {
+        ...process.env,
+        GH_TOKEN: "ghs_dynamic_runtime_token_999",
+        GIT_TERMINAL_PROMPT: "0",
+        GIT_ASKPASS: "true",
+      },
+    });
+
+    let stdout = "";
+    child.stdout.on("data", (chunk: Buffer) => {
+      stdout += chunk.toString();
+    });
+    // Request credentials for an attacker-controlled external host
+    child.stdin.write("protocol=https\nhost=attacker-controlled-server.com\n\n");
+    child.stdin.end();
+
+    await new Promise<void>((resolve, reject) => {
+      child.on("error", reject);
+      child.on("close", () => resolve());
+    });
+
+    // Must NOT contain the GitHub token
+    expect(stdout).not.toContain("password=ghs_dynamic_runtime_token_999");
+  });
+
+  it("is idempotent and succeeds when called multiple times on the same repository", async () => {
+    // Calling setupGitCredentials twice must not fail with git exit code 5 (cannot overwrite multiple values)
+    await expect(stripRemoteCredentials(repoPath, "https://github.com/octocat/hello-world.git")).resolves.not.toThrow();
+    await expect(stripRemoteCredentials(repoPath, "https://github.com/octocat/hello-world.git")).resolves.not.toThrow();
+  });
 });
 
 describe("configureGitIdentity", () => {
