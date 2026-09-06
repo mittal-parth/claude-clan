@@ -78,9 +78,9 @@ needs it to confine a crew's commands on Linux, and `buildSandboxSettings` sets
 `failIfUnavailable`, so a missing bubblewrap makes dispatches fail rather than
 run unsandboxed under `SUDO_CITY_PUBLIC_DEPLOYMENT`. That makes it a hard
 dependency on a public server. Install `socat` alongside it: the SDK's Linux
-sandbox uses it for network proxying when `SUDO_CITY_SANDBOX_ALLOWED_DOMAINS`
-is set. That second dependency is from the SDK's own requirements, not
-something this repo asserts — confirm it against the version you deploy.
+sandbox uses it to proxy the allowed domains, and the allowlist is always in
+force. That second dependency is from the SDK's own requirements, not something
+this repo asserts — confirm it against the version you deploy.
 
 ```bash
 dnf install -y bubblewrap socat
@@ -154,10 +154,10 @@ SUDO_CITY_CLONE_ROOT=/var/lib/sudocity/clones
 SUDO_CITY_PUBLIC_DEPLOYMENT=1
 SUDO_CITY_MAX_BUDGET_USD=<your ceiling>
 SUDO_CITY_USER_MAX_BUDGET_USD=10
-# Optional. Leave unset until you have watched a real dispatch and know what a
-# crew actually reaches for -- setting it wrong denies everything else, which
-# breaks any order that installs a dependency or runs a test suite.
-# SUDO_CITY_SANDBOX_ALLOWED_DOMAINS=github.com,api.github.com,registry.npmjs.org
+# Optional, and additive: github.com and the hosts git and gh need are always
+# allowed. Add whatever the repos your mayors import actually reach for -- a
+# crew that cannot install a dependency cannot run a test suite.
+# SUDO_CITY_SANDBOX_ALLOWED_DOMAINS=registry.npmjs.org,pypi.org
 GITHUB_CLIENT_ID=<from the GitHub App>
 GITHUB_APP_SLUG=<from the GitHub App>
 # plus the five SecureStrings from Step 1
@@ -389,6 +389,10 @@ time.
    under a working sandbox it sees a confined filesystem, not the host's. If
    dispatches fail outright instead, `bubblewrap` is missing — that is the
    fail-closed behaviour working, and the fix is Step 2.
+7. Confirm the crew can still reach GitHub from inside the sandbox: ask it to
+   run `git ls-remote origin` and stamp the permit. An empty allowlist presents
+   as the crew reporting network restrictions rather than as a failed deploy,
+   so it will not show up in any of the steps above.
 
 ---
 
@@ -410,9 +414,10 @@ Not blockers for a first deploy, but each is a real gap:
   sandbox rather than the process. Verify it on the host (step 6 above) rather
   than assuming; the stronger split is in
   [aws-architecture.md](aws-architecture.md#stages).
-- Sandbox network egress is unrestricted until you set
-  `SUDO_CITY_SANDBOX_ALLOWED_DOMAINS`, so a crew can still reach the internet
-  from inside its confinement.
+- Sandbox egress is deny-by-default with GitHub on the baseline allowlist, so
+  a crew in a repo whose toolchain reaches anywhere else fails until you add
+  that host to `SUDO_CITY_SANDBOX_ALLOWED_DOMAINS`. Expect to tune this once
+  per language ecosystem your mayors import.
 
 ## What changes when sandboxes land
 

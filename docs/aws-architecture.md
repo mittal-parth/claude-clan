@@ -81,12 +81,20 @@ confines every command a crew runs on a public deployment:
 | `credentials.envVars` deny for `SECRET_ENV_VARS` | `printenv` reaching `ANTHROPIC_API_KEY`, `DATABASE_URL`, `TOKEN_ENCRYPTION_KEY`, `SESSION_SECRET` |
 | `failIfUnavailable: true` | The SDK's own default, which warns and runs *unsandboxed* — a control that silently isn't there |
 
-Two things it does not do. The agent still runs inside the server process as
-the server's OS user, so the boundary is the sandbox rather than the kernel's
-process and user separation: a sandbox escape is a compromise of every account,
-not one. And network egress is open unless `SUDO_CITY_SANDBOX_ALLOWED_DOMAINS`
-is set, so a crew can reach anything it likes from inside its confinement.
-Moving the boundary from a sandbox flag to a process is the target below.
+Egress is deny-by-default. `SANDBOX_BASELINE_DOMAINS` — github.com and the
+hosts `gh` and `git` reach — is always allowed, because a crew that cannot
+clone, push, or call `gh` cannot do the job; `SUDO_CITY_SANDBOX_ALLOWED_DOMAINS`
+extends that list for whatever a repo's toolchain needs. The baseline is not a
+convenience: an enabled sandbox with no network config resolves to an *empty*
+allowlist, not open egress, which silently blocked a crew from pushing a commit
+on the deployed server while the same order worked locally, where the sandbox
+is off entirely.
+
+What it does not do is separate processes. The agent runs inside the server
+process as the server's OS user, so the boundary is the sandbox rather than the
+kernel's process and user separation: a sandbox escape is a compromise of every
+account, not one. Moving the boundary from a sandbox flag to a process is the
+target below.
 
 ---
 
@@ -201,9 +209,9 @@ Sandbox escape until stage 2 lands, and kernel escape on the container flavour
 after it (Fargate removes that). The gateway becomes
 the single trusted component holding every secret — though it does much less
 and has no `Bash`. A sandbox can still spend its own user's budget within their
-cap, which is intended. Egress is unrestricted unless constrained, so a crew can
-exfiltrate its own repo; a deny-by-default policy allowing github.com and the
-gateway proxy is worth adding.
+cap, which is intended. Egress is already deny-by-default, but github.com is on
+the baseline allowlist and a crew has push rights to its own repo, so it can
+still move its own repository's contents to a place its user controls.
 
 ## Failure modes
 
