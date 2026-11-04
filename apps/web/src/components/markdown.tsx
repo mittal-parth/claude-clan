@@ -1,4 +1,5 @@
 import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 import { cn } from "@/lib/utils";
 
@@ -26,10 +27,26 @@ export function Markdown({ children, className }: MarkdownProps) {
         "[&_:not(pre)>code]:rounded [&_:not(pre)>code]:bg-muted [&_:not(pre)>code]:px-1 [&_:not(pre)>code]:py-0.5",
         "[&_a]:text-primary [&_a]:underline",
         "[&_hr]:my-4 [&_hr]:border-border",
+        "[&_table]:w-full [&_table]:border-collapse",
+        "[&_th]:border [&_th]:border-border [&_th]:bg-muted [&_th]:px-2 [&_th]:py-1 [&_th]:text-left [&_th]:font-semibold",
+        "[&_td]:border [&_td]:border-border [&_td]:px-2 [&_td]:py-1 [&_td]:align-top",
         className,
       )}
     >
-      <ReactMarkdown>{children}</ReactMarkdown>
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        components={{
+          // The chat panel is narrow; a wide table must scroll inside its own
+          // box rather than push the whole message past the panel edge.
+          table: ({ node: _node, ...props }) => (
+            <div className="mb-3 max-w-full overflow-x-auto">
+              <table {...props} />
+            </div>
+          ),
+        }}
+      >
+        {children}
+      </ReactMarkdown>
     </div>
   );
 }
