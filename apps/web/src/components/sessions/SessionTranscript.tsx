@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import type { SessionView } from "@/sessions/types";
 import { toChatItems } from "@/sessions/transcript";
@@ -55,7 +55,10 @@ export function SessionTranscript({
     return () => element.removeEventListener("scroll", updatePinned);
   }, []);
 
-  useEffect(() => {
+  // Layout effect, not a passive one: a passive effect runs after paint, so
+  // each streamed chunk painted its text clipped below the fold for a frame
+  // and then jumped to it -- the stutter while a reply streams.
+  useLayoutEffect(() => {
     if (!pinned) return;
     const element = viewport();
     if (element) element.scrollTop = element.scrollHeight;
