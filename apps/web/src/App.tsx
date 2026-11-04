@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { type RepoSummary, RUNNING_SESSION_STATUSES } from "@sudo-city/protocol";
 import { cn } from "@/lib/utils";
 import { type AuthUser } from "@/auth/gate";
@@ -8,8 +8,10 @@ import { useFps } from "@/components/fps-provider";
 import { useGameState } from "@/hooks/use-game-state";
 import { AppHud } from "@/components/hud/AppHud";
 import { AppDialogs } from "@/components/hud/AppDialogs";
+import { IntegratedTerminal } from "@/components/terminal/IntegratedTerminal";
 import { crewSpriteUrl, findCrewByModel, getCrewMember } from "@/crew/catalog";
 import type { BillboardRepo, BillboardTarget } from "@/game/layouts/billboards";
+import { isDesktop } from "@/lib/desktop";
 
 export interface AppProps {
   /** "demo", or an owner/name repo key the signed-in user imported. */
@@ -18,6 +20,8 @@ export interface AppProps {
   activeRepo?: RepoSummary;
   /** Presence (not the value) drives whether the WS authenticates itself via a ticket; absent in demo mode. */
   user?: AuthUser;
+  /** The gh account behind the desktop build; never set on the hosted build. */
+  localUser?: { login: string; avatarUrl: string; name?: string };
   repoConnectionGeneration: number;
   /** Keeps the real demo canvas mounted behind the login card. */
   loginBackground?: boolean;
@@ -49,11 +53,35 @@ export default function App(props: AppProps) {
     onLogout,
     onSignIn,
     user,
+    localUser,
   } = props;
 
   const { sfxEnabled, toggleSfx } = useAudio();
   const { targetFps, toggleTargetFps } = useFps();
-  const state = useGameState(props);
+  const [terminalOpen, setTerminalOpen] = useState(false);
+  const [pendingTerminalCommand, setPendingTerminalCommand] = useState<string | undefined>();
+
+  const handleOpenTerminal = useCallback((command?: string) => {
+    setTerminalOpen(true);
+    if (command) {
+      setPendingTerminalCommand(command);
+    }
+  }, []);
+
+  const state = useGameState({
+    ...props,
+    onOpenTerminal: handleOpenTerminal,
+  });
+
+  const terminalCwd = useMemo(() => {
+    if (activeRepoKey.startsWith("local:")) {
+      return activeRepoKey.slice("local:".length);
+    }
+    if (state.world?.repoPath) {
+      return state.world.repoPath;
+    }
+    return undefined;
+  }, [activeRepoKey, state.world?.repoPath]);
 
   /**
    * What the airport billboard should say. Memoised because a fresh object
@@ -62,6 +90,38 @@ export default function App(props: AppProps) {
    * since there is no GitHub repository behind it.
    */
   const billboardRepo = useMemo<BillboardRepo>(() => {
+    if (isDesktop()) {
+      if (activeRepoKey.startsWith("local:")) {
+        const folderPath = activeRepoKey.slice("local:".length);
+        const folderName =
+          folderPath.split("/").filter(Boolean).pop() || folderPath;
+        return {
+          owner: "",
+          name: folderName,
+        };
+      }
+      if (activeRepo) {
+        return {
+          owner: "",
+          name: activeRepo.name,
+        };
+      }
+      if (state.world?.repoPath) {
+        const folderName =
+          state.world.repoPath.split("/").filter(Boolean).pop() ||
+          state.world.repoPath;
+        return {
+          owner: "",
+          name: folderName,
+        };
+      }
+      const [, name] = activeRepoKey.split("/");
+      return {
+        owner: "",
+        name: name || activeRepoKey,
+      };
+    }
+
     if (activeRepo) {
       return {
         owner: activeRepo.owner,
@@ -71,7 +131,7 @@ export default function App(props: AppProps) {
     }
     const [owner, name] = activeRepoKey.split("/");
     return { owner: name ? (owner ?? "") : "", name: name ?? owner ?? "" };
-  }, [activeRepo, activeRepoKey]);
+  }, [activeRepo, activeRepoKey, state.world?.repoPath]);
 
   function openBillboardTarget(target: BillboardTarget): void {
     window.open(target.url, "_blank", "noopener,noreferrer");
@@ -105,6 +165,7 @@ export default function App(props: AppProps) {
     <div
       className={cn(
         "hud-root",
+        isDesktop() && "is-desktop",
         loginBackground && "hud-root--login-background",
         state.initialRevealComplete && "hud-root--reveal-complete",
         initialReveal &&
@@ -215,7 +276,10 @@ export default function App(props: AppProps) {
         targetFps={targetFps}
         toggleTargetFps={toggleTargetFps}
         user={user}
+        localUser={localUser}
         activeRepoKey={activeRepoKey}
+        terminalOpen={terminalOpen}
+        onToggleTerminal={() => setTerminalOpen((prev) => !prev)}
       />
 
       <AppDialogs
@@ -224,6 +288,17 @@ export default function App(props: AppProps) {
         user={user}
         onOpenAirport={onOpenAirport}
       />
+
+      {isDesktop() ? (
+        <IntegratedTerminal
+          open={terminalOpen}
+          onOpenChange={setTerminalOpen}
+          cwd={terminalCwd}
+          repoName={activeRepo?.name ?? (activeRepoKey.startsWith("local:") ? activeRepoKey.slice("local:".length).split("/").pop() : activeRepoKey)}
+          command={pendingTerminalCommand}
+          onCommandExecuted={() => setPendingTerminalCommand(undefined)}
+        />
+      ) : null}
     </div>
   );
 }

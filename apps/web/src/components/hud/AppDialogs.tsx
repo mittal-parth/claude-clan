@@ -197,6 +197,7 @@ export function AppDialogs({
         }}
         onOpenFiles={() => setCommandOpen(true)}
         onTravel={state.teleportToCity}
+        onOpenTerminal={state.openTerminal}
       />
 
       <CommandDialog open={commandOpen} onOpenChange={setCommandOpen}>

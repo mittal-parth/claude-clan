@@ -1,7 +1,6 @@
-import type { RepoSummary } from "@sudo-city/protocol";
 import { useCallback, useEffect, useRef, useState } from "react";
 import App from "./App";
-import { fetchRepos, fetchSession, importRepo, logout } from "@/auth/api";
+import { fetchLocalGithubRepos, fetchLocalGithubUser, cloneLocalGithubRepo, fetchRepos, fetchSession, importRepo, logout, type LocalGithubUser } from "@/auth/api";
 import {
   clearStoredActiveRepo,
   gateFor,
@@ -12,6 +11,9 @@ import {
 } from "@/auth/gate";
 import LoginScreen from "@/components/LoginScreen";
 import RepoPicker from "@/components/RepoPicker";
+import FolderDropZone from "@/components/FolderDropZone";
+import type { LocalFolderSummary, RepoSummary } from "@sudo-city/protocol";
+import { desktop, isDesktop } from "@/lib/desktop";
 import type { CanvasAirportTravel } from "@/components/GameCanvas";
 
 const DEMO_REPO_KEY = "demo";
@@ -23,6 +25,11 @@ export default function Root() {
   const [sessionChecked, setSessionChecked] = useState(false);
   const [activeRepoKey, setActiveRepoKey] = useState<string>();
   const [repos, setRepos] = useState<RepoSummary[]>([]);
+  const [localFolders, setLocalFolders] = useState<LocalFolderSummary[]>([]);
+  const [localGithubRepos, setLocalGithubRepos] = useState<RepoSummary[]>([]);
+  const [localGithubLoading, setLocalGithubLoading] = useState(false);
+  const [localGithubError, setLocalGithubError] = useState<string>();
+  const [localUser, setLocalUser] = useState<LocalGithubUser>();
   const [maxRepoSizeMb, setMaxRepoSizeMb] = useState<number>();
   const [reposLoading, setReposLoading] = useState(false);
   const [reposError, setReposError] = useState<string>();
@@ -52,8 +59,8 @@ export default function Root() {
   ): void {
     const stored = readStoredActiveRepo();
     const restoredRepoKey =
-      stored?.repoKey === DEMO_REPO_KEY
-        ? DEMO_REPO_KEY
+      stored?.repoKey === DEMO_REPO_KEY || stored?.repoKey.startsWith("local:")
+        ? stored.repoKey
         : nextSession.authenticated &&
             stored?.userId === nextSession.user.id
           ? stored.repoKey
@@ -66,6 +73,9 @@ export default function Root() {
   }
 
   useEffect(() => {
+    if (isDesktop()) {
+      document.documentElement.classList.add("is-desktop");
+    }
     const { error } = readSessionFromHash(window.location.hash);
     if (error) {
       window.history.replaceState(null, "", window.location.pathname + window.location.search);
@@ -132,10 +142,49 @@ export default function Root() {
       });
   }, [session.authenticated]);
 
+  const loadLocalGithub = useCallback(() => {
+    if (!isDesktop()) return;
+    setLocalGithubLoading(true);
+    setLocalGithubError(undefined);
+    fetchLocalGithubRepos()
+      .then((result) => {
+        setLocalGithubRepos(result.repos);
+        if (result.error) setLocalGithubError(result.error);
+      })
+      .catch((error: unknown) => {
+        setLocalGithubRepos([]);
+        setLocalGithubError(error instanceof Error ? error.message : "Could not contact the local GitHub CLI");
+      })
+      .finally(() => setLocalGithubLoading(false));
+  }, []);
+
+  useEffect(() => {
+    const bridge = desktop();
+    if (!bridge) return;
+    void bridge.readSettings()
+      .then((settings) => {
+        setLocalFolders(settings.recentFolders.map((entry) => {
+          const parts = entry.path.split("/").filter(Boolean);
+          return {
+            key: `local:${entry.path}`,
+            path: entry.path,
+            name: parts.at(-1) ?? entry.path,
+            isGitRepo: false,
+            lastOpenedAt: entry.lastOpenedAt,
+          };
+        }));
+      })
+      .catch(() => undefined);
+    loadLocalGithub();
+    // Identity for the HUD corner. Failure is silent: no avatar is the correct
+    // outcome when gh is absent, not something to report.
+    void fetchLocalGithubUser().then(setLocalUser).catch(() => undefined);
+  }, [loadLocalGithub]);
+
   useEffect(() => {
     if (!activeRepoKey) return;
-    if (activeRepoKey === DEMO_REPO_KEY) {
-      writeStoredActiveRepo(DEMO_REPO_KEY);
+    if (activeRepoKey === DEMO_REPO_KEY || activeRepoKey.startsWith("local:")) {
+      writeStoredActiveRepo(activeRepoKey);
     } else if (session.authenticated) {
       writeStoredActiveRepo(activeRepoKey, session.user.id);
     }
@@ -149,6 +198,22 @@ export default function Root() {
     setDemoTransition("loading");
     setActiveRepoKey(DEMO_REPO_KEY);
   }
+
+  const handleOpenLocalFolder = useCallback((path: string) => {
+    void desktop()?.rememberFolder(path);
+    const parts = path.split("/").filter(Boolean);
+    setLocalFolders((current) => [
+      {
+        key: `local:${path}`,
+        path,
+        name: parts.at(-1) ?? path,
+        isGitRepo: false,
+        lastOpenedAt: new Date().toISOString(),
+      },
+      ...current.filter((folder) => folder.path !== path),
+    ].slice(0, 10));
+    setActiveRepoKey(`local:${path}`);
+  }, []);
 
   function handleInitialRevealReady(): void {
     setDemoTransition((current) =>
@@ -239,6 +304,34 @@ export default function Root() {
       });
   }
 
+  function handleSelectLocalGithub(repo: RepoSummary): void {
+    if (airportTravelRef.current || airportArrivalRef.current || importingRef.current) return;
+    const requestId = ++importRequestRef.current;
+    const pending = { repoKey: repo.key, startedAt: Date.now() };
+    importingRef.current = pending;
+    setImporting(pending);
+    setReposError(undefined);
+    cloneLocalGithubRepo(repo.fullName, (message) => {
+      if (requestId !== importRequestRef.current) return;
+      setImporting((current) => current?.repoKey === repo.key ? { ...current, message } : current);
+    })
+      .then((result) => {
+        if (requestId !== importRequestRef.current) return;
+        importingRef.current = undefined;
+        setImporting(undefined);
+        setLocalGithubRepos((current) => current.map((entry) =>
+          entry.key === repo.key ? { ...entry, imported: true } : entry,
+        ));
+        beginAirportJourney(result.workspaceKey);
+      })
+      .catch((error: unknown) => {
+        if (requestId !== importRequestRef.current) return;
+        importingRef.current = undefined;
+        setImporting(undefined);
+        setLocalGithubError(error instanceof Error ? error.message : "GitHub clone failed");
+      });
+  }
+
   function handleLogout(): void {
     authEpochRef.current += 1;
     importRequestRef.current += 1;
@@ -264,8 +357,9 @@ export default function Root() {
   const gate = gateFor(session, activeRepoKey);
   const demoIsTransitioning =
     activeRepoKey === DEMO_REPO_KEY && demoTransition !== "idle";
-  const showLogin = gate === "login" || demoIsTransitioning;
-  const showRepos = gate === "repos";
+  const desktopMode = isDesktop();
+  const showLogin = !desktopMode && (gate === "login" || demoIsTransitioning);
+  const showRepos = gate === "repos" || (desktopMode && !activeRepoKey);
 
   return (
     <div className="root-stage">
@@ -278,6 +372,7 @@ export default function Root() {
               : repos.find((repo) => repo.key === activeRepoKey)
           }
           user={session.authenticated ? session.user : undefined}
+          localUser={localUser}
           repoConnectionGeneration={repoConnectionGeneration}
           loginBackground={gate === "login" || gate === "repos"}
           initialReveal={demoIsTransitioning}
@@ -288,6 +383,7 @@ export default function Root() {
           onOpenAirport={() => {
             if (airportTravelRef.current || airportArrivalRef.current) return;
             loadRepos();
+            if (desktopMode) loadLocalGithub();
             setAirportOpen(true);
           }}
           onAirportTravelCovered={(travel) => {
@@ -342,12 +438,19 @@ export default function Root() {
             onImportOrSelect={handleImportOrSelect}
             onSeeDemo={startDemo}
             onRefresh={loadRepos}
+            localFolders={localFolders}
+            localGithubRepos={localGithubRepos}
+            localGithubLoading={localGithubLoading}
+            localGithubError={localGithubError}
+            onOpenLocalFolder={handleOpenLocalFolder}
+            onSelectLocalGithub={handleSelectLocalGithub}
+            onRefreshLocalGithub={loadLocalGithub}
           />
         </div>
       ) : null}
 
       {gate === "city" ? (
-        session.authenticated ? (
+        desktopMode || session.authenticated ? (
           <RepoPicker
             repos={repos}
             loading={reposLoading}
@@ -357,6 +460,13 @@ export default function Root() {
             onImportOrSelect={handleImportOrSelect}
             onSeeDemo={() => beginAirportJourney(DEMO_REPO_KEY)}
             onRefresh={loadRepos}
+            localFolders={localFolders}
+            localGithubRepos={localGithubRepos}
+            localGithubLoading={localGithubLoading}
+            localGithubError={localGithubError}
+            onOpenLocalFolder={handleOpenLocalFolder}
+            onSelectLocalGithub={handleSelectLocalGithub}
+            onRefreshLocalGithub={loadLocalGithub}
             activeRepoKey={activeRepoKey}
             dialog={{ open: airportOpen, onOpenChange: setAirportOpen }}
           />
@@ -378,6 +488,8 @@ export default function Root() {
           />
         )
       ) : null}
+
+      {isDesktop() ? <FolderDropZone onOpenFolder={handleOpenLocalFolder} /> : null}
     </div>
   );
 }

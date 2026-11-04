@@ -1,8 +1,12 @@
 import { loadEnvFile } from "node:process";
+import { createHash, timingSafeEqual } from "node:crypto";
+import { Buffer } from "node:buffer";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
+import { homedir } from "node:os";
 import cookie from "@fastify/cookie";
 import cors from "@fastify/cors";
+import fastifyStatic from "@fastify/static";
 import websocket from "@fastify/websocket";
 import {
   MayorCommandSchema,
@@ -15,12 +19,22 @@ import Fastify from "fastify";
 import { WebSocket, type RawData } from "ws";
 import { buildAuthContext, resolveSession, type AuthContext } from "./auth-context.js";
 import { buildCrewPolicy, buildSandboxSettings } from "./policy.js";
+import {
+  creditMode,
+  isLocalMode,
+  localAgentEnvironment,
+  localSettingSources,
+  requireDesktopToken,
+  shouldLoadRepositoryEnv,
+} from "./local-mode.js";
+import { validateLocalPath } from "./local-path.js";
+import { registerLocalGithubRoutes } from "./local-github.js";
+import { budgetPolicyFromEnv, WorkspaceManager } from "./workspaces.js";
 import { registerAuthRoutes } from "./routes/auth.js";
 import { registerRepoRoutes } from "./routes/repos.js";
 import { isValidRepoFullName } from "@sudo-city/cities";
 import { Workspace } from "./workspace.js";
 import { shouldDeliverEvent } from "./event-routing.js";
-import { WorkspaceManager } from "./workspaces.js";
 
 const host = process.env.HOST ?? "127.0.0.1";
 const port = Number(process.env.PORT ?? 4100);
@@ -39,6 +53,48 @@ await app.register(cors, {
 await app.register(cookie);
 await app.register(websocket);
 
+const desktopToken = isLocalMode() ? requireDesktopToken() : undefined;
+
+function desktopTokenMatches(candidate: string | undefined): boolean {
+  if (!desktopToken) {
+    return true;
+  }
+  if (!candidate || candidate.length !== desktopToken.length) {
+    return false;
+  }
+  return timingSafeEqual(Buffer.from(candidate), Buffer.from(desktopToken));
+}
+
+function desktopOriginMatches(origin: string | undefined): boolean {
+  if (!desktopToken || !origin) {
+    return true;
+  }
+  try {
+    const parsed = new URL(origin);
+    return (
+      (parsed.hostname === "127.0.0.1" || parsed.hostname === "localhost") &&
+      parsed.port === String(port)
+    );
+  } catch {
+    return false;
+  }
+}
+
+if (desktopToken) {
+  app.addHook("onRequest", async (request, reply) => {
+    if (!request.url.startsWith("/api") || request.method === "OPTIONS") {
+      return;
+    }
+    const token = request.headers["x-desktop-token"];
+    if (
+      !desktopOriginMatches(request.headers.origin) ||
+      !desktopTokenMatches(typeof token === "string" ? token : undefined)
+    ) {
+      await reply.code(401).send({ error: "Unauthorized" });
+    }
+  });
+}
+
 app.setErrorHandler((error, _request, reply) => {
   app.log.error(error);
   const err = (error ?? {}) as { statusCode?: number; name?: string; message?: string };
@@ -51,13 +107,22 @@ app.setErrorHandler((error, _request, reply) => {
 
 const demoRepoPath = process.env.SUDO_CITY_REPO ?? process.env.INIT_CWD ?? process.cwd();
 
-if (!process.env.ANTHROPIC_API_KEY) {
+if (shouldLoadRepositoryEnv()) {
   try {
     loadEnvFile(join(demoRepoPath, ".env"));
   } catch {
     // Existing Claude Code credentials remain the local-development fallback.
   }
 }
+
+if (isLocalMode() && creditMode() === "subscription") {
+  // Claude Code prefers this variable over a local login. Removing it from the
+  // server process closes the inherited-shell billing trap even when the
+  // desktop was launched from a shell that exported a key.
+  delete process.env.ANTHROPIC_API_KEY;
+}
+
+const localAgentEnv = localAgentEnvironment();
 
 /**
  * A GitHub App isn't required to run the demo city at all -- login-related
@@ -83,6 +148,27 @@ const GLOBAL_MAX_BUDGET_USD = Number(process.env.SUDO_CITY_MAX_BUDGET_USD ?? 1);
 // two runs out first.
 const PER_USER_MAX_BUDGET_USD = Number(
   process.env.SUDO_CITY_USER_MAX_BUDGET_USD ?? 10,
+);
+const budgetPolicy = budgetPolicyFromEnv(process.env, {
+  globalMaxUsd: GLOBAL_MAX_BUDGET_USD,
+  perUserMaxUsd: PER_USER_MAX_BUDGET_USD,
+});
+// Resolve to an absolute path so local world stores never accidentally land in
+// the scanned project or depend on the server's current working directory.
+const localStoreRoot = process.env.SUDO_CITY_STORE_ROOT?.trim()
+  ? resolve(process.env.SUDO_CITY_STORE_ROOT.trim())
+  : undefined;
+
+function localStoreRootFor(repoPath: string): string | undefined {
+  if (!localStoreRoot) {
+    return undefined;
+  }
+  const hash = createHash("sha256").update(resolve(repoPath)).digest("hex").slice(0, 16);
+  return join(localStoreRoot, "worlds", hash);
+}
+const localGithubRoot = resolve(
+  process.env.SUDO_CITY_LOCAL_GITHUB_ROOT?.trim() ||
+    join(process.env.HOME ?? homedir(), "Library", "Application Support", "Claude City", "github"),
 );
 // `??` would accept an empty SUDO_CITY_CLONE_ROOT= line (a very easy thing to
 // leave in a .env) as a real value, and join("") resolves against cwd -- which
@@ -164,16 +250,19 @@ function broadcastRepoStatus(
 const workspaces = new WorkspaceManager({
   log: app.log,
   cloneRoot,
-  globalMaxBudgetUsd: GLOBAL_MAX_BUDGET_USD,
-  perUserMaxBudgetUsd: PER_USER_MAX_BUDGET_USD,
+  budgetPolicy,
+  pathToClaudeCodeExecutable: process.env.SUDO_CITY_CLAUDE_PATH?.trim() || undefined,
+  settingSources: localSettingSources(),
+  agentEnv: localAgentEnv,
   sandboxFor,
-  spendStore: authContext
-    ? {
-        spentUsd: (userId) => authContext!.db.userSpentUsd(userId),
-        addSpend: (userId, amountUsd) =>
-          authContext!.db.addUserSpend(userId, amountUsd),
-      }
-    : undefined,
+  spendStore:
+    !isLocalMode() && authContext
+      ? {
+          spentUsd: (userId) => authContext!.db.userSpentUsd(userId),
+          addSpend: (userId, amountUsd) =>
+            authContext!.db.addUserSpend(userId, amountUsd),
+        }
+      : undefined,
   sink: {
     onEvent(workspaceKey, cityId, sessionId, event: GameEvent) {
       const message = JSON.stringify({ kind: "event", event } satisfies ServerMessage);
@@ -239,6 +328,13 @@ const workspaces = new WorkspaceManager({
         }
       }
     },
+    onBudgetChanged() {
+      for (const [socket, state] of clients) {
+        if (socket.readyState === WebSocket.OPEN) {
+          sendBudget(socket, state);
+        }
+      }
+    },
   },
 });
 
@@ -247,6 +343,12 @@ const demoWorkspace = await workspaces.openDemo(demoRepoPath);
 if (authContext) {
   registerAuthRoutes(app, authContext);
   registerRepoRoutes(app, authContext, workspaces, broadcastRepoStatus);
+}
+if (isLocalMode()) {
+  registerLocalGithubRoutes(app, workspaces, {
+    root: localGithubRoot,
+    storeRootFor: localStoreRootFor,
+  });
 }
 
 app.get("/health", async () => ({ ok: true, service: "sudo-city" }));
@@ -303,7 +405,17 @@ function sendWorkspaceState(socket: WebSocket, workspace: Workspace, cityId: Cit
   sendOverlay(socket, workspace, cityId);
 }
 
-app.get("/ws", { websocket: true }, (socket) => {
+app.get("/ws", { websocket: true }, (socket, request) => {
+  if (
+    desktopToken &&
+    (!desktopOriginMatches(request.headers.origin) ||
+      !desktopTokenMatches(
+        new URL(request.url, "http://127.0.0.1").searchParams.get("token") ?? undefined,
+      ))
+  ) {
+    socket.close(4401, "Unauthorized");
+    return;
+  }
   // The socket starts pointed at the demo workspace so currentWorkspace()
   // always resolves, but nothing is pushed until the client says which repo
   // it wants. Sending the demo's world here unprompted meant every
@@ -457,6 +569,44 @@ app.get("/ws", { websocket: true }, (socket) => {
         subscriptions: new Set(),
       });
       sendWorkspaceState(socket, existing, "main");
+      return;
+    }
+
+    if (data.type === "repo.openLocal") {
+      if (!isLocalMode()) {
+        send(socket, {
+          kind: "error",
+          code: "NOT_SUPPORTED",
+          message: "Opening a local folder is only available in the desktop app.",
+        });
+        return;
+      }
+      const validated = await validateLocalPath(data.path);
+      if ("rejected" in validated) {
+        const message =
+          validated.rejected === "forbidden"
+            ? "That folder is off limits."
+            : validated.rejected === "not-found"
+              ? "That folder no longer exists."
+              : validated.rejected === "not-a-directory"
+                ? "That is a file, not a folder."
+                : "That path is not absolute.";
+        send(socket, { kind: "error", code: "REPO_NOT_FOUND", message });
+        return;
+      }
+      const workspace = await workspaces.openLocalFolder({
+        path: validated.path,
+        githubToken: state.githubToken,
+        storeRoot: localStoreRootFor(validated.path),
+      });
+      clients.set(socket, {
+        workspaceKey: workspace.key,
+        cityId: "main",
+        userId: state.userId,
+        githubToken: state.githubToken,
+        subscriptions: new Set(),
+      });
+      sendWorkspaceState(socket, workspace, "main");
       return;
     }
 
@@ -753,5 +903,27 @@ app.get("/ws", { websocket: true }, (socket) => {
     }
   }
 });
+
+if (process.env.SUDO_CITY_WEB_ROOT?.trim()) {
+  const webRoot = resolve(process.env.SUDO_CITY_WEB_ROOT.trim());
+  await app.register(fastifyStatic, { root: webRoot, wildcard: false });
+  app.setNotFoundHandler(async (request, reply) => {
+    if (request.url.startsWith("/api") || request.url.startsWith("/auth") || request.url.startsWith("/ws")) {
+      return reply.code(404).send({ error: "Not Found" });
+    }
+    return reply.sendFile("index.html");
+  });
+}
+
+app.log.info(
+  {
+    mode: isLocalMode() ? "local" : "hosted",
+    creditMode: creditMode(),
+    budgetPolicy: budgetPolicy.kind,
+    settingSources: localSettingSources() ?? "none",
+    desktopTokenRequired: Boolean(desktopToken),
+  },
+  "Deployment mode",
+);
 
 await app.listen({ host, port });

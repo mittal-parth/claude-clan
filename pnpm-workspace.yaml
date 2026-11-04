@@ -2,5 +2,11 @@ packages:
   - apps/*
   - packages/*
 
+overrides:
+  '@electron/node-gyp': 10.2.0-electron.2
+
 allowBuilds:
+  electron: true
+  electron-winstaller: true
   esbuild: true
+  node-pty: true

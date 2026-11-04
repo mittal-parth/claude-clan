@@ -118,11 +118,42 @@ export const CrewPolicySchema = z.object({
   demoInteractive: z.boolean(),
 });
 
-export const BudgetInfoSchema = z.object({
-  totalBudgetUsd: z.number().nonnegative(),
-  spentUsd: z.number().nonnegative(),
-  remainingBudgetUsd: z.number().nonnegative(),
+/**
+ * Which credential funds a deployment's crews. The field is optional on the
+ * wire because the hosted server predates local credit modes and its exact
+ * three-field budget shape is a compatibility contract.
+ */
+export const CreditModeSchema = z.enum(["api-key", "subscription"]);
+
+export const PlanUsageWindowSchema = z.object({
+  /** Utilization percentage, 0–100. */
+  utilization: z.number().min(0).max(100).optional(),
+  /** ISO timestamp when the window resets. */
+  resetsAt: z.string().optional(),
+  /** Status reported by Anthropic rate-limit subsystem. */
+  status: z.enum(["allowed", "allowed_warning", "rejected"]).optional(),
 });
+
+export const BudgetInfoSchema = z.object({
+  /** Absent means the existing hosted api-key budget shape. */
+  mode: CreditModeSchema.optional(),
+  /** Absent when a subscription or uncapped BYOK session has no dollar ceiling. */
+  totalBudgetUsd: z.number().nonnegative().optional(),
+  spentUsd: z.number().nonnegative(),
+  /** Absent when there is no dollar ceiling to render. */
+  remainingBudgetUsd: z.number().nonnegative().optional(),
+  /** 5-hour rolling session limit for Claude subscription mode. */
+  fiveHourLimit: PlanUsageWindowSchema.optional(),
+  /** Weekly limit for Claude subscription mode. */
+  weeklyLimit: PlanUsageWindowSchema.optional(),
+});
+
+/** Reads the mode through one defaulting helper; hosted wire data stays additive. */
+export function creditModeOf(
+  budget: { mode?: z.infer<typeof CreditModeSchema> },
+): z.infer<typeof CreditModeSchema> {
+  return budget.mode ?? "api-key";
+}
 
 // "main" is the primary checkout; PR and issue cities are detached worktrees.
 export const CityIdSchema = z
@@ -163,6 +194,20 @@ export const RepoSummarySchema = z.object({
   size: z.number().int().nonnegative().optional(),
   imported: z.boolean(),
 });
+
+/** A folder opened directly on the machine running the desktop server. */
+export const LocalFolderSummarySchema = z.object({
+  key: z.string().min(1),
+  path: z.string().min(1),
+  name: z.string().min(1),
+  isGitRepo: z.boolean(),
+  lastOpenedAt: z.string().optional(),
+});
+
+/** Namespaced local workspace keys cannot collide with owner/name GitHub keys. */
+export function isLocalRepoKey(key: string): boolean {
+  return key.startsWith("local:");
+}
 
 export const RepoStatusPhaseSchema = z.enum([
   "cloning",
@@ -243,6 +288,9 @@ export const SessionSummarySchema = z.object({
   updatedAt: z.string().datetime(),
   turnCount: z.number().int().nonnegative(),
   costUsd: z.number().nonnegative(),
+  /** SDK-reported credential metadata; absent before init and on old hosted sessions. */
+  apiKeySource: z.string().optional(),
+  apiProvider: z.string().optional(),
   contextPercent: z.number().min(0).max(100).optional(),
   pendingPermitCount: z.number().int().nonnegative(),
   queuedCount: z.number().int().nonnegative().default(0),
@@ -482,6 +530,11 @@ export const MayorCommandSchema = z.discriminatedUnion("type", [
     type: z.literal("repo.select"),
     repoKey: z.string().min(1),
   }),
+  /** Desktop only; the server must reject this command unless local mode is on. */
+  z.object({
+    type: z.literal("repo.openLocal"),
+    path: z.string().min(1),
+  }),
 ]);
 
 export const ServerMessageSchema = z.discriminatedUnion("kind", [
@@ -690,6 +743,8 @@ export function inCapitolDistrict(
 
 export type CrewPolicy = z.infer<typeof CrewPolicySchema>;
 export type BudgetInfo = z.infer<typeof BudgetInfoSchema>;
+export type CreditMode = z.infer<typeof CreditModeSchema>;
+export type PlanUsageWindow = z.infer<typeof PlanUsageWindowSchema>;
 export type EffortLevel = z.infer<typeof EffortLevelSchema>;
 export type Building = z.infer<typeof BuildingSchema>;
 export type ChangedFile = z.infer<typeof ChangedFileSchema>;
@@ -707,6 +762,7 @@ export type Plot = z.infer<typeof PlotSchema>;
 export type PullRequestOverlay = z.infer<typeof PullRequestOverlaySchema>;
 export type RepoStatusPhase = z.infer<typeof RepoStatusPhaseSchema>;
 export type RepoSummary = z.infer<typeof RepoSummarySchema>;
+export type LocalFolderSummary = z.infer<typeof LocalFolderSummarySchema>;
 export type ServerMessage = z.infer<typeof ServerMessageSchema>;
 export type SessionStatus = z.infer<typeof SessionStatusSchema>;
 export type SessionSummary = z.infer<typeof SessionSummarySchema>;

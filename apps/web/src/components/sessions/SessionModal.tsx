@@ -35,6 +35,7 @@ export interface SessionModalProps {
   onConfigure: (changes: { model?: string; effort?: "low" | "medium" | "high" | "xhigh" | "max"; permissionMode?: "default" | "auto" }) => void;
   onOpenFiles: () => void;
   onTravel?: (cityId: string) => void;
+  onOpenTerminal?: (command?: string) => void;
 }
 
 export const SessionModal = forwardRef<HTMLDivElement, SessionModalProps>(
@@ -58,6 +59,7 @@ export const SessionModal = forwardRef<HTMLDivElement, SessionModalProps>(
       onConfigure,
       onOpenFiles,
       onTravel,
+      onOpenTerminal,
     },
     ref,
   ) {
@@ -94,7 +96,11 @@ export const SessionModal = forwardRef<HTMLDivElement, SessionModalProps>(
                 onCopyTranscript={onCopyTranscript}
                 onTravel={onTravel}
               />
-              <SessionTranscript view={view} onPermit={onPermit} />
+              <SessionTranscript
+                view={view}
+                onPermit={onPermit}
+                onOpenTerminal={onOpenTerminal}
+              />
               <SessionComposer
                 view={view}
                 connection={connection}
@@ -109,6 +115,7 @@ export const SessionModal = forwardRef<HTMLDivElement, SessionModalProps>(
                 onSend={onSend}
                 onInterrupt={onInterrupt}
                 onOpenFiles={onOpenFiles}
+                onOpenTerminal={onOpenTerminal}
               />
             </>
           ) : null}

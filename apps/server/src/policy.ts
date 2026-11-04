@@ -1,5 +1,6 @@
 import type { SandboxSettings } from "@sudo-city/agent";
 import type { CrewPolicy, EffortLevel } from "@sudo-city/protocol";
+import { isLocalMode } from "./local-mode.js";
 
 const ALL_MODELS = ["opus", "sonnet", "haiku"] as const;
 const ALL_EFFORTS: readonly EffortLevel[] = [
@@ -29,6 +30,12 @@ const PUBLIC_EFFORTS: readonly EffortLevel[] = ["low", "medium", "high"];
 export function isPublicDeployment(
   env: NodeJS.ProcessEnv = process.env,
 ): boolean {
+  // Packaged Electron apps run with NODE_ENV=production, but a desktop user
+  // owns the machine and credentials. Local mode must win before that fallback
+  // or the shipped app becomes read-only and loses Opus/max crews.
+  if (isLocalMode(env)) {
+    return false;
+  }
   const value = env.SUDO_CITY_PUBLIC_DEPLOYMENT?.trim().toLowerCase();
   if (value) {
     return value !== "0" && value !== "false" && value !== "no";

@@ -15,9 +15,14 @@ export class BudgetLedger {
   constructor(
     private readonly ceiling: () => number,
     private readonly onSettle: (amountUsd: number) => void,
+    /** True only when no dollar ceiling applies, such as a subscription. */
+    private readonly uncapped = false,
   ) {}
 
   available(): number {
+    if (this.uncapped) {
+      return Number.POSITIVE_INFINITY;
+    }
     const reserved = [...this.reservations.values()].reduce(
       (total, amount) => total + amount,
       0,
@@ -25,15 +30,18 @@ export class BudgetLedger {
     return Math.max(0, this.ceiling() - reserved);
   }
 
-  reserve(
-    sessionId: string,
-    requested = Number.POSITIVE_INFINITY,
-  ): number {
+  reserve(sessionId: string, requested?: number): number | undefined {
+    if (this.uncapped) {
+      return undefined;
+    }
     const existing = this.reservations.get(sessionId);
     if (existing !== undefined) {
       return existing;
     }
-    const granted = Math.min(Math.max(0, requested), this.available());
+    const granted = Math.min(
+      Math.max(0, requested ?? Number.POSITIVE_INFINITY),
+      this.available(),
+    );
     this.reservations.set(sessionId, granted);
     return granted;
   }
@@ -50,6 +58,6 @@ export class BudgetLedger {
   }
 
   canFund(): boolean {
-    return this.available() >= MIN_RESERVATION_USD;
+    return this.uncapped || this.available() >= MIN_RESERVATION_USD;
   }
 }

@@ -29,6 +29,7 @@
 
 :root {
   --radius: 0rem;
+  --hud-top-inset: 0px;
   --background: oklch(0.16 0.025 235);
   --foreground: oklch(0.94 0.02 88);
   --card: oklch(0.21 0.035 230);
@@ -49,6 +50,10 @@
   --ring: oklch(0.84 0.15 87);
 }
 
+:is(.is-desktop, .is-desktop *) {
+  --hud-top-inset: 20px;
+}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;
@@ -67,6 +72,10 @@
 
   body {
     @apply bg-background text-foreground;
+  }
+
+  button:not(:disabled) {
+    cursor: pointer;
   }
 }
 
@@ -495,14 +504,14 @@
   inset: 0;
   display: flex;
   gap: 0.75rem;
-  padding: 0.75rem;
+  padding: calc(0.75rem + var(--hud-top-inset)) 0.75rem 0.75rem;
   pointer-events: none;
 }
 
 @media (min-width: 768px) {
   .hud-layer {
     gap: 1rem;
-    padding: 1rem;
+    padding: calc(1rem + var(--hud-top-inset)) 1rem 1rem;
   }
 }
 
@@ -555,6 +564,8 @@
 .hud-window--modal {
   position: fixed !important;
   display: grid !important;
+  top: calc(0.75rem + var(--hud-top-inset)) !important;
+  height: calc(100dvh - 1.5rem - var(--hud-top-inset)) !important;
   backdrop-filter: blur(28px) saturate(160%) !important;
   -webkit-backdrop-filter: blur(28px) saturate(160%) !important;
   background:
@@ -564,6 +575,13 @@
       color-mix(in oklab, var(--background) 96%, transparent)
     ) !important;
   overflow: hidden;
+}
+
+@media (min-width: 768px) {
+  .hud-window--modal {
+    top: calc(1rem + var(--hud-top-inset)) !important;
+    height: calc(100dvh - 2rem - var(--hud-top-inset)) !important;
+  }
 }
 
 [data-radix-scroll-area-viewport] > div {
@@ -927,6 +945,17 @@ button.hud-pill:focus-visible {
   background: var(--hud-meter-fill);
   box-shadow: 0 0 6px color-mix(in oklab, var(--hud-meter-fill) 55%, transparent);
 }
+/**
+ * No ceiling to meter -- a subscription-funded city. The cells become a faint
+ * dotted rule rather than an empty bar, so the block keeps its height and the
+ * panel does not jump when the credit source changes, without implying "0%
+ * spent" for a city that has no percentage.
+ */
+.hud-meter--unmetered .hud-meter__cell {
+  background: none;
+  border-top: 1px dotted color-mix(in oklab, var(--foreground) 26%, transparent);
+  align-self: center;
+}
 
 /* --- field ---------------------------------------------------------------- */
 
@@ -1273,7 +1302,9 @@ button.hud-pill:focus-visible {
 .airport-board,
 [cmdk-list],
 [cmdk-root] [cmdk-list],
-.airport-scrollbar {
+.airport-scrollbar,
+.hud-scrollbar,
+.hud-window--modal {
   scrollbar-width: thin;
   scrollbar-color: rgb(125 211 252 / 0.35) rgb(7 21 30 / 0.8);
 }
@@ -1281,7 +1312,12 @@ button.hud-pill:focus-visible {
 .airport-board ::-webkit-scrollbar,
 [cmdk-list]::-webkit-scrollbar,
 [cmdk-root] ::-webkit-scrollbar,
-.airport-scrollbar::-webkit-scrollbar {
+.airport-scrollbar::-webkit-scrollbar,
+.airport-scrollbar ::-webkit-scrollbar,
+.hud-scrollbar::-webkit-scrollbar,
+.hud-scrollbar ::-webkit-scrollbar,
+.hud-window--modal::-webkit-scrollbar,
+.hud-window--modal ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
 }
@@ -1289,7 +1325,12 @@ button.hud-pill:focus-visible {
 .airport-board ::-webkit-scrollbar-track,
 [cmdk-list]::-webkit-scrollbar-track,
 [cmdk-root] ::-webkit-scrollbar-track,
-.airport-scrollbar::-webkit-scrollbar-track {
+.airport-scrollbar::-webkit-scrollbar-track,
+.airport-scrollbar ::-webkit-scrollbar-track,
+.hud-scrollbar::-webkit-scrollbar-track,
+.hud-scrollbar ::-webkit-scrollbar-track,
+.hud-window--modal::-webkit-scrollbar-track,
+.hud-window--modal ::-webkit-scrollbar-track {
   background: rgb(7 21 30 / 0.8);
   border-radius: 3px;
 }
@@ -1297,7 +1338,12 @@ button.hud-pill:focus-visible {
 .airport-board ::-webkit-scrollbar-thumb,
 [cmdk-list]::-webkit-scrollbar-thumb,
 [cmdk-root] ::-webkit-scrollbar-thumb,
-.airport-scrollbar::-webkit-scrollbar-thumb {
+.airport-scrollbar::-webkit-scrollbar-thumb,
+.airport-scrollbar ::-webkit-scrollbar-thumb,
+.hud-scrollbar::-webkit-scrollbar-thumb,
+.hud-scrollbar ::-webkit-scrollbar-thumb,
+.hud-window--modal::-webkit-scrollbar-thumb,
+.hud-window--modal ::-webkit-scrollbar-thumb {
   background: rgb(125 211 252 / 0.28);
   border: 1px solid rgb(125 211 252 / 0.35);
   border-radius: 3px;
@@ -1306,7 +1352,12 @@ button.hud-pill:focus-visible {
 .airport-board ::-webkit-scrollbar-thumb:hover,
 [cmdk-list]::-webkit-scrollbar-thumb:hover,
 [cmdk-root] ::-webkit-scrollbar-thumb:hover,
-.airport-scrollbar::-webkit-scrollbar-thumb:hover {
+.airport-scrollbar::-webkit-scrollbar-thumb:hover,
+.airport-scrollbar ::-webkit-scrollbar-thumb:hover,
+.hud-scrollbar::-webkit-scrollbar-thumb:hover,
+.hud-scrollbar ::-webkit-scrollbar-thumb:hover,
+.hud-window--modal::-webkit-scrollbar-thumb:hover,
+.hud-window--modal ::-webkit-scrollbar-thumb:hover {
   background: rgb(246 189 96 / 0.55);
   border-color: rgb(246 189 96 / 0.8);
 }
@@ -1356,7 +1407,7 @@ button.hud-pill:focus-visible {
 }
 
 .airport-destination {
-  min-height: 4.65rem;
+  min-height: 2.85rem;
   transition:
     transform 180ms cubic-bezier(0.16, 1, 0.3, 1),
     border-color 180ms ease,
@@ -1407,7 +1458,7 @@ button.hud-pill:focus-visible {
   display: grid;
   place-items: center;
   width: 3rem;
-  height: 2.5rem;
+  height: 2.1rem;
   color: #bae6fd;
   border: 1px solid rgb(125 211 252 / 0.22);
   background: rgb(14 116 144 / 0.12);
@@ -1450,5 +1501,63 @@ button.hud-pill:focus-visible {
   .airport-destination--busy {
     transition: none;
     animation: none;
+  }
+}
+
+/* Desktop-only folder drop target; the feature component is not mounted in browsers. */
+/**
+ * The desktop drop target.
+ *
+ * Styled from the HUD tokens rather than as a plain dashed box: it sits over
+ * the world alongside the HUD windows, so a 3px dashed browser-default border
+ * and a flat wash read as a file input dropped onto the game rather than as
+ * part of it. The dashed edge is inset as its own layer so it lines up with the
+ * HUD's own frames instead of hugging the viewport.
+ */
+.folder-drop-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9000;
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+  background: color-mix(in oklab, var(--hud-shade) 72%, transparent);
+  backdrop-filter: blur(2px);
+  animation: folder-drop-in 120ms var(--hud-ease) both;
+}
+.folder-drop-overlay__frame {
+  position: absolute;
+  inset: 0.75rem;
+  border: 2px dashed color-mix(in oklab, var(--hud-accent) 60%, transparent);
+  box-shadow: inset 0 0 42px -12px
+    color-mix(in oklab, var(--hud-accent) 30%, transparent);
+}
+.folder-drop-overlay__plate {
+  display: grid;
+  justify-items: center;
+  gap: 0.5rem;
+  padding: 1.1rem 1.6rem;
+  border: 1px solid color-mix(in oklab, var(--hud-accent) 45%, transparent);
+  background: color-mix(in oklab, var(--hud-shade) 88%, transparent);
+  box-shadow:
+    0 24px 48px -26px rgb(0 0 0 / 0.95),
+    6px 6px 0 color-mix(in oklab, var(--hud-shade) 30%, transparent);
+}
+.folder-drop-overlay__icon {
+  color: var(--hud-accent);
+}
+.folder-drop-overlay__title {
+  font-size: 11px;
+  line-height: 1;
+  letter-spacing: 0.04em;
+  color: var(--hud-accent);
+}
+
+@keyframes folder-drop-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
   }
 }

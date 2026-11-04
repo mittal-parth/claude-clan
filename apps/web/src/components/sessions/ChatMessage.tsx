@@ -1,11 +1,14 @@
+import { Terminal } from "lucide-react";
 import type { ChatItem } from "@/sessions/types";
 import { Markdown } from "@/components/markdown";
 import { colorWithAlpha, fileBasename } from "@/lib/app-utils";
+import { isDesktop } from "@/lib/desktop";
 import { paletteFor } from "@/game/math/palette";
 import { cn } from "@/lib/utils";
 
 export interface ChatMessageProps {
   item: Extract<ChatItem, { kind: "mayor" | "crew" }>;
+  onOpenTerminal?: (command?: string) => void;
 }
 
 function pathPalette(path: string) {
@@ -13,7 +16,7 @@ function pathPalette(path: string) {
   return paletteFor(extension);
 }
 
-export function ChatMessage({ item }: ChatMessageProps) {
+export function ChatMessage({ item, onOpenTerminal }: ChatMessageProps) {
   if (item.kind === "mayor") {
     return (
       <div className="flex justify-end min-w-0 max-w-full">
@@ -66,6 +69,11 @@ export function ChatMessage({ item }: ChatMessageProps) {
     );
   }
 
+  const isAuthNotice =
+    item.text.includes("Not logged in") ||
+    item.text.includes("/login isn't available") ||
+    item.text.includes("Please run /login");
+
   return (
     <div className={cn("max-w-full min-w-0 overflow-hidden", item.streaming && "session-message--streaming")}>
       <span className="retro mb-0.5 block text-[7px] uppercase text-muted-foreground">
@@ -81,6 +89,25 @@ export function ChatMessage({ item }: ChatMessageProps) {
           </span>
         ) : null}
       </div>
+      {isAuthNotice && isDesktop() ? (
+        <div className="mt-2 flex items-center justify-between gap-2 border border-amber-400/40 bg-amber-500/10 p-2">
+          <div className="flex items-center gap-1.5 min-w-0">
+            <Terminal className="size-3.5 text-amber-300 shrink-0" aria-hidden="true" />
+            <span className="retro text-[8px] text-amber-200 truncate">
+              Authenticate Claude Code via terminal
+            </span>
+          </div>
+          {onOpenTerminal ? (
+            <button
+              type="button"
+              onClick={() => onOpenTerminal("claude login")}
+              className="retro border border-amber-300/80 bg-amber-400/20 px-2 py-1 text-[8px] font-semibold text-amber-200 hover:bg-amber-400/30 transition-colors shrink-0"
+            >
+              Run claude login
+            </button>
+          ) : null}
+        </div>
+      ) : null}
     </div>
   );
 }

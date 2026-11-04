@@ -268,10 +268,28 @@ export interface WorkspaceOptions {
   onSpend?: (amountUsd: number) => void;
   /** OS-level confinement for this workspace's crews; undefined runs them unsandboxed. */
   sandbox?: SandboxSettings;
+  /** Directory containing world.db; defaults to <repoPath>/.sudocity. */
+  storeRoot?: string;
+  /** False for a user's real folder; eviction uses this before deleting. */
+  deletable?: boolean;
+  /** True when the workspace is funded by an uncapped subscription. */
+  uncappedBudget?: boolean;
+  /** Optional local BYOK per-order SDK ceiling. */
+  orderCapUsd?: number;
+  /** Desktop-only Agent SDK execution options. */
+  pathToClaudeCodeExecutable?: string;
+  settingSources?: readonly ("user" | "project" | "local")[];
+  agentEnv?: Record<string, string>;
   onEvent: (cityId: CityId, sessionId: string, event: GameEvent) => void;
   onSessionChanged: (session: SessionSummary) => void;
   onCitiesChanged: () => void;
   onIssuesChanged: () => void;
+  onRateLimit?: (info: {
+    rateLimitType?: string;
+    status?: "allowed" | "allowed_warning" | "rejected";
+    resetsAt?: string;
+    utilization?: number;
+  }) => void;
 }
 
 /**
@@ -283,6 +301,8 @@ export interface WorkspaceOptions {
 export class Workspace {
   readonly key: string;
   readonly repoPath: string;
+  /** False for a user-owned directory; WorkspaceManager must leave it intact. */
+  readonly deletable: boolean;
   private readonly log: FastifyBaseLogger;
   private readonly store: SQLiteWorldStore;
   private readonly registry = new CityRegistry();
@@ -291,11 +311,16 @@ export class Workspace {
   private viewerLoginValue: string | undefined;
   private readonly remainingBudget: () => number;
   private readonly sandbox: WorkspaceOptions["sandbox"];
+  private readonly orderCapUsd?: number;
+  private readonly pathToClaudeCodeExecutable?: string;
+  private readonly settingSources?: readonly ("user" | "project" | "local")[];
+  private readonly agentEnv?: Record<string, string>;
   private readonly onSpend: WorkspaceOptions["onSpend"];
   private readonly onEvent: WorkspaceOptions["onEvent"];
   private readonly onSessionChanged: WorkspaceOptions["onSessionChanged"];
   private readonly onCitiesChanged: WorkspaceOptions["onCitiesChanged"];
   private readonly onIssuesChanged: WorkspaceOptions["onIssuesChanged"];
+  private readonly onRateLimit?: WorkspaceOptions["onRateLimit"];
   private readonly sessions = new SessionRegistry();
   private readonly ledger: BudgetLedger;
   private readonly worldSequences = new Map<CityId, number>();
@@ -309,20 +334,34 @@ export class Workspace {
     this.githubToken = options.githubToken;
     this.remainingBudget = options.remainingBudget;
     this.sandbox = options.sandbox;
+    this.orderCapUsd = options.orderCapUsd;
+    this.pathToClaudeCodeExecutable = options.pathToClaudeCodeExecutable;
+    this.settingSources = options.settingSources;
+    this.agentEnv = options.agentEnv;
     this.onSpend = options.onSpend;
     this.onEvent = options.onEvent;
     this.onSessionChanged = options.onSessionChanged;
     this.onCitiesChanged = options.onCitiesChanged;
     this.onIssuesChanged = options.onIssuesChanged;
+    this.onRateLimit = options.onRateLimit;
+    this.deletable = options.deletable ?? true;
     this.ledger = new BudgetLedger(
       this.remainingBudget,
       (amountUsd) => this.onSpend?.(amountUsd),
+      options.uncappedBudget ?? false,
     );
-    this.store = new SQLiteWorldStore(join(this.repoPath, ".sudocity", "world.db"));
+    this.store = new SQLiteWorldStore(
+      options.storeRoot
+        ? join(options.storeRoot, "world.db")
+        : join(this.repoPath, ".sudocity", "world.db"),
+    );
     this.githubClient = new GitHubApiClient();
   }
 
   static async open(options: WorkspaceOptions): Promise<Workspace> {
+    if (options.storeRoot) {
+      await mkdir(options.storeRoot, { recursive: true });
+    }
     const workspace = new Workspace(options);
     await workspace.hideWorldStoreFromGit();
     const snapshot = await workspace.generateWorld("main", workspace.repoPath);
@@ -510,7 +549,15 @@ export class Workspace {
       this.store.saveSnapshot(city, layout.snapshot);
       return layout.snapshot;
     } catch (error) {
-      this.log.error({ error, city, key: this.key }, "Repository scan or layout failed");
+      this.log.error(
+        {
+          error,
+          detail: error instanceof Error ? error.message : String(error),
+          city,
+          key: this.key,
+        },
+        "Repository scan or layout failed",
+      );
       if (this.key === "demo") {
         return this.fallbackWorld(city, cwd);
       }
@@ -680,11 +727,23 @@ export class Workspace {
       disallowedTools: city.disallowedTools,
       systemPromptAppend: city.systemPromptAppend,
       sandbox: this.sandbox,
+      ...(this.pathToClaudeCodeExecutable
+        ? { pathToClaudeCodeExecutable: this.pathToClaudeCodeExecutable }
+        : {}),
+      ...(this.settingSources ? { settingSources: this.settingSources } : {}),
+      ...(this.agentEnv ? { agentEnv: this.agentEnv } : {}),
       resume: session.turnCount > 0,
       title: session.title,
       budget: {
-        reserve: (sessionId) => this.ledger.reserve(sessionId),
+        reserve: (sessionId) => this.ledger.reserve(sessionId, this.orderCapUsd),
         settle: (sessionId, actualUsd) => this.ledger.settle(sessionId, actualUsd),
+      },
+      onAuthInfo: (info) => {
+        session.apiKeySource = info.apiKeySource;
+        session.apiProvider = info.apiProvider;
+        session.updatedAt = new Date().toISOString();
+        this.store.saveSession(sessionToRecord(session));
+        this.onSessionChanged(this.sessionSummary(session));
       },
       onContextUsage: (percentage) => {
         session.contextPercent = percentage;
@@ -692,6 +751,7 @@ export class Workspace {
         this.store.saveSession(sessionToRecord(session));
         this.onSessionChanged(this.sessionSummary(session));
       },
+      onRateLimit: this.onRateLimit,
     });
     session.runner = runner;
     return runner;

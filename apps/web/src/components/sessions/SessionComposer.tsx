@@ -7,7 +7,8 @@ import {
   type EffortLevel,
   type PermissionMode,
 } from "@sudo-city/protocol";
-import { colorWithAlpha, fileBasename, type ConnectionState } from "@/lib/app-utils";
+import { colorWithAlpha, fileBasename, isLoginCommand, type ConnectionState } from "@/lib/app-utils";
+import { isDesktop } from "@/lib/desktop";
 import type { CrewSelection } from "@/components/CrewSelectDialog";
 import type { SessionView } from "@/sessions/types";
 import { HudButton } from "@/components/hud/HudButton";
@@ -29,6 +30,7 @@ export interface SessionComposerProps {
   onSend: (prompt: string, contextPaths: string[]) => void;
   onInterrupt: () => void;
   onOpenFiles: () => void;
+  onOpenTerminal?: (command?: string) => void;
 }
 
 export function SessionComposer({
@@ -44,6 +46,7 @@ export function SessionComposer({
   onSend,
   onInterrupt,
   onOpenFiles,
+  onOpenTerminal,
 }: SessionComposerProps) {
   const [prompt, setPrompt] = useState("");
   const [localContextPaths, setLocalContextPaths] = useState<string[]>([]);
@@ -66,6 +69,13 @@ export function SessionComposer({
   function sendPrompt(): void {
     const value = prompt.trim();
     if (!value || disabled) return;
+    if (isLoginCommand(value)) {
+      if (onOpenTerminal && isDesktop()) {
+        onOpenTerminal("claude login");
+        setPrompt("");
+        return;
+      }
+    }
     onSend(value, contextPaths);
     if (running) setQueuedDrafts((current) => [...current, value]);
     setPrompt("");

@@ -33,6 +33,8 @@ export interface SessionState {
   sequence: number;
   turnCount: number;
   costUsd: number;
+  apiKeySource?: string;
+  apiProvider?: string;
   contextPercent?: number;
   pendingPermits: Set<string>;
   activityLine?: string;
@@ -134,6 +136,8 @@ export class SessionRegistry {
       updatedAt: session.updatedAt,
       turnCount: session.turnCount,
       costUsd: session.costUsd,
+      ...(session.apiKeySource ? { apiKeySource: session.apiKeySource } : {}),
+      ...(session.apiProvider ? { apiProvider: session.apiProvider } : {}),
       contextPercent: session.contextPercent,
       pendingPermitCount: session.pendingPermits.size,
       queuedCount: session.queued.length,
