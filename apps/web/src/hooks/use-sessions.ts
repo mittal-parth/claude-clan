@@ -98,9 +98,24 @@ export function useSessions({
     pendingUnarchiveSessionRef.current = undefined;
   }, [activeRepoKey]);
 
+  // Streamed text lives in `view.streaming`, not `events`, yet every delta
+  // gives `state.byId` a new identity. Persisting unconditionally therefore
+  // ran JSON.stringify over 60 events and a synchronous localStorage write for
+  // every session on every token -- main-thread stalls that showed up as
+  // stutter while a reply streamed. Write only when a session's tail changed.
+  const storedTailRef = useRef(new Map<string, string>());
+  useEffect(() => {
+    storedTailRef.current.clear();
+  }, [activeRepoKey]);
   useEffect(() => {
     for (const view of Object.values(state.byId)) {
-      storeSessionTail(activeRepoKey, view.summary.sessionId, view.events);
+      const sessionId = view.summary.sessionId;
+      const signature = `${view.events.length}:${view.events.at(-1)?.id ?? ""}`;
+      if (storedTailRef.current.get(sessionId) === signature) {
+        continue;
+      }
+      storedTailRef.current.set(sessionId, signature);
+      storeSessionTail(activeRepoKey, sessionId, view.events);
     }
   }, [activeRepoKey, state.byId]);
 
