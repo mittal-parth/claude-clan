@@ -36,6 +36,13 @@ if (!app.requestSingleInstanceLock()) {
   });
 }
 
+/** Only web links are handed to the OS; `file:` or custom schemes could launch apps. */
+function openInBrowser(url: string): void {
+  if (/^https?:\/\//i.test(url)) {
+    void shell.openExternal(url);
+  }
+}
+
 async function createWindow(): Promise<void> {
   server = await startServer();
   const iconPath = join(__dirname, "../build/icon.png");
@@ -66,8 +73,19 @@ async function createWindow(): Promise<void> {
     },
   });
   window.webContents.setWindowOpenHandler(({ url }) => {
-    void shell.openExternal(url);
+    openInBrowser(url);
     return { action: "deny" };
+  });
+  // Plain `<a href>` links (chat Markdown renders them without a target) do
+  // not go through the window-open handler; they navigate this window and
+  // replace the whole app with, say, a GitHub PR page. Anything that leaves
+  // the local server goes to the system browser instead.
+  window.webContents.on("will-navigate", (event, url) => {
+    if (new URL(url).origin === `http://127.0.0.1:${server?.port}`) {
+      return;
+    }
+    event.preventDefault();
+    openInBrowser(url);
   });
   await window.loadURL(`http://127.0.0.1:${server.port}/`);
   if (pendingFolder) {
