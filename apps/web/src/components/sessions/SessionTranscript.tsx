@@ -3,11 +3,12 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import type { SessionView } from "@/sessions/types";
 import { toChatItems } from "@/sessions/transcript";
 import { ChatMessage } from "./ChatMessage";
-import { nextPinned } from "./pinning";
 import { PermitCard } from "./PermitCard";
 import { ThinkingStrip } from "./ThinkingStrip";
 import { ToolCallCard } from "./ToolCallCard";
 import { TurnDivider } from "./TurnDivider";
+
+const PIN_THRESHOLD_PX = 48;
 
 export interface SessionTranscriptProps {
   view: SessionView;
@@ -21,12 +22,6 @@ export function SessionTranscript({
   onOpenTerminal,
 }: SessionTranscriptProps) {
   const rootRef = useRef<HTMLDivElement>(null);
-  const contentRef = useRef<HTMLDivElement>(null);
-  // The ref is the source of truth for following; state exists only to show
-  // the "Jump to latest" button. Reading state inside a scroll handler or
-  // observer would see the value from the last render, one delta behind.
-  const pinnedRef = useRef(true);
-  const lastScrollTopRef = useRef(0);
   const [pinned, setPinned] = useState(true);
   const items = useMemo(() => toChatItems(view), [view]);
 
@@ -36,72 +31,43 @@ export function SessionTranscript({
     ) ?? undefined;
   }
 
-  function setPin(value: boolean): void {
-    pinnedRef.current = value;
-    setPinned(value);
-  }
-
-  function scrollToBottom(): void {
+  function updatePinned(): void {
     const element = viewport();
     if (!element) return;
-    element.scrollTop = element.scrollHeight;
-    // Record what we wrote, so the scroll event it causes is not mistaken for
-    // the user moving.
-    lastScrollTopRef.current = element.scrollTop;
+    setPinned(
+      element.scrollHeight - element.scrollTop - element.clientHeight <
+        PIN_THRESHOLD_PX,
+    );
   }
 
   function jumpToLatest(): void {
-    scrollToBottom();
-    setPin(true);
+    const element = viewport();
+    if (!element) return;
+    element.scrollTop = element.scrollHeight;
+    setPinned(true);
   }
 
   useEffect(() => {
     const element = viewport();
     if (!element) return;
-    function onScroll(): void {
-      if (!element) return;
-      const next = nextPinned(pinnedRef.current, element, lastScrollTopRef.current);
-      lastScrollTopRef.current = element.scrollTop;
-      if (next !== pinnedRef.current) setPin(next);
-    }
-    lastScrollTopRef.current = element.scrollTop;
-    element.addEventListener("scroll", onScroll, { passive: true });
-    return () => element.removeEventListener("scroll", onScroll);
+    element.addEventListener("scroll", updatePinned, { passive: true });
+    updatePinned();
+    return () => element.removeEventListener("scroll", updatePinned);
   }, []);
 
   // Layout effect, not a passive one: a passive effect runs after paint, so
-  // each delta painted the grown text clipped below the fold for a frame and
-  // then jumped to it -- the stutter while streaming.
+  // each streamed chunk painted its text clipped below the fold for a frame
+  // and then jumped to it -- the stutter while a reply streams.
   useLayoutEffect(() => {
-    if (pinnedRef.current) scrollToBottom();
-  }, [items]);
-
-  // Height also changes without `items` changing: markdown re-parses on every
-  // delta, so an opened code fence or a "1." turning into a list reflows
-  // text that is already on screen. Follow the content's size, not the data.
-  useEffect(() => {
-    const content = contentRef.current;
-    if (!content || typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(() => {
-      if (pinnedRef.current) scrollToBottom();
-    });
-    observer.observe(content);
-    return () => observer.disconnect();
-  }, []);
+    if (!pinned) return;
+    const element = viewport();
+    if (element) element.scrollTop = element.scrollHeight;
+  }, [items, pinned]);
 
   return (
-    <div
-      ref={rootRef}
-      // Chromium/Electron scroll anchoring moves scrollTop by itself when text
-      // above the anchor reflows, fighting the manual pin to the bottom.
-      className="relative min-h-0 min-w-0 overflow-hidden [&_[data-radix-scroll-area-viewport]]:[overflow-anchor:none]"
-    >
+    <div ref={rootRef} className="relative min-h-0 min-w-0 overflow-hidden">
       <ScrollArea className="h-full w-full max-w-full">
-        <div
-          ref={contentRef}
-          className="grid gap-3 px-3 py-3 min-w-0 max-w-full overflow-x-hidden"
-          aria-live="polite"
-        >
+        <div className="grid gap-3 px-3 py-3 min-w-0 max-w-full overflow-x-hidden" aria-live="polite">
           {items.length === 0 ? (
             <p className="retro py-8 text-center text-[8px] text-muted-foreground">
               No transmissions yet.

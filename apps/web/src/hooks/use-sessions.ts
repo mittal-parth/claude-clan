@@ -105,9 +105,6 @@ export function useSessions({
   // stutter while a reply streamed. Write only when a session's tail changed.
   const storedTailRef = useRef(new Map<string, string>());
   useEffect(() => {
-    storedTailRef.current.clear();
-  }, [activeRepoKey]);
-  useEffect(() => {
     for (const view of Object.values(state.byId)) {
       const sessionId = view.summary.sessionId;
       const signature = `${view.events.length}:${view.events.at(-1)?.id ?? ""}`;
